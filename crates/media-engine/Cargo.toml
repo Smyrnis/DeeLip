@@ -12,3 +12,4 @@ cpal      = { workspace = true }
 audiopus  = { workspace = true }
 deelip-sip = { workspace = true }
 webrtc-srtp = { workspace = true }
+webrtc-util = { workspace = true }

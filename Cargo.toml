@@ -36,6 +36,8 @@ rustls-native-certs = "0.8"
 webrtc-srtp         = "0.10"
 rand                = "0.8"
 base64              = "0.22"
+turn                = "0.17"
+webrtc-util         = "0.17"
 
 deelip-config = { path = "crates/config" }
 deelip-sip    = { path = "crates/sip-core" }

@@ -89,6 +89,12 @@ pub struct AppConfig {
     pub local_sip_port: u16,
     /// Optional STUN server for NAT traversal, e.g. "stun.l.google.com:19302".
     pub stun_server: Option<String>,
+    /// Optional TURN server: when set, ALL calls relay their RTP through it
+    /// (no ICE candidate negotiation — an explicit, unconditional fallback for
+    /// NATs that STUN alone can't traverse), e.g. "turn.example.com:3478".
+    pub turn_server:   Option<String>,
+    pub turn_username: Option<String>,
+    pub turn_password: Option<String>,
 }
 
 impl Default for AppConfig {
@@ -98,6 +104,9 @@ impl Default for AppConfig {
             audio:          AudioConfig::default(),
             local_sip_port: 5060,
             stun_server:    Some("stun.l.google.com:19302".into()),
+            turn_server:    None,
+            turn_username:  None,
+            turn_password:  None,
         }
     }
 }

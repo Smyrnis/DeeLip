@@ -8,6 +8,7 @@ use tracing::{debug, error, warn};
 use webrtc_srtp::context::Context as SrtpContext;
 use webrtc_srtp::option::srtp_replay_protection;
 use webrtc_srtp::protection_profile::ProtectionProfile;
+use webrtc_util::Conn;
 
 use deelip_sip::{AudioCodec, SrtpSession};
 
@@ -24,6 +25,32 @@ fn ts_increment_for(codec: AudioCodec) -> u32 {
     match codec {
         AudioCodec::Opus => 960,
         AudioCodec::Pcmu | AudioCodec::Pcma => 160,
+    }
+}
+
+/// The RTP wire transport: a plain local UDP socket, or a TURN-relayed `Conn`
+/// (see `deelip_nat::allocate_relay`). Both shapes speak send_to/recv_from, so
+/// everything downstream (codec dispatch, SRTP, DTMF, jitter buffer) is
+/// identical regardless of which one is active.
+enum RtpSocket {
+    Direct(UdpSocket),
+    Relay(Arc<dyn Conn + Send + Sync>),
+}
+
+impl RtpSocket {
+    async fn send_to(&self, buf: &[u8], addr: SocketAddr) -> anyhow::Result<()> {
+        match self {
+            Self::Direct(s) => { s.send_to(buf, addr).await?; }
+            Self::Relay(c)  => { c.send_to(buf, addr).await?; }
+        }
+        Ok(())
+    }
+
+    async fn recv_from(&self, buf: &mut [u8]) -> anyhow::Result<(usize, SocketAddr)> {
+        match self {
+            Self::Direct(s) => Ok(s.recv_from(buf).await?),
+            Self::Relay(c)  => Ok(c.recv_from(buf).await?),
+        }
     }
 }
 
@@ -45,22 +72,27 @@ impl MediaEngine {
     /// - `codec`:          negotiated voice codec (PCMU/PCMA/Opus).
     /// - `dtmf_pt`:        DTMF telephone-event payload type (typically Some(101)).
     /// - `srtp`:           local/remote SDES-SRTP keys, if the call negotiated encrypted media.
+    /// - `relay`:          a TURN-allocated relay `Conn` (see `deelip_nat::allocate_relay`),
+    ///   if the call is relaying media instead of using a direct local socket.
     pub async fn start(
         local_rtp_port: u16,
         remote_rtp:     SocketAddr,
         codec:          AudioCodec,
         dtmf_pt:        Option<u8>,
         srtp:           Option<SrtpSession>,
+        relay:          Option<Arc<dyn Conn + Send + Sync>>,
     ) -> anyhow::Result<Self> {
         let (audio_streams, mut cap_rx, playback_tx) =
             open_streams().context("Opening audio streams")?;
 
-        let socket = Arc::new(
-            UdpSocket::bind(format!("0.0.0.0:{local_rtp_port}"))
-                .await
-                .with_context(|| format!("Binding RTP on :{local_rtp_port}"))?,
-        );
-        socket.connect(remote_rtp).await.context("Connecting RTP socket")?;
+        let socket = Arc::new(match relay {
+            Some(conn) => RtpSocket::Relay(conn),
+            None => RtpSocket::Direct(
+                UdpSocket::bind(format!("0.0.0.0:{local_rtp_port}"))
+                    .await
+                    .with_context(|| format!("Binding RTP on :{local_rtp_port}"))?,
+            ),
+        });
 
         let dtmf_payload_type = dtmf_pt.unwrap_or(DTMF_PAYLOAD_TYPE);
         let payload_type      = codec.payload_type();
@@ -110,7 +142,7 @@ impl MediaEngine {
                             },
                             None => bytes,
                         };
-                        if let Err(e) = send_sock.send(&out).await {
+                        if let Err(e) = send_sock.send_to(&out, remote_rtp).await {
                             error!("RTP send: {e}");
                         }
                     }
@@ -129,7 +161,7 @@ impl MediaEngine {
                                     },
                                     None => pkt,
                                 };
-                                if let Err(e) = send_sock.send(&out).await {
+                                if let Err(e) = send_sock.send_to(&out, remote_rtp).await {
                                     error!("DTMF RTP send: {e}");
                                 }
                             }
@@ -155,7 +187,7 @@ impl MediaEngine {
             let mut buf = vec![0u8; 2048];
             loop {
                 tokio::select! {
-                    Ok(len) = recv_sock.recv(&mut buf) => {
+                    Ok((len, _from)) = recv_sock.recv_from(&mut buf) => {
                         let decrypted;
                         let plain: &[u8] = if let Some(ctx) = decrypt_ctx.as_mut() {
                             match ctx.decrypt_rtp(&buf[..len]) {

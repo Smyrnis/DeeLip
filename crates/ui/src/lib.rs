@@ -13,6 +13,8 @@ use deelip_sip::{
 use egui::{Color32, FontId, RichText, Ui};
 use tokio::runtime::Handle;
 
+use deelip_nat::TurnRelay;
+
 // ── Tab navigation ────────────────────────────────────────────────────────────
 
 #[derive(PartialEq, Eq, Clone, Copy, Default)]
@@ -41,6 +43,11 @@ pub struct DeelipApp {
     call_codec:       AudioCodec,
     call_dtmf_type:   Option<u8>,
     call_local_srtp:  Option<SrtpParams>,
+    call_relay:       Option<TurnRelay>,
+
+    /// Configured TURN server (server, username, password) — when set, every
+    /// call relays its RTP through it instead of dialing direct.
+    turn_config: Option<(String, String, String)>,
 
     // Incoming call waiting for user action
     pending_call: Option<PendingCall>,
@@ -68,7 +75,7 @@ struct PendingCall {
 }
 
 impl DeelipApp {
-    pub fn new(sip: SipHandle, rt: Handle) -> Self {
+    pub fn new(sip: SipHandle, rt: Handle, turn_config: Option<(String, String, String)>) -> Self {
         let local_rtp = alloc_rtp_port();
 
         let history_path = CallHistory::default_path().ok();
@@ -95,6 +102,8 @@ impl DeelipApp {
             call_codec:       AudioCodec::Pcmu,
             call_dtmf_type:   None,
             call_local_srtp:  None,
+            call_relay:       None,
+            turn_config,
             pending_call:     None,
             call_start_time:  None,
             call_direction:   None,
@@ -190,13 +199,33 @@ impl DeelipApp {
         };
 
         let port    = self.local_rtp;
+        let relay   = self.call_relay.as_ref().map(|r| r.conn.clone());
         let rt      = self.rt.clone();
         let engine  = rt.block_on(MediaEngine::start(
-            port, parsed.rtp_addr, parsed.codec, parsed.dtmf_type, srtp_session,
+            port, parsed.rtp_addr, parsed.codec, parsed.dtmf_type, srtp_session, relay,
         ));
         match engine {
             Ok(e)  => { self.media = Some(e); }
             Err(e) => { tracing::error!("MediaEngine failed: {e}"); }
+        }
+    }
+
+    /// Resolve the (ip, port) to advertise in this call's SDP. Allocates a
+    /// TURN relay on first use if one is configured (`turn_config`), reusing
+    /// the same allocation across hold/resume within the call; falls back to
+    /// the direct local address if no relay is configured or allocation fails.
+    fn resolve_rtp_endpoint(&mut self) -> (String, u16) {
+        if self.call_relay.is_none() {
+            if let Some((server, username, password)) = self.turn_config.clone() {
+                match self.rt.block_on(deelip_nat::allocate_relay(&server, &username, &password)) {
+                    Ok(relay) => { self.call_relay = Some(relay); }
+                    Err(e) => tracing::warn!("TURN allocation failed ({e}), falling back to direct"),
+                }
+            }
+        }
+        match &self.call_relay {
+            Some(relay) => (relay.relayed_addr.ip().to_string(), relay.relayed_addr.port()),
+            None => (self.sip.advertised_ip.clone(), self.local_rtp),
         }
     }
 
@@ -211,6 +240,7 @@ impl DeelipApp {
         self.call_direction  = None;
         self.call_remote_uri = None;
         self.call_local_srtp = None;
+        self.call_relay      = None;
         self.local_rtp       = alloc_rtp_port();
         self.status_line     = if self.reg_ok { "Ready".into() } else { "Not registered".into() };
     }
@@ -237,9 +267,9 @@ impl DeelipApp {
         let raw = target.unwrap_or_else(|| self.call_target.trim().to_string());
         if raw.is_empty() { return; }
         let t = normalize_target(&raw, &self.sip.domain);
-        let local_ip = &self.sip.advertised_ip;
+        let (rtp_ip, rtp_port) = self.resolve_rtp_endpoint();
         let srtp = if self.sip.secure { Some(SrtpParams::generate()) } else { None };
-        let sdp = build_offer(local_ip, self.local_rtp, srtp.as_ref());
+        let sdp = build_offer(&rtp_ip, rtp_port, srtp.as_ref());
         self.call_local_srtp = srtp;
         self.sip.make_call(&t, sdp);
         self.call_direction  = Some(CallDirection::Outbound);
@@ -250,10 +280,10 @@ impl DeelipApp {
 
     fn do_accept(&mut self) {
         if let Some(pending) = self.pending_call.take() {
-            let local_ip = self.sip.advertised_ip.clone();
             let codec    = parse_sdp(&pending.remote_sdp).map(|p| p.codec).unwrap_or(AudioCodec::Pcmu);
+            let (rtp_ip, rtp_port) = self.resolve_rtp_endpoint();
             let srtp     = if self.sip.secure { Some(SrtpParams::generate()) } else { None };
-            let sdp      = build_answer(&local_ip, self.local_rtp, codec, srtp.as_ref());
+            let sdp      = build_answer(&rtp_ip, rtp_port, codec, srtp.as_ref());
             self.call_local_srtp = srtp;
             self.sip.accept_call(&pending.call_id, sdp);
             self.call_id     = Some(pending.call_id);
@@ -283,16 +313,16 @@ impl DeelipApp {
 
     fn do_hold(&mut self) {
         if let Some(id) = self.call_id.clone() {
-            let local_ip = self.sip.advertised_ip.clone();
-            let sdp = build_hold_offer(&local_ip, self.local_rtp, self.call_codec, self.call_local_srtp.as_ref());
+            let (rtp_ip, rtp_port) = self.resolve_rtp_endpoint();
+            let sdp = build_hold_offer(&rtp_ip, rtp_port, self.call_codec, self.call_local_srtp.as_ref());
             self.sip.hold_call(&id, sdp);
         }
     }
 
     fn do_resume(&mut self) {
         if let Some(id) = self.call_id.clone() {
-            let local_ip = self.sip.advertised_ip.clone();
-            let sdp = build_resume_offer(&local_ip, self.local_rtp, self.call_codec, self.call_local_srtp.as_ref());
+            let (rtp_ip, rtp_port) = self.resolve_rtp_endpoint();
+            let sdp = build_resume_offer(&rtp_ip, rtp_port, self.call_codec, self.call_local_srtp.as_ref());
             self.sip.resume_call(&id, sdp);
         }
     }

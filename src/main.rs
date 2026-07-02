@@ -67,8 +67,13 @@ fn main() -> anyhow::Result<()> {
         .context("Starting SIP stack")?;
 
     // ── eframe (main thread) ──────────────────────────────────────────────────
+    let turn = config.turn_server.clone().map(|server| (
+        server,
+        config.turn_username.clone().unwrap_or_default(),
+        config.turn_password.clone().unwrap_or_default(),
+    ));
     let rt_handle = rt.handle().clone();
-    let app       = DeelipApp::new(sip_handle, rt_handle);
+    let app       = DeelipApp::new(sip_handle, rt_handle, turn);
 
     let native_opts = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()

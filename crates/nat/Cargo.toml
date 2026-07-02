@@ -4,7 +4,9 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-tokio     = { workspace = true }
-anyhow    = { workspace = true }
-thiserror = { workspace = true }
-tracing   = { workspace = true }
+tokio       = { workspace = true }
+anyhow      = { workspace = true }
+thiserror   = { workspace = true }
+tracing     = { workspace = true }
+turn        = { workspace = true }
+webrtc-util = { workspace = true }
