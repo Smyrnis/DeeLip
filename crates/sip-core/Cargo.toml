@@ -1,0 +1,17 @@
+[package]
+name    = "deelip-sip"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+deelip-config = { workspace = true }
+tokio         = { workspace = true }
+anyhow        = { workspace = true }
+thiserror     = { workspace = true }
+tracing       = { workspace = true }
+md5           = { workspace = true }
+rustls              = { workspace = true }
+tokio-rustls        = { workspace = true }
+rustls-native-certs = { workspace = true }
+rand                = { workspace = true }
+base64              = { workspace = true }

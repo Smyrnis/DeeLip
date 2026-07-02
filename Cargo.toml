@@ -1,0 +1,63 @@
+[workspace]
+members = [
+    ".",
+    "crates/config",
+    "crates/sip-core",
+    "crates/media-engine",
+    "crates/nat",
+    "crates/ui",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Smyrnis Giannis"]
+license = "MIT"
+
+[workspace.dependencies]
+anyhow             = "1"
+thiserror          = "1"
+tokio              = { version = "1", features = ["full"] }
+serde              = { version = "1", features = ["derive"] }
+toml               = "0.8"
+tracing            = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+dirs               = "5"
+md5                = { package = "md-5", version = "0.10" }
+serde_json         = "1"
+cpal               = "0.15"
+eframe             = "0.28"
+egui               = "0.28"
+audiopus           = "0.2"
+rustls              = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
+tokio-rustls        = { version = "0.26", default-features = false, features = ["ring", "logging", "tls12"] }
+rustls-native-certs = "0.8"
+webrtc-srtp         = "0.10"
+rand                = "0.8"
+base64              = "0.22"
+
+deelip-config = { path = "crates/config" }
+deelip-sip    = { path = "crates/sip-core" }
+deelip-media  = { path = "crates/media-engine" }
+deelip-nat    = { path = "crates/nat" }
+deelip-ui     = { path = "crates/ui" }
+
+[package]
+name    = "deelip"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+deelip-config      = { workspace = true }
+deelip-sip         = { workspace = true }
+deelip-ui          = { workspace = true }
+deelip-nat         = { workspace = true }
+tokio              = { workspace = true }
+tracing            = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow             = { workspace = true }
+eframe             = { workspace = true }
+egui               = { workspace = true }
