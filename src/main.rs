@@ -73,7 +73,7 @@ fn main() -> anyhow::Result<()> {
         config.turn_password.clone().unwrap_or_default(),
     ));
     let rt_handle = rt.handle().clone();
-    let app       = DeelipApp::new(sip_handle, rt_handle, turn);
+    let app       = DeelipApp::new(sip_handle, rt_handle, turn, config.audio.echo_cancellation);
 
     let native_opts = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()

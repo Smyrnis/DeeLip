@@ -13,6 +13,9 @@ pub const FRAME_SAMPLES: usize = 160; // 20ms at 8000 Hz
 pub type CaptureRx = mpsc::UnboundedReceiver<Vec<i16>>;
 /// PCM frames to be played back.
 pub type PlaybackTx = Arc<Mutex<VecDeque<i16>>>;
+/// Far-end reference: a copy of every sample actually written to the output
+/// device, for echo cancellation to compare against the mic capture.
+pub type EchoRefBuf = Arc<Mutex<VecDeque<i16>>>;
 
 /// Holds the live cpal streams (dropped = stopped).
 pub struct AudioStreams {
@@ -21,9 +24,11 @@ pub struct AudioStreams {
 }
 
 /// Open default input + output devices at 8 kHz mono.
-/// Returns the streams (keep alive), a receiver for captured audio,
-/// and a shared jitter buffer to push playback audio into.
-pub fn open_streams() -> anyhow::Result<(AudioStreams, CaptureRx, PlaybackTx)> {
+/// Returns the streams (keep alive), a receiver for captured audio, a shared
+/// jitter buffer to push playback audio into, and — when `echo_cancellation`
+/// is true — a far-end reference buffer mirroring everything written to the
+/// output device, for echo cancellation to compare against the mic capture.
+pub fn open_streams(echo_cancellation: bool) -> anyhow::Result<(AudioStreams, CaptureRx, PlaybackTx, Option<EchoRefBuf>)> {
     let host = cpal::default_host();
 
     let in_dev = host.default_input_device()
@@ -50,9 +55,13 @@ pub fn open_streams() -> anyhow::Result<(AudioStreams, CaptureRx, PlaybackTx)> {
     let jitter: PlaybackTx = Arc::new(Mutex::new(VecDeque::with_capacity(4800)));
     let jitter_out         = jitter.clone();
 
+    let echo_ref: Option<EchoRefBuf> = echo_cancellation
+        .then(|| Arc::new(Mutex::new(VecDeque::with_capacity(4800))));
+    let echo_ref_out = echo_ref.clone();
+
     let output_stream = match out_dev.default_output_config()?.sample_format() {
-        SampleFormat::I16 => build_output_i16(&out_dev, &config, jitter_out)?,
-        SampleFormat::F32 => build_output_f32(&out_dev, &config, jitter_out)?,
+        SampleFormat::I16 => build_output_i16(&out_dev, &config, jitter_out, echo_ref_out)?,
+        SampleFormat::F32 => build_output_f32(&out_dev, &config, jitter_out, echo_ref_out)?,
         fmt => anyhow::bail!("Unsupported output sample format: {fmt:?}"),
     };
 
@@ -63,7 +72,17 @@ pub fn open_streams() -> anyhow::Result<(AudioStreams, CaptureRx, PlaybackTx)> {
         AudioStreams { _input: input_stream, _output: output_stream },
         cap_rx,
         jitter,
+        echo_ref,
     ))
+}
+
+fn push_frame_to_echo_ref(echo_ref: &Option<EchoRefBuf>, samples: &[i16]) {
+    let Some(echo_ref) = echo_ref else { return };
+    let max = FRAME_SAMPLES * 50; // cap at 1 second, mirrors push_to_jitter's bound in engine.rs
+    let mut buf = echo_ref.lock().unwrap();
+    for &s in samples {
+        if buf.len() < max { buf.push_back(s); }
+    }
 }
 
 // ── I16 paths ─────────────────────────────────────────────────────────────────
@@ -95,6 +114,7 @@ fn build_output_i16(
     device: &cpal::Device,
     config: &StreamConfig,
     jitter: PlaybackTx,
+    echo_ref: Option<EchoRefBuf>,
 ) -> anyhow::Result<cpal::Stream> {
     let stream = device.build_output_stream(
         config,
@@ -103,6 +123,8 @@ fn build_output_i16(
             for s in data.iter_mut() {
                 *s = buf.pop_front().unwrap_or(0);
             }
+            drop(buf);
+            push_frame_to_echo_ref(&echo_ref, data);
         },
         |e| tracing::error!("Output stream error: {e}"),
         None,
@@ -139,14 +161,21 @@ fn build_output_f32(
     device: &cpal::Device,
     config: &StreamConfig,
     jitter: PlaybackTx,
+    echo_ref: Option<EchoRefBuf>,
 ) -> anyhow::Result<cpal::Stream> {
+    let mut written: Vec<i16> = Vec::new();
     let stream = device.build_output_stream(
         config,
         move |data: &mut [f32], _| {
             let mut buf = jitter.lock().unwrap();
+            written.clear();
             for s in data.iter_mut() {
-                *s = buf.pop_front().unwrap_or(0) as f32 / i16::MAX as f32;
+                let sample = buf.pop_front().unwrap_or(0);
+                *s = sample as f32 / i16::MAX as f32;
+                written.push(sample);
             }
+            drop(buf);
+            push_frame_to_echo_ref(&echo_ref, &written);
         },
         |e| tracing::error!("Output stream error: {e}"),
         None,

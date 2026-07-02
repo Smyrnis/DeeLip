@@ -12,6 +12,7 @@ use webrtc_util::Conn;
 
 use deelip_sip::{AudioCodec, SrtpSession};
 
+use crate::aec::EchoCanceller;
 use crate::audio::{open_streams, AudioStreams, PlaybackTx, FRAME_SAMPLES};
 use crate::codec::{decode_pcma, decode_pcmu, encode_pcma, encode_pcmu, OpusDecoder, OpusEncoder};
 use crate::dtmf::{build_dtmf_burst, char_to_event, DTMF_PAYLOAD_TYPE};
@@ -74,6 +75,8 @@ impl MediaEngine {
     /// - `srtp`:           local/remote SDES-SRTP keys, if the call negotiated encrypted media.
     /// - `relay`:          a TURN-allocated relay `Conn` (see `deelip_nat::allocate_relay`),
     ///   if the call is relaying media instead of using a direct local socket.
+    /// - `echo_cancellation`: run acoustic echo cancellation on the mic path
+    ///   (see `crate::aec`) — only useful on speakers/mic, not headsets.
     pub async fn start(
         local_rtp_port: u16,
         remote_rtp:     SocketAddr,
@@ -81,9 +84,10 @@ impl MediaEngine {
         dtmf_pt:        Option<u8>,
         srtp:           Option<SrtpSession>,
         relay:          Option<Arc<dyn Conn + Send + Sync>>,
+        echo_cancellation: bool,
     ) -> anyhow::Result<Self> {
-        let (audio_streams, mut cap_rx, playback_tx) =
-            open_streams().context("Opening audio streams")?;
+        let (audio_streams, mut cap_rx, playback_tx, echo_ref) =
+            open_streams(echo_cancellation).context("Opening audio streams")?;
 
         let socket = Arc::new(match relay {
             Some(conn) => RtpSocket::Relay(conn),
@@ -124,11 +128,16 @@ impl MediaEngine {
         } else {
             None
         };
+        let mut echo_canceller = echo_ref.as_ref().map(|_| EchoCanceller::new());
 
         let send_task = tokio::spawn(async move {
             loop {
                 tokio::select! {
                     Some(pcm) = cap_rx.recv() => {
+                        let pcm = match (echo_canceller.as_mut(), echo_ref.as_ref()) {
+                            (Some(canceller), Some(echo_ref)) => canceller.process(&pcm, echo_ref),
+                            _ => pcm,
+                        };
                         let encoded = match codec {
                             AudioCodec::Opus => opus_enc.as_mut().unwrap().encode(&pcm),
                             AudioCodec::Pcma => encode_pcma(&pcm),

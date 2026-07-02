@@ -49,6 +49,10 @@ pub struct DeelipApp {
     /// call relays its RTP through it instead of dialing direct.
     turn_config: Option<(String, String, String)>,
 
+    /// Run acoustic echo cancellation on the mic path (see `deelip_media::aec`)
+    /// — only useful on speakers/mic, not headsets.
+    echo_cancellation: bool,
+
     // Incoming call waiting for user action
     pending_call: Option<PendingCall>,
 
@@ -75,7 +79,12 @@ struct PendingCall {
 }
 
 impl DeelipApp {
-    pub fn new(sip: SipHandle, rt: Handle, turn_config: Option<(String, String, String)>) -> Self {
+    pub fn new(
+        sip: SipHandle,
+        rt: Handle,
+        turn_config: Option<(String, String, String)>,
+        echo_cancellation: bool,
+    ) -> Self {
         let local_rtp = alloc_rtp_port();
 
         let history_path = CallHistory::default_path().ok();
@@ -104,6 +113,7 @@ impl DeelipApp {
             call_local_srtp:  None,
             call_relay:       None,
             turn_config,
+            echo_cancellation,
             pending_call:     None,
             call_start_time:  None,
             call_direction:   None,
@@ -203,6 +213,7 @@ impl DeelipApp {
         let rt      = self.rt.clone();
         let engine  = rt.block_on(MediaEngine::start(
             port, parsed.rtp_addr, parsed.codec, parsed.dtmf_type, srtp_session, relay,
+            self.echo_cancellation,
         ));
         match engine {
             Ok(e)  => { self.media = Some(e); }

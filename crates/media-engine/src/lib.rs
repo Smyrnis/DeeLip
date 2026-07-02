@@ -1,3 +1,4 @@
+pub mod aec;
 pub mod audio;
 pub mod codec;
 pub mod dtmf;

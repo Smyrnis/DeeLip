@@ -61,6 +61,11 @@ pub struct AudioConfig {
     pub sample_rate: u32,
     #[serde(default = "default_frame_ms")]
     pub frame_size_ms: u32,
+    /// Acoustic echo cancellation. Off by default — only useful when using
+    /// speakers/mic instead of a headset, where the mic picks up the call's
+    /// own audio playing back out of the speaker.
+    #[serde(default)]
+    pub echo_cancellation: bool,
 }
 
 fn default_sample_rate() -> u32 { 48_000 }
@@ -73,6 +78,7 @@ impl Default for AudioConfig {
             output_device: None,
             sample_rate:   default_sample_rate(),
             frame_size_ms: default_frame_ms(),
+            echo_cancellation: false,
         }
     }
 }
