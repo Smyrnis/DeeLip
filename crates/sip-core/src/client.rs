@@ -33,6 +33,9 @@ pub struct SipHandle {
     pub advertised_ip: String,
     /// True when signaling runs over TLS — callers use this to decide whether to offer SRTP.
     pub secure: bool,
+    /// The account's SIP domain (`account.server`) — used to resolve bare
+    /// extension numbers typed into the dialer into a full SIP URI.
+    pub domain: String,
 }
 
 impl SipHandle {
@@ -147,12 +150,13 @@ impl SipStack {
         let stack = SipStack::new(account, local_port, external_ip, event_tx, cmd_rx).await?;
         let advertised_ip = stack.advertised_ip.clone();
         let secure = stack.account.transport == TransportProtocol::Tls;
+        let domain = stack.account.server.clone();
         tokio::spawn(async move {
             if let Err(e) = stack.run().await {
                 error!("SIP stack crashed: {e}");
             }
         });
-        Ok(SipHandle { event_rx, cmd_tx, advertised_ip, secure })
+        Ok(SipHandle { event_rx, cmd_tx, advertised_ip, secure, domain })
     }
 
     // ── Main event loop ───────────────────────────────────────────────────────

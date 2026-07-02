@@ -234,8 +234,9 @@ impl DeelipApp {
     // ── Call actions ─────────────────────────────────────────────────────────
 
     fn do_call(&mut self, target: Option<String>) {
-        let t = target.unwrap_or_else(|| self.call_target.trim().to_string());
-        if t.is_empty() { return; }
+        let raw = target.unwrap_or_else(|| self.call_target.trim().to_string());
+        if raw.is_empty() { return; }
+        let t = normalize_target(&raw, &self.sip.domain);
         let local_ip = &self.sip.advertised_ip;
         let srtp = if self.sip.secure { Some(SrtpParams::generate()) } else { None };
         let sdp = build_offer(local_ip, self.local_rtp, srtp.as_ref());
@@ -601,6 +602,21 @@ fn short_uri(uri: &str) -> String {
         .to_string()
 }
 
+/// Normalize a dial-box entry into a full SIP URI. Bare numbers/usernames
+/// (no scheme, no "@") are dialed against the account's own domain, matching
+/// how MicroSIP and other softphones resolve local extensions.
+fn normalize_target(raw: &str, domain: &str) -> String {
+    let raw = raw.trim();
+    let lower = raw.to_ascii_lowercase();
+    if lower.starts_with("sip:") || lower.starts_with("sips:") {
+        raw.to_string()
+    } else if raw.contains('@') {
+        format!("sip:{raw}")
+    } else {
+        format!("sip:{raw}@{domain}")
+    }
+}
+
 fn unix_now() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -625,4 +641,34 @@ fn format_age(ts: u64) -> String {
 
 fn ctx_key_enter(ui: &Ui) -> bool {
     ui.input(|i| i.key_pressed(egui::Key::Enter))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_target;
+
+    #[test]
+    fn bare_number_gets_domain_appended() {
+        assert_eq!(normalize_target("600", "127.0.0.1"), "sip:600@127.0.0.1");
+    }
+
+    #[test]
+    fn existing_sip_uri_is_untouched() {
+        assert_eq!(normalize_target("sip:600@127.0.0.1", "example.com"), "sip:600@127.0.0.1");
+    }
+
+    #[test]
+    fn sips_uri_is_untouched() {
+        assert_eq!(normalize_target("sips:bob@example.com", "example.com"), "sips:bob@example.com");
+    }
+
+    #[test]
+    fn user_at_host_without_scheme_gets_scheme_added() {
+        assert_eq!(normalize_target("bob@example.com", "example.com"), "sip:bob@example.com");
+    }
+
+    #[test]
+    fn trims_whitespace() {
+        assert_eq!(normalize_target("  600  ", "127.0.0.1"), "sip:600@127.0.0.1");
+    }
 }
