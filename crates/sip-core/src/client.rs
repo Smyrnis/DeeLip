@@ -5,24 +5,27 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use anyhow::Context;
 use tokio::sync::mpsc;
-use tokio::time::{Duration, Instant, sleep_until};
+use tokio::time::{interval, Duration, Instant, sleep_until};
 use tracing::{debug, error, info, warn};
 
 use deelip_config::{SipAccount, TransportProtocol};
 
 use crate::{
-    auth::{build_auth_header, compute_digest_response, DigestChallenge},
+    auth::build_challenge_response,
     dialog::{Dialog, DialogState},
     events::{SipCommand, SipEvent},
     message::{SipMessage, SipMethod, SipStartLine},
+    presence::{parse_pidf_basic, parse_subscription_state, PresenceSubscription},
     transport::SipTransport,
     util::{local_ip_for, new_branch, new_call_id, new_tag},
 };
 
-const REG_EXPIRES:      u32      = 3600;
-const REG_MARGIN:       u32      = 60;
-const REG_RECV_TIMEOUT: Duration = Duration::from_secs(10);
-const MAX_RETRY:        Duration = Duration::from_secs(300);
+const REG_EXPIRES:        u32      = 3600;
+const REG_MARGIN:         u32      = 60;
+const REG_RECV_TIMEOUT:   Duration = Duration::from_secs(10);
+const MAX_RETRY:          Duration = Duration::from_secs(300);
+const SUBSCRIBE_EXPIRES:  u32      = 3600;
+const PRESENCE_TICK:      Duration = Duration::from_secs(30);
 
 // ── Public handle ─────────────────────────────────────────────────────────────
 
@@ -76,6 +79,14 @@ impl SipHandle {
             call_id: call_id.to_string(), target,
         });
     }
+    /// Subscribe to a contact's presence. `target_uri` must already be a
+    /// fully-qualified SIP URI (contacts store one directly, same as Call does).
+    pub fn subscribe_presence(&self, target_uri: String) {
+        let _ = self.cmd_tx.send(SipCommand::SubscribePresence { target_uri });
+    }
+    pub fn unsubscribe_presence(&self, target_uri: String) {
+        let _ = self.cmd_tx.send(SipCommand::UnsubscribePresence { target_uri });
+    }
 }
 
 // ── SIP Stack ─────────────────────────────────────────────────────────────────
@@ -92,7 +103,8 @@ pub struct SipStack {
     reg_from_tag: String,
     reg_cseq:     Arc<AtomicU32>,
 
-    dialogs:  HashMap<String, Dialog>,
+    dialogs:       HashMap<String, Dialog>,
+    subscriptions: HashMap<String, PresenceSubscription>,
     event_tx: mpsc::UnboundedSender<SipEvent>,
     cmd_rx:   mpsc::UnboundedReceiver<SipCommand>,
 }
@@ -148,6 +160,7 @@ impl SipStack {
             reg_from_tag,
             reg_cseq:  Arc::new(AtomicU32::new(1)),
             dialogs:   HashMap::new(),
+            subscriptions: HashMap::new(),
             event_tx,
             cmd_rx,
         })
@@ -177,9 +190,13 @@ impl SipStack {
     pub async fn run(mut self) -> anyhow::Result<()> {
         let mut reregister_at = Instant::now();
         let mut retry_delay   = Duration::from_secs(5);
+        let mut presence_tick = interval(PRESENCE_TICK);
 
         loop {
             tokio::select! {
+                _ = presence_tick.tick() => {
+                    self.refresh_presence_subscriptions().await;
+                }
                 _ = sleep_until(reregister_at) => {
                     match self.register_once().await {
                         Ok(expires) => {
@@ -236,9 +253,8 @@ impl SipStack {
                     SipMethod::Bye     => self.on_bye(msg, from).await,
                     SipMethod::Ack     => self.on_ack(msg),
                     SipMethod::Cancel  => self.on_cancel(msg, from).await,
-                    // NOTIFY arrives during blind transfer (transfer-progress sipfrag) —
-                    // we don't act on its content, just ack it so the far end stops retransmitting.
-                    SipMethod::Options | SipMethod::Notify => self.send_ok(&msg, from).await,
+                    SipMethod::Notify  => self.on_notify(msg, from).await,
+                    SipMethod::Options => self.send_ok(&msg, from).await,
                     _                  => debug!(?method, "Ignoring unhandled request"),
                 }
             }
@@ -273,18 +289,11 @@ impl SipStack {
             .header(hdr_name)
             .ok_or_else(|| anyhow::anyhow!("Missing {hdr_name}"))?
             .to_owned();
-        let challenge = DigestChallenge::parse(&www_auth)
-            .ok_or_else(|| anyhow::anyhow!("Bad challenge: {www_auth}"))?;
 
-        let uri    = format!("sip:{}", self.account.server);
-        let digest = compute_digest_response(
-            &self.account.username, &challenge.realm,
-            &self.account.password, "REGISTER", &uri, &challenge.nonce,
-        );
-        let auth = build_auth_header(
-            &self.account.username, &challenge.realm,
-            &challenge.nonce, &uri, &digest,
-        );
+        let uri = format!("sip:{}", self.account.server);
+        let auth = build_challenge_response(
+            &self.account.username, &self.account.password, "REGISTER", &uri, &www_auth,
+        ).ok_or_else(|| anyhow::anyhow!("Bad challenge: {www_auth}"))?;
 
         self.send_register(Some(&auth)).await?;
         let resp2 = self.recv_reg_response().await?;
@@ -368,6 +377,8 @@ impl SipStack {
             SipCommand::ResumeCall { call_id, local_sdp } => self.send_reinvite(&call_id, &local_sdp, false).await,
             SipCommand::BlindTransfer { call_id, target }  => self.blind_transfer(&call_id, &target).await,
             SipCommand::RedirectCall  { call_id, target }  => self.redirect_call(&call_id, &target).await,
+            SipCommand::SubscribePresence   { target_uri } => self.subscribe_presence(&target_uri).await,
+            SipCommand::UnsubscribePresence { target_uri } => self.unsubscribe_presence(&target_uri).await,
         }
     }
 
@@ -561,6 +572,196 @@ impl SipStack {
         }
     }
 
+    // ── Presence (SUBSCRIBE/NOTIFY, Event: presence) ─────────────────────────
+
+    async fn subscribe_presence(&mut self, target_uri: &str) {
+        let call_id  = new_call_id(&self.local_ip);
+        let from_tag = new_tag();
+        let sub = PresenceSubscription::new(call_id.clone(), from_tag.clone(), target_uri.to_string());
+
+        let msg = self.build_subscribe(&call_id, &from_tag, 1, target_uri, SUBSCRIBE_EXPIRES, None);
+        debug!("→ SUBSCRIBE {target_uri} (Event: presence)");
+        if let Err(e) = self.transport.send(msg.as_bytes(), self.server_addr).await {
+            error!("Failed to send SUBSCRIBE: {e}");
+            let _ = self.event_tx.send(SipEvent::PresenceSubscribeFailed {
+                uri: target_uri.to_string(), reason: e.to_string(),
+            });
+            return;
+        }
+        self.subscriptions.insert(call_id, sub);
+    }
+
+    /// Sends SUBSCRIBE with `Expires: 0` per RFC 3265's unsubscribe mechanism,
+    /// then removes the subscription locally without waiting for its response.
+    async fn unsubscribe_presence(&mut self, target_uri: &str) {
+        let matching: Vec<String> = self.subscriptions.iter()
+            .filter(|(_, s)| s.target_uri == target_uri)
+            .map(|(id, _)| id.clone())
+            .collect();
+
+        for call_id in matching {
+            if let Some(sub) = self.subscriptions.get_mut(&call_id) {
+                let cseq     = sub.next_local_cseq();
+                let from_tag = sub.local_tag.clone();
+                let msg = self.build_subscribe(&call_id, &from_tag, cseq, target_uri, 0, None);
+                debug!("→ SUBSCRIBE {target_uri} (Expires: 0, unsubscribe)");
+                let _ = self.transport.send(msg.as_bytes(), self.server_addr).await;
+            }
+            self.subscriptions.remove(&call_id);
+        }
+    }
+
+    /// Re-SUBSCRIBE any subscription whose `refresh_after` has passed —
+    /// called from a coarse 30s tick in `run()` rather than a precise
+    /// per-subscription deadline, which is plenty for hour-scale expiries.
+    async fn refresh_presence_subscriptions(&mut self) {
+        let now = Instant::now();
+        let due: Vec<String> = self.subscriptions.iter()
+            .filter(|(_, s)| s.refresh_after <= now)
+            .map(|(id, _)| id.clone())
+            .collect();
+
+        for call_id in due {
+            let Some(sub) = self.subscriptions.get_mut(&call_id) else { continue };
+            // A refresh is a fresh transaction -- allow a new auth challenge/retry cycle.
+            sub.auth_retried = false;
+            let cseq       = sub.next_local_cseq();
+            let from_tag   = sub.local_tag.clone();
+            let target_uri = sub.target_uri.clone();
+            let msg = self.build_subscribe(&call_id, &from_tag, cseq, &target_uri, SUBSCRIBE_EXPIRES, None);
+            debug!("→ SUBSCRIBE {target_uri} (refresh)");
+            let _ = self.transport.send(msg.as_bytes(), self.server_addr).await;
+        }
+    }
+
+    fn build_subscribe(
+        &self,
+        call_id:    &str,
+        from_tag:   &str,
+        cseq:       u32,
+        target_uri: &str,
+        expires:    u32,
+        auth:       Option<&str>,
+    ) -> String {
+        let branch     = new_branch();
+        let server     = &self.account.server;
+        let username   = &self.account.username;
+        let adv_ip     = &self.advertised_ip;
+        let local_ip   = &self.local_ip;
+        let local_port = self.local_port;
+        let display    = self.account.display_name.as_deref().unwrap_or(username);
+        let via_proto  = self.via_proto();
+
+        let mut msg = format!(
+            "SUBSCRIBE {target_uri} SIP/2.0\r\n\
+             Via: SIP/2.0/{via_proto} {local_ip}:{local_port};branch={branch};rport\r\n\
+             Max-Forwards: 70\r\n\
+             To: <{target_uri}>\r\n\
+             From: \"{display}\" <sip:{username}@{server}>;tag={from_tag}\r\n\
+             Call-ID: {call_id}\r\n\
+             CSeq: {cseq} SUBSCRIBE\r\n\
+             Contact: <sip:{username}@{adv_ip}:{local_port}>\r\n\
+             Event: presence\r\n\
+             Accept: application/pidf+xml\r\n\
+             Expires: {expires}\r\n\
+             User-Agent: DeeLip/0.1.0\r\n"
+        );
+        if let Some(a) = auth { msg.push_str(a); msg.push_str("\r\n"); }
+        msg.push_str("Content-Length: 0\r\n\r\n");
+        msg
+    }
+
+    async fn on_subscribe_response(&mut self, msg: SipMessage, status: u16, call_id: String) {
+        match status {
+            200 => {
+                let expires = extract_expires(&msg).unwrap_or(SUBSCRIBE_EXPIRES);
+                let uri = if let Some(sub) = self.subscriptions.get_mut(&call_id) {
+                    if sub.remote_tag.is_none() {
+                        sub.remote_tag = parse_tag(msg.header("To").unwrap_or(""));
+                    }
+                    sub.refresh_after = Instant::now() + Duration::from_secs((expires as u64 * 9) / 10);
+                    sub.auth_retried  = false;
+                    sub.target_uri.clone()
+                } else {
+                    return;
+                };
+                let _ = self.event_tx.send(SipEvent::PresenceSubscribed { uri, expires });
+            }
+            401 | 407 => {
+                let Some(sub) = self.subscriptions.get(&call_id) else { return };
+                if sub.auth_retried {
+                    let uri = self.subscriptions.remove(&call_id).map(|s| s.target_uri).unwrap_or_default();
+                    let _ = self.event_tx.send(SipEvent::PresenceSubscribeFailed {
+                        uri, reason: format!("{status}"),
+                    });
+                    return;
+                }
+                let target_uri = sub.target_uri.clone();
+                let hdr_name = if status == 407 { "Proxy-Authenticate" } else { "WWW-Authenticate" };
+                let Some(challenge_raw) = msg.header(hdr_name) else {
+                    let uri = self.subscriptions.remove(&call_id).map(|s| s.target_uri).unwrap_or_default();
+                    let _ = self.event_tx.send(SipEvent::PresenceSubscribeFailed {
+                        uri, reason: "Missing auth challenge".into(),
+                    });
+                    return;
+                };
+                let Some(auth) = build_challenge_response(
+                    &self.account.username, &self.account.password, "SUBSCRIBE", &target_uri, challenge_raw,
+                ) else {
+                    let uri = self.subscriptions.remove(&call_id).map(|s| s.target_uri).unwrap_or_default();
+                    let _ = self.event_tx.send(SipEvent::PresenceSubscribeFailed {
+                        uri, reason: "Bad auth challenge".into(),
+                    });
+                    return;
+                };
+                let Some(sub) = self.subscriptions.get_mut(&call_id) else { return };
+                sub.auth_retried = true;
+                let cseq     = sub.next_local_cseq();
+                let from_tag = sub.local_tag.clone();
+                let retry = self.build_subscribe(&call_id, &from_tag, cseq, &target_uri, SUBSCRIBE_EXPIRES, Some(&auth));
+                let _ = self.transport.send(retry.as_bytes(), self.server_addr).await;
+            }
+            c if c >= 300 => {
+                let uri = self.subscriptions.remove(&call_id).map(|s| s.target_uri).unwrap_or_default();
+                let _ = self.event_tx.send(SipEvent::PresenceSubscribeFailed { uri, reason: format!("{c}") });
+            }
+            _ => {}
+        }
+    }
+
+    async fn on_notify(&mut self, msg: SipMessage, from: SocketAddr) {
+        let call_id = msg.call_id().map(str::to_string);
+        let is_presence = call_id.as_deref().is_some_and(|id| self.subscriptions.contains_key(id));
+
+        if is_presence {
+            let call_id = call_id.unwrap();
+            let body = String::from_utf8_lossy(&msg.body).into_owned();
+
+            if let Some(state) = parse_pidf_basic(&body) {
+                if let Some(sub) = self.subscriptions.get_mut(&call_id) {
+                    sub.state = state;
+                    if sub.remote_tag.is_none() {
+                        // First NOTIFY can race ahead of the SUBSCRIBE's own 200 OK.
+                        sub.remote_tag = parse_tag(msg.header("From").unwrap_or(""));
+                    }
+                    let uri = sub.target_uri.clone();
+                    let _ = self.event_tx.send(SipEvent::PresenceUpdate { uri, state });
+                }
+            }
+
+            if let Some(sub_state) = msg.header("Subscription-State") {
+                let (state_token, _) = parse_subscription_state(sub_state);
+                if state_token.eq_ignore_ascii_case("terminated") {
+                    self.subscriptions.remove(&call_id);
+                }
+            }
+        }
+
+        // Non-presence NOTIFY (e.g. blind-transfer's sipfrag) falls through to
+        // an unconditional blind-ack, unchanged from before this feature.
+        self.send_ok(&msg, from).await;
+    }
+
     // ── Response handler ──────────────────────────────────────────────────────
 
     async fn on_response(&mut self, msg: SipMessage, status: u16, _from: SocketAddr) {
@@ -580,6 +781,14 @@ impl SipStack {
                 SipEvent::TransferFailed { call_id, reason: format!("{status}") }
             };
             let _ = self.event_tx.send(ev);
+            return;
+        }
+
+        // SUBSCRIBE responses don't follow the INVITE/BYE convention either
+        // (success is 200 OK but with Expires semantics, no ACK) and aren't
+        // call dialogs at all -- handled entirely against `self.subscriptions`.
+        if matches!(msg.cseq(), Some((_, SipMethod::Subscribe))) {
+            self.on_subscribe_response(msg, status, call_id).await;
             return;
         }
 
@@ -727,20 +936,15 @@ impl SipStack {
                 let ack = self.build_ack(&ack_cid, &ack_from_tag, &ack_to_uri, ack_to_tag.as_deref(), ack_cseq);
                 let _ = self.transport.send(ack.as_bytes(), self.server_addr).await;
 
-                let Some(challenge) = DigestChallenge::parse(&challenge_raw) else {
+                let Some(auth) = build_challenge_response(
+                    &self.account.username, &self.account.password, "INVITE", &to_uri, &challenge_raw,
+                ) else {
                     self.dialogs.remove(&call_id);
                     let _ = self.event_tx.send(SipEvent::CallFailed {
                         call_id, code: 401, reason: "Bad auth challenge".into(),
                     });
                     return;
                 };
-                let digest = compute_digest_response(
-                    &self.account.username, &challenge.realm, &self.account.password,
-                    "INVITE", &to_uri, &challenge.nonce,
-                );
-                let auth = build_auth_header(
-                    &self.account.username, &challenge.realm, &challenge.nonce, &to_uri, &digest,
-                );
 
                 let Some(dialog) = self.dialogs.get_mut(&call_id) else { return; };
                 let cseq = dialog.next_local_cseq();

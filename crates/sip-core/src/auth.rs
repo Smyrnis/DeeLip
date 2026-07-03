@@ -37,6 +37,22 @@ pub fn build_auth_header(
     )
 }
 
+/// Parse a `WWW-Authenticate`/`Proxy-Authenticate` challenge and build the
+/// matching `Authorization:` header value for a retried request -- the
+/// parse-compute-build sequence shared by REGISTER, INVITE, and SUBSCRIBE's
+/// 401/407 retry handling (previously duplicated inline at each call site).
+pub fn build_challenge_response(
+    username: &str,
+    password: &str,
+    method:   &str,
+    uri:      &str,
+    challenge_header: &str,
+) -> Option<String> {
+    let challenge = DigestChallenge::parse(challenge_header)?;
+    let digest = compute_digest_response(username, &challenge.realm, password, method, uri, &challenge.nonce);
+    Some(build_auth_header(username, &challenge.realm, &challenge.nonce, uri, &digest))
+}
+
 // ── Challenge parsing ─────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]

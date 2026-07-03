@@ -241,6 +241,16 @@ pub fn set_autostart(enabled: bool) -> anyhow::Result<()> {
 pub struct Contact {
     pub name:    String,
     pub sip_uri: String,
+    /// Subscribe to this contact's SIP presence (RFC 3856), shown as a
+    /// colored dot in the Contacts tab. Off by default -- opt-in, like the
+    /// other watch/enable toggles in this config.
+    #[serde(default)]
+    pub watch_presence: bool,
+    /// Which account's identity subscribes on this contact's behalf,
+    /// identified by username (stable across account reordering, unlike an
+    /// index). `None` defaults to the first enabled account.
+    #[serde(default)]
+    pub presence_account: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

@@ -1,3 +1,5 @@
+use crate::presence::PresenceState;
+
 /// Events emitted by the SIP stack to the application.
 #[derive(Debug)]
 pub enum SipEvent {
@@ -24,6 +26,12 @@ pub enum SipEvent {
     TransferAccepted { call_id: String },
     /// Our blind-transfer REFER was rejected.
     TransferFailed { call_id: String, reason: String },
+    /// Presence SUBSCRIBE accepted (200 OK); `expires` is the server-granted value.
+    PresenceSubscribed { uri: String, expires: u32 },
+    /// Presence SUBSCRIBE rejected.
+    PresenceSubscribeFailed { uri: String, reason: String },
+    /// A NOTIFY updated a watched contact's presence state.
+    PresenceUpdate { uri: String, state: PresenceState },
 }
 
 /// Commands sent from the application into the SIP stack.
@@ -41,4 +49,8 @@ pub enum SipCommand {
     BlindTransfer { call_id: String, target: String },
     /// Redirect a not-yet-answered incoming call via 302 Moved Temporarily.
     RedirectCall { call_id: String, target: String },
+    /// Subscribe to a contact's presence (`target_uri` is a full SIP URI).
+    SubscribePresence { target_uri: String },
+    /// Unsubscribe from a contact's presence (sends SUBSCRIBE with Expires: 0).
+    UnsubscribePresence { target_uri: String },
 }

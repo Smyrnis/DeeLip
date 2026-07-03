@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -8,7 +9,7 @@ use deelip_config::{
 use deelip_media::{alloc_rtp_port, MediaEngine};
 use deelip_sip::{
     build_answer, build_hold_offer, build_offer, build_resume_offer,
-    parse_sdp, AudioCodec, SipEvent, SipHandle, SrtpParams, SrtpSession,
+    parse_sdp, AudioCodec, PresenceState, SipEvent, SipHandle, SrtpParams, SrtpSession,
 };
 use egui::{FontId, RichText, Ui};
 use tokio::runtime::Handle;
@@ -159,6 +160,9 @@ pub struct DeelipApp {
     /// Index into `contacts.contacts` currently loaded into `new_contact`
     /// for editing — `None` means the form is in "Add" mode.
     editing_contact_idx: Option<usize>,
+    /// Last-known presence state per watched contact, keyed by `sip_uri`
+    /// (presence isn't call-scoped, so it doesn't fit any per-call state).
+    presence: HashMap<String, PresenceState>,
 }
 
 /// A not-yet-answered incoming call.
@@ -282,6 +286,7 @@ impl DeelipApp {
             contact_search:   String::new(),
             new_contact:      Contact::default(),
             editing_contact_idx: None,
+            presence: HashMap::new(),
         }
     }
 
@@ -309,6 +314,7 @@ impl DeelipApp {
                 self.accounts[account].reg_ok = true;
                 self.accounts[account].status = format!("Registered (expires {expires}s)");
                 self.refresh_idle_status();
+                self.subscribe_account_contacts(account);
             }
             SipEvent::RegistrationFailed { reason } => {
                 self.accounts[account].reg_ok = false;
@@ -391,6 +397,40 @@ impl DeelipApp {
                 tracing::warn!(call_id, reason, "Blind transfer failed");
                 self.status_line = format!("Transfer failed: {reason}");
             }
+            SipEvent::PresenceSubscribed { uri, expires } => {
+                tracing::debug!(uri, expires, "Presence subscribed");
+            }
+            SipEvent::PresenceSubscribeFailed { uri, reason } => {
+                tracing::warn!(uri, reason, "Presence subscribe failed");
+                self.presence.insert(uri, PresenceState::Unknown);
+            }
+            SipEvent::PresenceUpdate { uri, state } => {
+                self.presence.insert(uri, state);
+            }
+        }
+    }
+
+    /// Which account subscribes on a contact's behalf: `presence_account`
+    /// (matched by username, stable across account reordering) if set, else
+    /// the first configured account -- covers the common single-account case
+    /// with no extra clicks.
+    fn resolve_presence_account(&self, contact: &Contact) -> Option<usize> {
+        match &contact.presence_account {
+            Some(username) => self.accounts.iter().position(|a| &a.account.username == username),
+            None => if self.accounts.is_empty() { None } else { Some(0) },
+        }
+    }
+
+    /// Subscribe every `watch_presence` contact resolved to `account`,
+    /// called once that account has actually registered (subscribing before
+    /// then would just hit the same 401/407 retry path unnecessarily).
+    fn subscribe_account_contacts(&mut self, account: usize) {
+        let targets: Vec<String> = self.contacts.contacts.iter()
+            .filter(|c| c.watch_presence && self.resolve_presence_account(c) == Some(account))
+            .map(|c| c.sip_uri.clone())
+            .collect();
+        for uri in targets {
+            self.accounts[account].handle.subscribe_presence(uri);
         }
     }
 
@@ -1290,10 +1330,10 @@ impl DeelipApp {
         let mut delete_idx:  Option<usize>   = None;
 
         // Contact list
-        let results: Vec<(usize, String, String)> = self.contacts
+        let results: Vec<(usize, String, String, bool)> = self.contacts
             .search(&self.contact_search)
             .into_iter()
-            .map(|(i, c)| (i, c.name.clone(), c.sip_uri.clone()))
+            .map(|(i, c)| (i, c.name.clone(), c.sip_uri.clone(), c.watch_presence))
             .collect();
 
         egui::ScrollArea::vertical()
@@ -1302,9 +1342,21 @@ impl DeelipApp {
                 if results.is_empty() {
                     ui.label(RichText::new("No contacts found.").color(self.palette.muted));
                 }
-                for (idx, name, uri) in &results {
+                for (idx, name, uri, watch_presence) in &results {
                     ui.horizontal(|ui| {
                         ui.label(name);
+                        if *watch_presence {
+                            let color = match self.presence.get(uri) {
+                                Some(PresenceState::Available) => self.palette.accent,
+                                _ => self.palette.muted,
+                            };
+                            ui.label(RichText::new("●").color(color))
+                                .on_hover_text(match self.presence.get(uri) {
+                                    Some(PresenceState::Available) => "Available",
+                                    Some(PresenceState::Offline) => "Offline",
+                                    _ => "Unknown",
+                                });
+                        }
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui.small_button(egui_phosphor::regular::PHONE).clicked() {
                                 call_target = Some(uri.clone());
@@ -1327,7 +1379,8 @@ impl DeelipApp {
             self.new_contact = self.contacts.contacts[idx].clone();
         }
         if let Some(idx) = delete_idx {
-            self.contacts.contacts.remove(idx);
+            let removed = self.contacts.contacts.remove(idx);
+            self.unsubscribe_contact_presence(&removed);
             if self.editing_contact_idx == Some(idx) {
                 self.editing_contact_idx = None;
                 self.new_contact = Contact::default();
@@ -1355,13 +1408,43 @@ impl DeelipApp {
         });
         ui.add_space(4.0);
         ui.horizontal(|ui| {
+            ui.checkbox(&mut self.new_contact.watch_presence, "Watch presence");
+            if self.accounts.len() > 1 {
+                ui.label("via:");
+                let current_label = match &self.new_contact.presence_account {
+                    Some(username) => self.accounts.iter()
+                        .find(|a| &a.account.username == username)
+                        .map(|a| a.label.clone())
+                        .unwrap_or_else(|| username.clone()),
+                    None => self.accounts.first()
+                        .map(|a| format!("{} (default)", a.label))
+                        .unwrap_or_default(),
+                };
+                egui::ComboBox::from_id_source("contact_presence_account_picker")
+                    .selected_text(current_label)
+                    .show_ui(ui, |ui| {
+                        for acc in &self.accounts {
+                            let is_sel = self.new_contact.presence_account.as_deref() == Some(acc.account.username.as_str());
+                            if ui.selectable_label(is_sel, &acc.label).clicked() {
+                                self.new_contact.presence_account = Some(acc.account.username.clone());
+                            }
+                        }
+                    });
+            }
+        });
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
             let can_save = !self.new_contact.name.is_empty() && !self.new_contact.sip_uri.is_empty();
             if ui.add_enabled(can_save, egui::Button::new("Save Contact")).clicked() {
                 let c = std::mem::take(&mut self.new_contact);
                 if let Some(idx) = self.editing_contact_idx.take() {
-                    self.contacts.contacts[idx] = c;
+                    let old = self.contacts.contacts[idx].clone();
+                    self.contacts.contacts[idx] = c.clone();
+                    self.unsubscribe_contact_presence(&old);
+                    self.subscribe_contact_presence(&c);
                 } else {
-                    self.contacts.contacts.push(c);
+                    self.contacts.contacts.push(c.clone());
+                    self.subscribe_contact_presence(&c);
                 }
                 if let Some(path) = &self.contacts_path {
                     let _ = self.contacts.save(path);
@@ -1381,6 +1464,22 @@ impl DeelipApp {
                 self.do_call(Some(target));
             }
         }
+    }
+
+    fn subscribe_contact_presence(&mut self, contact: &Contact) {
+        if !contact.watch_presence { return; }
+        if let Some(idx) = self.resolve_presence_account(contact) {
+            self.accounts[idx].handle.subscribe_presence(contact.sip_uri.clone());
+        }
+    }
+
+    fn unsubscribe_contact_presence(&mut self, contact: &Contact) {
+        if contact.watch_presence {
+            if let Some(idx) = self.resolve_presence_account(contact) {
+                self.accounts[idx].handle.unsubscribe_presence(contact.sip_uri.clone());
+            }
+        }
+        self.presence.remove(&contact.sip_uri);
     }
 
     fn export_contacts_csv(&self) {
@@ -1471,7 +1570,7 @@ fn parse_contacts_csv(content: &str) -> Vec<Contact> {
             let fields = parse_csv_line(line);
             let name    = fields.first()?.clone();
             let sip_uri = fields.get(1)?.clone();
-            Some(Contact { name, sip_uri })
+            Some(Contact { name, sip_uri, ..Default::default() })
         })
         .collect()
 }
@@ -1512,7 +1611,7 @@ fn parse_vcard(content: &str) -> Vec<Contact> {
         }
         if line.eq_ignore_ascii_case("END:VCARD") {
             if let (Some(n), Some(u)) = (name.take(), uri.take()) {
-                contacts.push(Contact { name: n, sip_uri: u });
+                contacts.push(Contact { name: n, sip_uri: u, ..Default::default() });
             }
             continue;
         }
