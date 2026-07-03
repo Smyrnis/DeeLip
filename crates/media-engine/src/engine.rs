@@ -1,6 +1,8 @@
+use std::fs::File;
+use std::io::BufWriter;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use anyhow::Context;
 use tokio::net::UdpSocket;
@@ -11,13 +13,43 @@ use webrtc_srtp::option::srtp_replay_protection;
 use webrtc_srtp::protection_profile::ProtectionProfile;
 use webrtc_util::Conn;
 
+use deelip_config::recordings_dir;
 use deelip_sip::{AudioCodec, SrtpSession};
 
 use crate::aec::EchoCanceller;
-use crate::audio::{open_streams, AudioStreams, PlaybackTx, FRAME_SAMPLES};
+use crate::audio::{open_streams, AudioStreams, PlaybackTx, RecordFarBuf, FRAME_SAMPLES, SAMPLE_RATE};
 use crate::codec::{decode_pcma, decode_pcmu, encode_pcma, encode_pcmu, OpusDecoder, OpusEncoder};
 use crate::dtmf::{build_dtmf_burst, char_to_event, DTMF_PAYLOAD_TYPE};
 use crate::rtp::{RtpPacket, RtpSender};
+
+type WavWriter = hound::WavWriter<BufWriter<File>>;
+
+/// Replace anything outside `[A-Za-z0-9._-]` with `_` (SIP Call-IDs can
+/// contain `@` and other characters not safe verbatim in a filename).
+fn sanitize_filename(s: &str) -> String {
+    s.chars()
+        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') { c } else { '_' })
+        .collect()
+}
+
+/// Open a stereo (left=near-end mic, right=far-end received) WAV writer for
+/// this call, under `recordings_dir()`.
+fn open_recorder(call_id: &str) -> anyhow::Result<WavWriter> {
+    let dir = recordings_dir().context("Resolving recordings dir")?;
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let path = dir.join(format!("{timestamp}_{}.wav", sanitize_filename(call_id)));
+    let spec = hound::WavSpec {
+        channels: 2,
+        sample_rate: SAMPLE_RATE,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    hound::WavWriter::create(&path, spec)
+        .with_context(|| format!("Creating recording at {}", path.display()))
+}
 
 /// Per-packet RTP timestamp increment for a 20ms frame, in units of the
 /// codec's declared RTP clock rate. G.711's clock is 8000 Hz; Opus's RTP
@@ -66,6 +98,12 @@ pub struct MediaEngine {
     stop_tx:   watch::Sender<bool>,
     dtmf_tx:   mpsc::UnboundedSender<char>,
     muted:     Arc<AtomicBool>,
+    /// Owned by `MediaEngine` itself (not just captured by the send task's
+    /// closure) so `stop()` can finalize it deterministically from the
+    /// synchronous caller side — `stop()` aborts both tasks without awaiting
+    /// them, so anything only reachable from inside a task would be subject
+    /// to a cancellation race and might never run its cleanup.
+    recorder: Arc<Mutex<Option<WavWriter>>>,
 }
 
 impl MediaEngine {
@@ -81,6 +119,10 @@ impl MediaEngine {
     ///   (see `crate::aec`) — only useful on speakers/mic, not headsets.
     /// - `input_device`/`output_device`: specific cpal device names to use,
     ///   falling back to the system default if unset or not found.
+    /// - `recording_enabled`: record this call to a stereo WAV file (left =
+    ///   near-end mic, right = far-end received audio) under
+    ///   `deelip_config::recordings_dir()`.
+    /// - `call_id`: used to name the recording file; ignored if recording is disabled.
     #[allow(clippy::too_many_arguments)]
     pub async fn start(
         local_rtp_port: u16,
@@ -92,6 +134,8 @@ impl MediaEngine {
         echo_cancellation: bool,
         input_device:   Option<&str>,
         output_device:  Option<&str>,
+        recording_enabled: bool,
+        call_id:        &str,
     ) -> anyhow::Result<Self> {
         let (audio_streams, mut cap_rx, playback_tx, echo_ref) =
             open_streams(input_device, output_device, echo_cancellation)
@@ -126,6 +170,18 @@ impl MediaEngine {
 
         let (dtmf_tx, mut dtmf_rx) = mpsc::unbounded_channel::<char>();
 
+        let recorder: Arc<Mutex<Option<WavWriter>>> = Arc::new(Mutex::new(
+            if recording_enabled {
+                match open_recorder(call_id) {
+                    Ok(w) => Some(w),
+                    Err(e) => { error!("Failed to start call recording: {e}"); None }
+                }
+            } else {
+                None
+            }
+        ));
+        let record_far: RecordFarBuf = Arc::new(Mutex::new(std::collections::VecDeque::new()));
+
         // ── Send task ─────────────────────────────────────────────────────────
         let send_sock    = socket.clone();
         let mut rtp_send = RtpSender::new(payload_type, ts_increment_for(codec));
@@ -139,6 +195,8 @@ impl MediaEngine {
         let mut echo_canceller = echo_ref.as_ref().map(|_| EchoCanceller::new());
         let muted = Arc::new(AtomicBool::new(false));
         let send_muted = muted.clone();
+        let send_recorder = recorder.clone();
+        let send_record_far = record_far.clone();
 
         let send_task = tokio::spawn(async move {
             loop {
@@ -153,6 +211,7 @@ impl MediaEngine {
                             (Some(canceller), Some(echo_ref)) => canceller.process(&pcm, echo_ref),
                             _ => pcm,
                         };
+                        write_recording(&send_recorder, &send_record_far, &pcm);
                         let encoded = match codec {
                             AudioCodec::Opus => opus_enc.as_mut().unwrap().encode(&pcm),
                             AudioCodec::Pcma => encode_pcma(&pcm),
@@ -201,6 +260,7 @@ impl MediaEngine {
 
         // ── Recv task ─────────────────────────────────────────────────────────
         let recv_sock = socket;
+        let recv_record_far = record_far;
         let mut opus_dec = if codec == AudioCodec::Opus {
             Some(OpusDecoder::new().context("Creating Opus decoder")?)
         } else {
@@ -234,6 +294,7 @@ impl MediaEngine {
                                 AudioCodec::Pcmu => decode_pcmu(&pkt.payload),
                             };
                             push_to_jitter(&playback_tx, &pcm);
+                            push_to_jitter(&recv_record_far, &pcm);
                         }
                     }
                     Ok(()) = stop_recv.changed() => {
@@ -244,7 +305,7 @@ impl MediaEngine {
             debug!("RTP recv task stopped");
         });
 
-        Ok(Self { _audio: audio_streams, send_task, recv_task, stop_tx, dtmf_tx, muted })
+        Ok(Self { _audio: audio_streams, send_task, recv_task, stop_tx, dtmf_tx, muted, recorder })
     }
 
     /// Queue a DTMF digit for immediate out-of-band RTP transmission.
@@ -267,6 +328,15 @@ impl MediaEngine {
         let _ = self.stop_tx.send(true);
         self.send_task.abort();
         self.recv_task.abort();
+        // Finalize here (not inside the send task) so it runs deterministically
+        // regardless of the abort-without-awaiting race above -- hound needs an
+        // explicit finalize() to fix up the RIFF header sizes; Drop alone would
+        // leave a malformed file.
+        if let Some(writer) = self.recorder.lock().unwrap().take() {
+            if let Err(e) = writer.finalize() {
+                error!("Failed to finalize call recording: {e}");
+            }
+        }
     }
 }
 
@@ -275,6 +345,21 @@ fn push_to_jitter(jitter: &PlaybackTx, pcm: &[i16]) {
     let mut buf = jitter.lock().unwrap();
     for &s in pcm {
         if buf.len() < max { buf.push_back(s); }
+    }
+}
+
+/// Write one interleaved stereo frame (left = near-end `pcm`, right =
+/// far-end audio drained from `record_far`, zero-padded on underrun so the
+/// two channels stay aligned to the near-end's real-time capture cadence).
+/// No-op if recording isn't enabled for this call.
+fn write_recording(recorder: &Mutex<Option<WavWriter>>, record_far: &RecordFarBuf, pcm: &[i16]) {
+    let mut guard = recorder.lock().unwrap();
+    let Some(writer) = guard.as_mut() else { return };
+    let mut far = record_far.lock().unwrap();
+    for &near in pcm {
+        let far_sample = far.pop_front().unwrap_or(0);
+        let _ = writer.write_sample(near);
+        let _ = writer.write_sample(far_sample);
     }
 }
 

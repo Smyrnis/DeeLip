@@ -20,3 +20,4 @@ cpal          = { workspace = true }
 notify-rust = "4.18.0"
 rodio = { version = "0.19", default-features = false }
 rfd = "0.17.2"
+egui-phosphor = { workspace = true }

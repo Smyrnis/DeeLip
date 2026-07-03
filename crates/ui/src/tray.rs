@@ -1,4 +1,4 @@
-//! System tray icon with minimize-to-tray behavior.
+//! System tray icon with hide-to-tray behavior.
 //!
 //! On Linux, `tray-icon` needs a GTK event loop running on the same thread
 //! that created the tray icon (not winit's own loop, which is what eframe
@@ -7,17 +7,23 @@
 //!
 //! Tray/menu click handling deliberately does NOT poll from inside
 //! `DeelipApp::update()`: eframe/winit pause the render/update loop while
-//! the window is minimized (a normal optimization), which means anything
+//! the window is hidden (a normal optimization), which means anything
 //! that only runs inside `update()` simply never fires while hidden —
 //! including "restore" and "quit" clicks, the two actions you most need
-//! while minimized. Instead, `spawn_tray_event_handlers` runs dedicated
+//! while hidden. Instead, `spawn_tray_event_handlers` runs dedicated
 //! background threads that block on `tray_icon`'s own process-wide event
 //! channels and act independently of whether any frame is being drawn:
 //! `egui::Context` is thread-safe by design specifically for this
 //! (`send_viewport_cmd`/`request_repaint` from any thread), and Quit's
 //! hangup logic works off a small piece of state mirrored from `DeelipApp`
 //! once per frame while the window is visible (nothing changes it while
-//! hidden, so a stale-by-one-frame copy is always correct at minimize time).
+//! hidden, so a stale-by-one-frame copy is always correct at hide time).
+//!
+//! Hiding/restoring uses `ViewportCommand::Visible`, not `Minimized`: window
+//! mapping (`Visible`) is baseline ICCCM behavior every X11 window manager
+//! gets right, whereas GNOME Shell/Mutter's handling of the WM-level iconify
+//! state (`_NET_WM_STATE_HIDDEN`) for an XWayland-forced client is unreliable
+//! and could leave "Show DeeLip" doing nothing at all.
 
 use std::sync::{Arc, Mutex};
 
@@ -105,9 +111,15 @@ pub fn spawn_tray_event_handlers(tray_ids: TrayMenuIds, ctx_slot: CtxSlot, quit_
     });
 }
 
+/// Restore the window via `Visible(true)`, not `Minimized(false)`. Window
+/// mapping (`Visible`) is baseline ICCCM behavior every X11 window manager
+/// implements correctly; GNOME Shell/Mutter's handling of the WM-level
+/// iconify state (`_NET_WM_STATE_HIDDEN`) for an XWayland-forced client (see
+/// `main.rs`'s `WAYLAND_DISPLAY` removal) is unreliable and could leave
+/// "Show DeeLip" doing nothing at all.
 fn restore_window(ctx_slot: &CtxSlot) {
     if let Some(ctx) = ctx_slot.lock().unwrap().as_ref() {
-        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
     }
 }

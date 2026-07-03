@@ -10,7 +10,7 @@ use deelip_sip::{
     build_answer, build_hold_offer, build_offer, build_resume_offer,
     parse_sdp, AudioCodec, SipEvent, SipHandle, SrtpParams, SrtpSession,
 };
-use egui::{Color32, FontId, RichText, Ui};
+use egui::{FontId, RichText, Ui};
 use tokio::runtime::Handle;
 
 use deelip_nat::TurnRelay;
@@ -21,6 +21,31 @@ use tray::{CtxSlot, QuitState};
 mod notify;
 mod ringtone;
 use ringtone::{RingKind, Ringtone};
+
+mod theme;
+use theme::Palette;
+
+/// Embedded Cantarell (GNOME's own default UI font, SIL OFL 1.1 -- see
+/// `assets/OFL.txt`) as the app's proportional font, replacing egui's
+/// built-in default; plus the Phosphor icon font for a coherent icon set
+/// instead of ad hoc Unicode/emoji glyphs. Call once from the `eframe`
+/// creation callback, before the app's first frame.
+pub fn install_fonts(ctx: &egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
+
+    fonts.font_data.insert(
+        "cantarell".into(),
+        egui::FontData::from_static(include_bytes!("../../../assets/Cantarell-VF.otf")),
+    );
+    fonts.families
+        .entry(egui::FontFamily::Proportional)
+        .or_default()
+        .insert(0, "cantarell".into());
+
+    egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
+
+    ctx.set_fonts(fonts);
+}
 
 // ── Tab navigation ────────────────────────────────────────────────────────────
 
@@ -94,6 +119,25 @@ pub struct DeelipApp {
     /// Account section (distinct from `selected_account`, which picks which
     /// *running/registered* identity places outgoing calls).
     edit_account_idx: usize,
+    /// Cached (input, output) cpal device names for the Settings tab's
+    /// device pickers. Populated lazily on first render and via an explicit
+    /// Refresh button only -- calling cpal's device enumeration every frame
+    /// (egui repaints continuously) hammered every ALSA/jack backend dozens
+    /// of times a second, producing log spam and a real UI slowdown.
+    audio_device_cache: Option<(Vec<String>, Vec<String>)>,
+    /// Mirrors whether `~/.config/autostart/deelip.desktop` currently exists
+    /// -- a separate on-disk file, not part of `config.toml`, so it needs
+    /// its own bit of UI-bound state (checked once at startup, then kept in
+    /// sync by the Settings checkbox itself).
+    autostart_enabled: bool,
+    /// One-shot flag consumed on the very first `update()` call, to send a
+    /// `Visible(false)` viewport command if `config.start_minimized` -- see
+    /// the comment in `main.rs` on why this can't be done via `NativeOptions`.
+    first_frame: bool,
+    /// Refreshed once per frame from `config.dark_mode` in `update()`, before
+    /// any tab is rendered -- lets tab-rendering methods reach `self.palette`
+    /// without threading an extra parameter through every fn signature.
+    palette: Palette,
 
     /// Shared handles for the tray's independent event-handling threads (see
     /// `tray` module docs) — `None` degrades to normal close-quits-the-app
@@ -224,6 +268,10 @@ impl DeelipApp {
             config_path,
             settings_saved_notice: false,
             edit_account_idx: 0,
+            audio_device_cache: None,
+            autostart_enabled: deelip_config::is_autostart_enabled(),
+            first_frame: true,
+            palette: Palette::dark(),
             tray,
             history,
             history_path,
@@ -465,6 +513,7 @@ impl DeelipApp {
             port, parsed.rtp_addr, parsed.codec, parsed.dtmf_type, srtp_session, relay,
             self.config.audio.echo_cancellation,
             input_device.as_deref(), output_device.as_deref(),
+            self.config.recording_enabled, &self.calls[idx].call_id,
         ));
         match engine {
             Ok(e)  => { self.media = Some(e); self.focused_call = Some(idx); }
@@ -779,38 +828,57 @@ impl DeelipApp {
             .map(|p| (self.accounts[p.account].handle.cmd_tx.clone(), p.call_id.clone()));
 
         if ctx.input(|i| i.viewport().close_requested()) {
-            tracing::debug!("Tray: close requested, minimizing to tray instead");
+            tracing::debug!("Tray: close requested, hiding to tray instead");
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+            // Visible(false), not Minimized(true) -- see tray::restore_window's
+            // doc comment for why: Mutter's XWayland iconify handling is
+            // unreliable, but window mapping (Visible) isn't.
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
         }
     }
 }
 
 impl eframe::App for DeelipApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if std::mem::take(&mut self.first_frame) && self.config.start_minimized {
+            // Must run on the first frame, not before -- eframe force-shows
+            // the window right after this frame renders regardless of any
+            // NativeOptions visibility hint, so queuing this command here
+            // (applied after that forced show, per eframe's own event-loop
+            // ordering) is what actually makes it stick. See main.rs.
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        }
+
         self.process_sip_events();
         self.check_pending_call_timeout();
         self.sync_ringtone();
         self.sync_notifications();
         self.process_tray_events(ctx);
 
-        ctx.set_visuals(if self.config.dark_mode { egui::Visuals::dark() } else { egui::Visuals::light() });
+        self.palette = Palette::for_theme(self.config.dark_mode);
+        let mut visuals = if self.config.dark_mode { egui::Visuals::dark() } else { egui::Visuals::light() };
+        theme::apply_style(ctx, &mut visuals, &self.palette);
+        ctx.set_visuals(visuals);
 
         // ── Status bar ───────────────────────────────────────────────────────
         let on_hold = self.focused_call.is_none() && !self.calls.is_empty();
         egui::TopBottomPanel::top("status").show(ctx, |ui| {
-            status_bar(ui, &self.status_line, self.reg_ok, on_hold);
+            status_bar(ui, &self.palette, &self.status_line, self.reg_ok, on_hold);
         });
 
         // ── Tab bar ──────────────────────────────────────────────────────────
+        // Selected tab gets an accent-tinted background for free, via
+        // `visuals.selection.bg_fill` (set to `palette.accent` in
+        // `theme::apply_style` above) -- the same highlight every other
+        // selectable widget in the app uses, not a one-off tab-bar special case.
         egui::TopBottomPanel::top("tabs").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.selectable_value(&mut self.tab, Tab::Dialer,   "Dialer");
-                ui.selectable_value(&mut self.tab, Tab::History,  "History");
-                ui.selectable_value(&mut self.tab, Tab::Contacts, "Contacts");
-                ui.selectable_value(&mut self.tab, Tab::Settings, "Settings");
+                ui.selectable_value(&mut self.tab, Tab::Dialer,   format!("{}  Dialer",   egui_phosphor::regular::PHONE));
+                ui.selectable_value(&mut self.tab, Tab::History,  format!("{}  History",  egui_phosphor::regular::CLOCK_COUNTER_CLOCKWISE));
+                ui.selectable_value(&mut self.tab, Tab::Contacts, format!("{}  Contacts", egui_phosphor::regular::ADDRESS_BOOK));
+                ui.selectable_value(&mut self.tab, Tab::Settings, format!("{}  Settings", egui_phosphor::regular::GEAR));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let icon = if self.config.dark_mode { "☀" } else { "🌙" };
+                    let icon = if self.config.dark_mode { egui_phosphor::regular::SUN } else { egui_phosphor::regular::MOON };
                     if ui.button(icon).on_hover_text("Toggle light/dark theme").clicked() {
                         self.config.dark_mode = !self.config.dark_mode;
                         self.save_config_quietly();
@@ -906,17 +974,20 @@ impl DeelipApp {
                 format!("Incoming call from {}{account_suffix}", short_uri(&from))
             };
             ui.group(|ui| {
+                ui.set_width(ui.available_width());
                 ui.label(
                     RichText::new(heading)
-                        .color(Color32::YELLOW)
+                        .color(self.palette.warn)
                         .font(FontId::proportional(17.0)),
                 );
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
-                    if ui.button(RichText::new(" Accept ").color(Color32::GREEN)).clicked() {
+                    let accept = format!("{}  Accept", egui_phosphor::regular::PHONE);
+                    if ui.button(RichText::new(accept).color(self.palette.accent)).clicked() {
                         self.do_accept();
                     }
-                    if ui.button(RichText::new(" Reject ").color(Color32::RED)).clicked() {
+                    let reject = format!("{}  Reject", egui_phosphor::regular::PHONE_X);
+                    if ui.button(RichText::new(reject).color(self.palette.danger)).clicked() {
                         self.do_reject();
                     }
                 });
@@ -935,8 +1006,8 @@ impl DeelipApp {
                 let (icon, color, uri) = {
                     let call = &self.calls[idx];
                     let (icon, color) = match call.direction {
-                        CallDirection::Inbound  => ("←", Color32::LIGHT_BLUE),
-                        CallDirection::Outbound => ("→", Color32::LIGHT_GREEN),
+                        CallDirection::Inbound  => (egui_phosphor::regular::PHONE_INCOMING, self.palette.info),
+                        CallDirection::Outbound => (egui_phosphor::regular::PHONE_OUTGOING, self.palette.accent),
                     };
                     (icon, color, call.remote_uri.clone())
                 };
@@ -945,18 +1016,25 @@ impl DeelipApp {
                         ui.label(RichText::new(icon).color(color));
                         ui.label(short_uri(&uri));
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.button(RichText::new("Hang Up").color(Color32::RED)).clicked() {
+                            let hang_up = format!("{}  Hang Up", egui_phosphor::regular::PHONE_X);
+                            if ui.button(RichText::new(hang_up).color(self.palette.danger)).clicked() {
                                 hangup_idx = Some(idx);
                             }
                             ui.add_space(4.0);
                             if focused {
-                                if ui.button("Hold").clicked() { hold_idx = Some(idx); }
-                            } else if ui.button("Resume").clicked() {
-                                swap_idx = Some(idx);
+                                let hold = format!("{}  Hold", egui_phosphor::regular::PHONE_PAUSE);
+                                if ui.button(hold).clicked() { hold_idx = Some(idx); }
+                            } else {
+                                let resume = format!("{}  Resume", egui_phosphor::regular::PLAY);
+                                if ui.button(resume).clicked() { swap_idx = Some(idx); }
                             }
                             ui.add_space(4.0);
                             let state = if focused { "Active" } else { "On hold" };
-                            ui.label(RichText::new(state).color(Color32::GRAY));
+                            ui.label(RichText::new(state).color(self.palette.muted));
+                            if focused && self.config.recording_enabled {
+                                ui.add_space(4.0);
+                                ui.label(RichText::new("● REC").color(self.palette.danger));
+                            }
                         });
                     });
                 });
@@ -983,12 +1061,14 @@ impl DeelipApp {
             }
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                if ui.add_enabled(can_dial && self.reg_ok, egui::Button::new(" Call ")).clicked() {
+                let call_text = RichText::new(format!("{}  Call", egui_phosphor::regular::PHONE)).color(self.palette.accent);
+                if ui.add_enabled(can_dial && self.reg_ok, egui::Button::new(call_text)).clicked() {
                     self.do_call(None);
                 }
                 ui.add_space(4.0);
                 let can_redial = can_dial && self.reg_ok && self.last_dialed.is_some();
-                if ui.add_enabled(can_redial, egui::Button::new("Redial")).clicked() {
+                let redial_text = format!("{}  Redial", egui_phosphor::regular::CLOCK_COUNTER_CLOCKWISE);
+                if ui.add_enabled(can_redial, egui::Button::new(redial_text)).clicked() {
                     self.do_redial();
                 }
             });
@@ -997,20 +1077,16 @@ impl DeelipApp {
         // ── Compose keypad (build up a number by clicking, not typing) ───────
         if can_dial {
             ui.add_space(8.0);
+            let palette = self.palette;
             ui.group(|ui| {
-                for row in &[['1','2','3'], ['4','5','6'], ['7','8','9'], ['*','0','#']] {
-                    ui.horizontal(|ui| {
-                        for &digit in row {
-                            if ui.add_sized([40.0, 34.0], egui::Button::new(digit.to_string())).clicked() {
-                                self.call_target.push(digit);
-                            }
-                        }
-                    });
-                }
+                ui.set_width(ui.available_width());
+                phone_keypad(ui, palette, |digit| self.call_target.push(digit));
                 ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    if ui.button("⌫").clicked() { self.call_target.pop(); }
-                    if ui.button("Clear").clicked() { self.call_target.clear(); }
+                ui.vertical_centered(|ui| {
+                    ui.horizontal(|ui| {
+                        if ui.button(egui_phosphor::regular::BACKSPACE).clicked() { self.call_target.pop(); }
+                        if ui.button("Clear").clicked() { self.call_target.clear(); }
+                    });
                 });
             });
         }
@@ -1019,11 +1095,13 @@ impl DeelipApp {
         if self.focused_call.is_some() {
             ui.add_space(8.0);
             ui.group(|ui| {
+                ui.set_width(ui.available_width());
                 ui.horizontal(|ui| {
-                    let mute_label = if self.is_muted() { "Unmute" } else { "Mute" };
+                    let mute_icon = if self.is_muted() { egui_phosphor::regular::MICROPHONE_SLASH } else { egui_phosphor::regular::MICROPHONE };
+                    let mute_label = format!("{mute_icon}  {}", if self.is_muted() { "Unmute" } else { "Mute" });
                     if ui.button(mute_label).clicked() { self.do_mute_toggle(); }
                     ui.add_space(4.0);
-                    let transfer_label = if self.showing_transfer { "Cancel transfer" } else { "Transfer" };
+                    let transfer_label = format!("{}  {}", egui_phosphor::regular::ARROW_BEND_UP_RIGHT, if self.showing_transfer { "Cancel transfer" } else { "Transfer" });
                     if ui.button(transfer_label).clicked() {
                         self.showing_transfer = !self.showing_transfer;
                     }
@@ -1042,18 +1120,12 @@ impl DeelipApp {
             });
 
             ui.add_space(8.0);
+            let palette = self.palette;
             ui.group(|ui| {
+                ui.set_width(ui.available_width());
                 ui.label("DTMF:");
                 ui.add_space(4.0);
-                for row in &[['1','2','3'], ['4','5','6'], ['7','8','9'], ['*','0','#']] {
-                    ui.horizontal(|ui| {
-                        for &digit in row {
-                            if ui.add_sized([40.0, 34.0], egui::Button::new(digit.to_string())).clicked() {
-                                self.do_dtmf(digit);
-                            }
-                        }
-                    });
-                }
+                phone_keypad(ui, palette, |digit| self.do_dtmf(digit));
             });
         }
     }
@@ -1088,7 +1160,8 @@ impl DeelipApp {
                     ui.selectable_value(&mut self.history_status_filter, Some(CallStatus::Failed), "Failed");
                 });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("Export CSV…").clicked() {
+                let export = format!("{}  Export CSV…", egui_phosphor::regular::DOWNLOAD_SIMPLE);
+                if ui.button(export).clicked() {
                     self.export_history_csv();
                 }
             });
@@ -1105,12 +1178,12 @@ impl DeelipApp {
 
         egui::ScrollArea::vertical().show(ui, |ui| {
             if filtered.is_empty() {
-                ui.label(RichText::new("No matching calls.").color(Color32::GRAY));
+                ui.label(RichText::new("No matching calls.").color(self.palette.muted));
             }
             for record in filtered {
                 let (dir_icon, dir_color) = match record.direction {
-                    CallDirection::Inbound  => ("←", Color32::LIGHT_BLUE),
-                    CallDirection::Outbound => ("→", Color32::LIGHT_GREEN),
+                    CallDirection::Inbound  => (egui_phosphor::regular::PHONE_INCOMING, self.palette.info),
+                    CallDirection::Outbound => (egui_phosphor::regular::PHONE_OUTGOING, self.palette.accent),
                 };
                 let status_str = match record.status {
                     CallStatus::Answered => format_duration(record.duration_secs),
@@ -1126,8 +1199,8 @@ impl DeelipApp {
                         if ui.small_button("Call").clicked() {
                             call_target = Some(record.remote_uri.clone());
                         }
-                        ui.label(RichText::new(&status_str).color(Color32::GRAY));
-                        ui.label(RichText::new(format_age(record.timestamp)).color(Color32::DARK_GRAY));
+                        ui.label(RichText::new(&status_str).color(self.palette.muted));
+                        ui.label(RichText::new(format_age(record.timestamp)).color(self.palette.muted));
                     });
                 });
                 ui.separator();
@@ -1195,9 +1268,20 @@ impl DeelipApp {
             ui.label("Search:");
             ui.add(
                 egui::TextEdit::singleline(&mut self.contact_search)
-                    .desired_width(f32::INFINITY)
+                    .desired_width(200.0)
                     .hint_text("name or sip URI"),
             );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button(egui_phosphor::regular::UPLOAD_SIMPLE).on_hover_text("Import contacts (CSV or vCard)").clicked() {
+                    self.import_contacts();
+                }
+                if ui.button(format!("{} vCard", egui_phosphor::regular::DOWNLOAD_SIMPLE)).on_hover_text("Export as vCard").clicked() {
+                    self.export_contacts_vcard();
+                }
+                if ui.button(format!("{} CSV", egui_phosphor::regular::DOWNLOAD_SIMPLE)).on_hover_text("Export as CSV").clicked() {
+                    self.export_contacts_csv();
+                }
+            });
         });
         ui.add_space(4.0);
 
@@ -1216,22 +1300,22 @@ impl DeelipApp {
             .max_height(200.0)
             .show(ui, |ui| {
                 if results.is_empty() {
-                    ui.label(RichText::new("No contacts found.").color(Color32::GRAY));
+                    ui.label(RichText::new("No contacts found.").color(self.palette.muted));
                 }
                 for (idx, name, uri) in &results {
                     ui.horizontal(|ui| {
                         ui.label(name);
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.small_button("Call").clicked() {
+                            if ui.small_button(egui_phosphor::regular::PHONE).clicked() {
                                 call_target = Some(uri.clone());
                             }
-                            if ui.small_button("Delete").clicked() {
+                            if ui.small_button(RichText::new(egui_phosphor::regular::TRASH).color(self.palette.danger)).clicked() {
                                 delete_idx = Some(*idx);
                             }
-                            if ui.small_button("Edit").clicked() {
+                            if ui.small_button(egui_phosphor::regular::PENCIL_SIMPLE).clicked() {
                                 edit_idx = Some(*idx);
                             }
-                            ui.label(RichText::new(uri).color(Color32::GRAY));
+                            ui.label(RichText::new(uri).color(self.palette.muted));
                         });
                     });
                     ui.separator();
@@ -1298,6 +1382,149 @@ impl DeelipApp {
             }
         }
     }
+
+    fn export_contacts_csv(&self) {
+        let Some(path) = rfd::FileDialog::new()
+            .set_file_name("deelip_contacts.csv")
+            .add_filter("CSV", &["csv"])
+            .save_file()
+        else {
+            return;
+        };
+
+        let mut csv = String::from("name,sip_uri\n");
+        for c in &self.contacts.contacts {
+            csv.push_str(&format!("{},{}\n", csv_escape(&c.name), csv_escape(&c.sip_uri)));
+        }
+
+        if let Err(e) = std::fs::write(&path, csv) {
+            tracing::error!("Failed to export contacts to {}: {e}", path.display());
+        }
+    }
+
+    fn export_contacts_vcard(&self) {
+        let Some(path) = rfd::FileDialog::new()
+            .set_file_name("deelip_contacts.vcf")
+            .add_filter("vCard", &["vcf"])
+            .save_file()
+        else {
+            return;
+        };
+
+        let mut vcf = String::new();
+        for c in &self.contacts.contacts {
+            vcf.push_str("BEGIN:VCARD\r\n");
+            vcf.push_str("VERSION:3.0\r\n");
+            vcf.push_str(&format!("FN:{}\r\n", c.name));
+            vcf.push_str(&format!("IMPP:{}\r\n", c.sip_uri));
+            vcf.push_str("END:VCARD\r\n");
+        }
+
+        if let Err(e) = std::fs::write(&path, vcf) {
+            tracing::error!("Failed to export contacts to {}: {e}", path.display());
+        }
+    }
+
+    /// Import contacts from a CSV or vCard file (detected by extension,
+    /// falling back to content sniffing). Appended to the existing contact
+    /// list with no dedup, matching the manual Add-contact flow's behavior.
+    fn import_contacts(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("Contacts", &["csv", "vcf"])
+            .pick_file()
+        else {
+            return;
+        };
+
+        let content = match std::fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(e) => { tracing::error!("Failed to read {}: {e}", path.display()); return; }
+        };
+
+        let is_vcard = path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("vcf"))
+            || content.contains("BEGIN:VCARD");
+
+        let imported = if is_vcard {
+            parse_vcard(&content)
+        } else {
+            parse_contacts_csv(&content)
+        };
+
+        if imported.is_empty() {
+            tracing::warn!("No contacts found in {}", path.display());
+            return;
+        }
+
+        self.contacts.contacts.extend(imported);
+        if let Some(path) = &self.contacts_path {
+            let _ = self.contacts.save(path);
+        }
+    }
+}
+
+/// Parse a CSV contact file with a `name,sip_uri` header, using
+/// `parse_csv_line` for each data row.
+fn parse_contacts_csv(content: &str) -> Vec<Contact> {
+    content.lines().skip(1)
+        .filter(|line| !line.trim().is_empty())
+        .filter_map(|line| {
+            let fields = parse_csv_line(line);
+            let name    = fields.first()?.clone();
+            let sip_uri = fields.get(1)?.clone();
+            Some(Contact { name, sip_uri })
+        })
+        .collect()
+}
+
+/// Split one CSV line into fields, honoring double-quoted fields and
+/// doubled-quote escaping -- the inverse of `csv_escape`.
+fn parse_csv_line(line: &str) -> Vec<String> {
+    let mut fields = Vec::new();
+    let mut field = String::new();
+    let mut in_quotes = false;
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' if in_quotes && chars.peek() == Some(&'"') => { field.push('"'); chars.next(); }
+            '"' => in_quotes = !in_quotes,
+            ',' if !in_quotes => { fields.push(std::mem::take(&mut field)); }
+            _ => field.push(c),
+        }
+    }
+    fields.push(field);
+    fields
+}
+
+/// Minimal vCard 2.1/3.0 parser: pulls `FN` for the name and the first
+/// `TEL`/`IMPP` line (any `;PARAM=...` suffix on the property name is
+/// ignored) for the URI, from each `BEGIN:VCARD`/`END:VCARD` block.
+fn parse_vcard(content: &str) -> Vec<Contact> {
+    let mut contacts = Vec::new();
+    let mut name: Option<String> = None;
+    let mut uri: Option<String> = None;
+
+    for line in content.lines() {
+        let line = line.trim_end_matches('\r');
+        if line.eq_ignore_ascii_case("BEGIN:VCARD") {
+            name = None;
+            uri = None;
+            continue;
+        }
+        if line.eq_ignore_ascii_case("END:VCARD") {
+            if let (Some(n), Some(u)) = (name.take(), uri.take()) {
+                contacts.push(Contact { name: n, sip_uri: u });
+            }
+            continue;
+        }
+        let Some((prop, value)) = line.split_once(':') else { continue };
+        let prop_name = prop.split(';').next().unwrap_or(prop);
+        if name.is_none() && prop_name.eq_ignore_ascii_case("FN") {
+            name = Some(value.to_string());
+        } else if uri.is_none() && (prop_name.eq_ignore_ascii_case("TEL") || prop_name.eq_ignore_ascii_case("IMPP")) {
+            uri = Some(value.to_string());
+        }
+    }
+    contacts
 }
 
 // ── Tab: Settings ─────────────────────────────────────────────────────────────
@@ -1309,6 +1536,7 @@ impl DeelipApp {
         }
         self.edit_account_idx = self.edit_account_idx.min(self.config.accounts.len() - 1);
         let mut edited = false;
+        let palette = self.palette;
 
         ui.add_space(8.0);
         egui::ScrollArea::vertical().show(ui, |ui| {
@@ -1321,7 +1549,23 @@ impl DeelipApp {
                 if ui.checkbox(&mut self.config.ringtone_enabled, "Ringtone (incoming) / ringback (outgoing)").changed() {
                     self.save_config_quietly();
                 }
-                ui.label(RichText::new("Applies immediately — no restart needed.").color(Color32::GRAY).small());
+                ui.label(RichText::new("Applies immediately — no restart needed.").color(palette.muted).small());
+            });
+            ui.add_space(10.0);
+
+            // ── Startup ───────────────────────────────────────────────────
+            ui.label(RichText::new("Startup").strong());
+            ui.group(|ui| {
+                edited |= ui.checkbox(&mut self.config.start_minimized, "Start minimized (to tray)").changed();
+                ui.label(RichText::new("Restart to apply.").color(palette.muted).small());
+                ui.add_space(4.0);
+                if ui.checkbox(&mut self.autostart_enabled, "Start DeeLip on login").changed() {
+                    if let Err(e) = deelip_config::set_autostart(self.autostart_enabled) {
+                        tracing::error!("Failed to update autostart: {e}");
+                        self.autostart_enabled = deelip_config::is_autostart_enabled();
+                    }
+                }
+                ui.label(RichText::new("Applies immediately — no restart needed.").color(palette.muted).small());
             });
             ui.add_space(10.0);
 
@@ -1420,7 +1664,7 @@ impl DeelipApp {
                     if account.tls_insecure_skip_verify {
                         ui.label(RichText::new(
                             "Warning: certificate verification is disabled — traffic can be intercepted."
-                        ).color(Color32::from_rgb(255, 165, 0)));
+                        ).color(palette.warn));
                     }
                 }
 
@@ -1438,20 +1682,25 @@ impl DeelipApp {
             if !self.config.accounts.iter().any(|a| a.enabled) {
                 ui.label(RichText::new(
                     "Warning: no accounts are enabled — DeeLip won't be able to register on restart."
-                ).color(Color32::from_rgb(255, 165, 0)));
+                ).color(palette.warn));
             }
             ui.label(RichText::new(
                 "Each enabled account registers independently on its own local SIP port \
                  (base port below, incrementing by one per additional account)."
-            ).color(Color32::GRAY).small());
+            ).color(palette.muted).small());
 
             ui.add_space(10.0);
 
             // ── Audio ─────────────────────────────────────────────────────
             ui.label(RichText::new("Audio").strong());
             ui.group(|ui| {
-                let input_names  = list_device_names(true);
-                let output_names = list_device_names(false);
+                let (input_names, output_names) = self.audio_device_cache
+                    .get_or_insert_with(|| (list_device_names(true), list_device_names(false)))
+                    .clone();
+
+                if ui.button("Refresh device list").clicked() {
+                    self.audio_device_cache = Some((list_device_names(true), list_device_names(false)));
+                }
 
                 egui::Grid::new("settings_audio_grid")
                     .num_columns(2)
@@ -1499,6 +1748,10 @@ impl DeelipApp {
                     });
 
                 edited |= ui.checkbox(&mut self.config.audio.echo_cancellation, "Echo cancellation").changed();
+                edited |= ui.checkbox(&mut self.config.recording_enabled, "Record calls").changed();
+                ui.label(RichText::new(
+                    "Recordings saved to ~/.config/deelip/recordings/"
+                ).color(palette.muted).small());
             });
 
             ui.add_space(10.0);
@@ -1544,7 +1797,7 @@ impl DeelipApp {
                 }
             }
             if self.settings_saved_notice {
-                ui.label(RichText::new("Saved — restart DeeLip to apply changes.").color(Color32::LIGHT_GREEN));
+                ui.label(RichText::new("Saved — restart DeeLip to apply changes.").color(palette.accent));
             }
         });
 
@@ -1596,18 +1849,65 @@ fn optional_password_field(ui: &mut Ui, value: &mut Option<String>) -> bool {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-fn status_bar(ui: &mut Ui, text: &str, ok: bool, held: bool) {
+fn status_bar(ui: &mut Ui, palette: &Palette, text: &str, ok: bool, held: bool) {
     let color = if held {
-        Color32::from_rgb(255, 165, 0) // orange = on hold
+        palette.warn
     } else if ok {
-        Color32::GREEN
+        palette.accent
     } else {
-        Color32::YELLOW
+        palette.warn
     };
     ui.horizontal(|ui| {
         ui.label(RichText::new("●").color(color));
         ui.label(text);
     });
+}
+
+/// A 3x4 phone-style dial pad (1-9,*,0,#), each digit with the classic small
+/// letter caption beneath it (2:ABC .. 9:WXYZ) -- shared between the compose
+/// keypad and the in-call DTMF keypad, which were previously two near-identical
+/// plain-square-button loops.
+fn phone_keypad(ui: &mut Ui, palette: Palette, mut on_press: impl FnMut(char)) {
+    const ROWS: [[char; 3]; 4] = [['1', '2', '3'], ['4', '5', '6'], ['7', '8', '9'], ['*', '0', '#']];
+    ui.vertical_centered(|ui| {
+        for row in ROWS {
+            ui.horizontal(|ui| {
+                for digit in row {
+                    let button = egui::Button::new(keypad_button_text(digit, palette))
+                        .rounding(egui::Rounding::same(28.0));
+                    if ui.add_sized([56.0, 56.0], button).clicked() {
+                        on_press(digit);
+                    }
+                }
+            });
+        }
+    });
+}
+
+fn keypad_button_text(digit: char, palette: Palette) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob { halign: egui::Align::Center, ..Default::default() };
+    job.append(
+        &digit.to_string(),
+        0.0,
+        egui::TextFormat { font_id: egui::FontId::proportional(20.0), ..Default::default() },
+    );
+    let letters = digit_letters(digit);
+    if !letters.is_empty() {
+        job.append(
+            &format!("\n{letters}"),
+            0.0,
+            egui::TextFormat { font_id: egui::FontId::proportional(9.0), color: palette.muted, ..Default::default() },
+        );
+    }
+    job
+}
+
+fn digit_letters(digit: char) -> &'static str {
+    match digit {
+        '2' => "ABC", '3' => "DEF", '4' => "GHI", '5' => "JKL", '6' => "MNO",
+        '7' => "PQRS", '8' => "TUV", '9' => "WXYZ",
+        _ => "",
+    }
 }
 
 /// Display label for an account picker — `display_name` if set, else `user@server`.

@@ -128,15 +128,26 @@ fn main() -> anyhow::Result<()> {
     let native_opts = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("DeeLip")
-            .with_inner_size([400.0, 480.0])
+            .with_inner_size([420.0, 500.0])
             .with_resizable(true),
+        // NOTE: start-minimized is NOT implemented via `.with_visible()` here --
+        // eframe's glutin backend unconditionally creates the window hidden and
+        // force-shows it after the first rendered frame regardless of what
+        // NativeOptions requests (see glow_integration.rs's "fix white flash on
+        // startup" workaround), so any visibility hint set here gets silently
+        // overridden. DeelipApp::update() instead sends an explicit
+        // ViewportCommand::Visible(false) on its first frame, which runs after
+        // eframe's forced show and so actually sticks.
         ..Default::default()
     };
 
     eframe::run_native(
         "DeeLip",
         native_opts,
-        Box::new(|_cc| Ok(Box::new(app))),
+        Box::new(|cc| {
+            deelip_ui::install_fonts(&cc.egui_ctx);
+            Ok(Box::new(app))
+        }),
     )
     .map_err(|e| anyhow::anyhow!("eframe error: {e}"))?;
 

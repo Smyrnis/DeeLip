@@ -42,6 +42,8 @@ fdaf-aec            = "0.1"
 tray-icon           = { version = "0.24", default-features = false, features = ["gtk"] }
 image               = "0.25"
 gtk                 = "0.18"
+hound               = "3"
+egui-phosphor       = "0.6"
 
 deelip-config = { path = "crates/config" }
 deelip-sip    = { path = "crates/sip-core" }

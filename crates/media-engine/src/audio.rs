@@ -16,6 +16,9 @@ pub type PlaybackTx = Arc<Mutex<VecDeque<i16>>>;
 /// Far-end reference: a copy of every sample actually written to the output
 /// device, for echo cancellation to compare against the mic capture.
 pub type EchoRefBuf = Arc<Mutex<VecDeque<i16>>>;
+/// Decoded far-end (received) PCM, tapped by the recv task for call
+/// recording — same shape as `PlaybackTx`, filled at the same point.
+pub type RecordFarBuf = Arc<Mutex<VecDeque<i16>>>;
 
 /// Holds the live cpal streams (dropped = stopped).
 pub struct AudioStreams {

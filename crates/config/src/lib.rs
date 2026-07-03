@@ -132,6 +132,15 @@ pub struct AppConfig {
     pub notifications_enabled: bool,
     #[serde(default = "default_true")]
     pub ringtone_enabled: bool,
+
+    /// Record every call to a stereo WAV file under `recordings_dir()`. Off
+    /// by default (opt-in, like echo cancellation) — restart-required, since
+    /// it's baked into `MediaEngine::start` like the other audio settings.
+    #[serde(default)]
+    pub recording_enabled: bool,
+    /// Start the main window hidden (only the tray icon visible) — restart-required.
+    #[serde(default)]
+    pub start_minimized: bool,
 }
 
 impl Default for AppConfig {
@@ -147,6 +156,8 @@ impl Default for AppConfig {
             dark_mode:              true,
             notifications_enabled: true,
             ringtone_enabled:      true,
+            recording_enabled:     false,
+            start_minimized:       false,
         }
     }
 }
@@ -179,6 +190,49 @@ fn deelip_dir() -> anyhow::Result<PathBuf> {
     let base = dirs::config_dir()
         .ok_or_else(|| anyhow::anyhow!("Cannot determine user config directory"))?;
     Ok(base.join("deelip"))
+}
+
+/// Returns `~/.config/deelip/recordings`, creating it if it doesn't exist yet.
+pub fn recordings_dir() -> anyhow::Result<PathBuf> {
+    let dir = deelip_dir()?.join("recordings");
+    std::fs::create_dir_all(&dir)
+        .with_context(|| format!("Creating recordings dir {}", dir.display()))?;
+    Ok(dir)
+}
+
+/// `~/.config/autostart/deelip.desktop` — the standard freedesktop.org XDG
+/// autostart path, honored by GNOME/KDE/XFCE alike without needing a
+/// systemd unit.
+fn autostart_desktop_path() -> anyhow::Result<PathBuf> {
+    let base = dirs::config_dir()
+        .ok_or_else(|| anyhow::anyhow!("Cannot determine user config directory"))?;
+    Ok(base.join("autostart").join("deelip.desktop"))
+}
+
+pub fn is_autostart_enabled() -> bool {
+    autostart_desktop_path().is_ok_and(|p| p.exists())
+}
+
+/// Write or remove the XDG autostart `.desktop` file. Takes effect on next
+/// login; has no effect on the currently running process.
+pub fn set_autostart(enabled: bool) -> anyhow::Result<()> {
+    let path = autostart_desktop_path()?;
+    if !enabled {
+        if path.exists() {
+            std::fs::remove_file(&path).with_context(|| format!("Removing {}", path.display()))?;
+        }
+        return Ok(());
+    }
+
+    let exe = std::env::current_exe().context("Resolving current executable path")?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).with_context(|| format!("Creating {}", parent.display()))?;
+    }
+    let contents = format!(
+        "[Desktop Entry]\nType=Application\nName=DeeLip\nExec={}\nX-GNOME-Autostart-enabled=true\n",
+        exe.display(),
+    );
+    std::fs::write(&path, contents).with_context(|| format!("Writing {}", path.display()))
 }
 
 // ── Contact book ──────────────────────────────────────────────────────────────
