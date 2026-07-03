@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::fs::File;
 use std::io::BufWriter;
 use std::net::SocketAddr;
@@ -17,7 +18,7 @@ use deelip_config::recordings_dir;
 use deelip_sip::{AudioCodec, SrtpSession};
 
 use crate::aec::EchoCanceller;
-use crate::audio::{open_streams, AudioStreams, PlaybackTx, RecordFarBuf, FRAME_SAMPLES, SAMPLE_RATE};
+use crate::audio::{open_streams, AudioStreams, PlaybackTx, FRAME_SAMPLES, SAMPLE_RATE};
 use crate::codec::{decode_pcma, decode_pcmu, encode_pcma, encode_pcmu, OpusDecoder, OpusEncoder};
 use crate::dtmf::{build_dtmf_burst, char_to_event, DTMF_PAYLOAD_TYPE};
 use crate::rtp::{RtpPacket, RtpSender};
@@ -32,8 +33,8 @@ fn sanitize_filename(s: &str) -> String {
         .collect()
 }
 
-/// Open a stereo (left=near-end mic, right=far-end received) WAV writer for
-/// this call, under `recordings_dir()`.
+/// Open a stereo (left=near-end mic, right=far-end received/mixed) WAV
+/// writer for this call, under `recordings_dir()`.
 fn open_recorder(call_id: &str) -> anyhow::Result<WavWriter> {
     let dir = recordings_dir().context("Resolving recordings dir")?;
     let timestamp = std::time::SystemTime::now()
@@ -88,16 +89,32 @@ impl RtpSocket {
     }
 }
 
+/// A second RTP leg for 3-way conferencing — bundles everything a leg needs
+/// beyond what `MediaEngine::start`'s existing params already cover for
+/// leg 1. Reuses the leg's own already-allocated RTP port/relay (nothing
+/// new to allocate); the two legs may have negotiated different codecs.
+pub struct ConferenceLeg {
+    pub local_rtp_port: u16,
+    pub remote_rtp:     SocketAddr,
+    pub codec:          AudioCodec,
+    pub dtmf_pt:        Option<u8>,
+    pub srtp:           Option<SrtpSession>,
+    pub relay:          Option<Arc<dyn Conn + Send + Sync>>,
+}
+
 // ── MediaEngine ───────────────────────────────────────────────────────────────
 
-/// Manages the audio ↔ RTP pipeline for a single active call.
+/// Manages the audio ↔ RTP pipeline for a single active call, optionally
+/// bridging a second RTP leg for a 3-way conference (see `ConferenceLeg`).
 pub struct MediaEngine {
-    _audio:    AudioStreams,
-    send_task: tokio::task::JoinHandle<()>,
-    recv_task: tokio::task::JoinHandle<()>,
-    stop_tx:   watch::Sender<bool>,
-    dtmf_tx:   mpsc::UnboundedSender<char>,
-    muted:     Arc<AtomicBool>,
+    _audio:     AudioStreams,
+    send_task:  tokio::task::JoinHandle<()>,
+    recv_task:  tokio::task::JoinHandle<()>,
+    /// Only `Some` when started with a `second_leg` (conference mode).
+    recv_task2: Option<tokio::task::JoinHandle<()>>,
+    stop_tx:    watch::Sender<bool>,
+    dtmf_tx:    mpsc::UnboundedSender<char>,
+    muted:      Arc<AtomicBool>,
     /// Owned by `MediaEngine` itself (not just captured by the send task's
     /// closure) so `stop()` can finalize it deterministically from the
     /// synchronous caller side — `stop()` aborts both tasks without awaiting
@@ -120,9 +137,12 @@ impl MediaEngine {
     /// - `input_device`/`output_device`: specific cpal device names to use,
     ///   falling back to the system default if unset or not found.
     /// - `recording_enabled`: record this call to a stereo WAV file (left =
-    ///   near-end mic, right = far-end received audio) under
+    ///   near-end mic, right = far-end/mixed received audio) under
     ///   `deelip_config::recordings_dir()`.
     /// - `call_id`: used to name the recording file; ignored if recording is disabled.
+    /// - `second_leg`: `Some` to bridge a second remote party into a 3-way
+    ///   conference, sharing this same mic/speaker pair — `None` (every
+    ///   existing call site) is the ordinary single-leg call, unchanged.
     #[allow(clippy::too_many_arguments)]
     pub async fn start(
         local_rtp_port: u16,
@@ -136,11 +156,13 @@ impl MediaEngine {
         output_device:  Option<&str>,
         recording_enabled: bool,
         call_id:        &str,
+        second_leg:     Option<ConferenceLeg>,
     ) -> anyhow::Result<Self> {
-        let (audio_streams, mut cap_rx, playback_tx, echo_ref) =
+        let (audio_streams, mut cap_rx, hw_playback_tx, echo_ref) =
             open_streams(input_device, output_device, echo_cancellation)
                 .context("Opening audio streams")?;
 
+        // ── Leg 1 ─────────────────────────────────────────────────────────────
         let socket = Arc::new(match relay {
             Some(conn) => RtpSocket::Relay(conn),
             None => RtpSocket::Direct(
@@ -164,6 +186,43 @@ impl MediaEngine {
             SrtpContext::new(&s.remote.key, &s.remote.salt, ProtectionProfile::Aes128CmHmacSha1_80, Some(srtp_replay_protection(64)), None)
         }).transpose().context("Creating SRTP decrypt context")?;
 
+        // ── Leg 2 (conference), if present ────────────────────────────────────
+        let mut leg2_socket: Option<Arc<RtpSocket>> = None;
+        let mut leg2_remote: Option<SocketAddr> = None;
+        let mut leg2_codec: Option<AudioCodec> = None;
+        let mut leg2_dtmf_pt: Option<u8> = None;
+        let mut leg2_encrypt_ctx: Option<SrtpContext> = None;
+        let mut leg2_decrypt_ctx: Option<SrtpContext> = None;
+        if let Some(leg) = &second_leg {
+            let socket2 = Arc::new(match &leg.relay {
+                Some(conn) => RtpSocket::Relay(conn.clone()),
+                None => RtpSocket::Direct(
+                    UdpSocket::bind(format!("0.0.0.0:{}", leg.local_rtp_port))
+                        .await
+                        .with_context(|| format!("Binding RTP on :{}", leg.local_rtp_port))?,
+                ),
+            });
+            leg2_encrypt_ctx = leg.srtp.as_ref().map(|s| {
+                SrtpContext::new(&s.local.key, &s.local.salt, ProtectionProfile::Aes128CmHmacSha1_80, None, None)
+            }).transpose().context("Creating leg2 SRTP encrypt context")?;
+            leg2_decrypt_ctx = leg.srtp.as_ref().map(|s| {
+                SrtpContext::new(&s.remote.key, &s.remote.salt, ProtectionProfile::Aes128CmHmacSha1_80, Some(srtp_replay_protection(64)), None)
+            }).transpose().context("Creating leg2 SRTP decrypt context")?;
+            leg2_socket  = Some(socket2);
+            leg2_remote  = Some(leg.remote_rtp);
+            leg2_codec   = Some(leg.codec);
+            leg2_dtmf_pt = Some(leg.dtmf_pt.unwrap_or(DTMF_PAYLOAD_TYPE));
+            debug!("Conference mode: leg1={remote_rtp} ({codec:?}), leg2={} ({:?})", leg.remote_rtp, leg.codec);
+        }
+
+        // Per-leg decode buffers, mixed together (if leg2 present) once per
+        // captured frame by the send task before reaching the speaker/recording
+        // -- see `drain_leg`/`mix_frames` below. Single-leg case is just one
+        // buffer drained with nothing to mix, functionally identical to the
+        // old direct recv-task-to-playback push.
+        let leg1_buf: PlaybackTx = Arc::new(Mutex::new(VecDeque::new()));
+        let leg2_buf: Option<PlaybackTx> = second_leg.as_ref().map(|_| Arc::new(Mutex::new(VecDeque::new())));
+
         let (stop_tx, stop_rx)   = watch::channel(false);
         let mut stop_send = stop_rx.clone();
         let mut stop_recv = stop_rx;
@@ -180,10 +239,10 @@ impl MediaEngine {
                 None
             }
         ));
-        let record_far: RecordFarBuf = Arc::new(Mutex::new(std::collections::VecDeque::new()));
 
         // ── Send task ─────────────────────────────────────────────────────────
         let send_sock    = socket.clone();
+        let send_sock2   = leg2_socket.clone();
         let mut rtp_send = RtpSender::new(payload_type, ts_increment_for(codec));
         let dtmf_ssrc    = rtp_send.ssrc;
         let mut dtmf_seq = 0u16;
@@ -192,11 +251,20 @@ impl MediaEngine {
         } else {
             None
         };
+        let mut opus_enc2 = match leg2_codec {
+            Some(AudioCodec::Opus) => Some(OpusEncoder::new().context("Creating Opus encoder (leg2)")?),
+            _ => None,
+        };
+        let mut rtp_send2 = leg2_codec.map(|c| RtpSender::new(c.payload_type(), ts_increment_for(c)));
+        let dtmf_ssrc2    = rtp_send2.as_ref().map(|r| r.ssrc);
+        let mut dtmf_seq2 = 0u16;
+
         let mut echo_canceller = echo_ref.as_ref().map(|_| EchoCanceller::new());
         let muted = Arc::new(AtomicBool::new(false));
         let send_muted = muted.clone();
         let send_recorder = recorder.clone();
-        let send_record_far = record_far.clone();
+        let send_leg1_buf = leg1_buf.clone();
+        let send_leg2_buf = leg2_buf.clone();
 
         let send_task = tokio::spawn(async move {
             loop {
@@ -211,7 +279,8 @@ impl MediaEngine {
                             (Some(canceller), Some(echo_ref)) => canceller.process(&pcm, echo_ref),
                             _ => pcm,
                         };
-                        write_recording(&send_recorder, &send_record_far, &pcm);
+
+                        // Leg 1: encode + send.
                         let encoded = match codec {
                             AudioCodec::Opus => opus_enc.as_mut().unwrap().encode(&pcm),
                             AudioCodec::Pcma => encode_pcma(&pcm),
@@ -228,6 +297,44 @@ impl MediaEngine {
                         if let Err(e) = send_sock.send_to(&out, remote_rtp).await {
                             error!("RTP send: {e}");
                         }
+
+                        // Leg 2 (conference): encode independently (may differ
+                        // codec) + send, without aborting leg 1's already-sent
+                        // packet or the mix/playback step below on failure.
+                        if let (Some(sock2), Some(remote2), Some(c2), Some(sender2)) =
+                            (send_sock2.as_ref(), leg2_remote, leg2_codec, rtp_send2.as_mut())
+                        {
+                            let encoded2 = match c2 {
+                                AudioCodec::Opus => opus_enc2.as_mut().unwrap().encode(&pcm),
+                                AudioCodec::Pcma => encode_pcma(&pcm),
+                                AudioCodec::Pcmu => encode_pcmu(&pcm),
+                            };
+                            let bytes2 = sender2.next_packet(encoded2).encode();
+                            let out2 = match leg2_encrypt_ctx.as_mut() {
+                                Some(ctx) => match ctx.encrypt_rtp(&bytes2) {
+                                    Ok(b) => Some(b.to_vec()),
+                                    Err(e) => { error!("SRTP encrypt (leg2): {e}"); None }
+                                },
+                                None => Some(bytes2),
+                            };
+                            if let Some(out2) = out2 {
+                                if let Err(e) = sock2.send_to(&out2, remote2).await {
+                                    error!("RTP send (leg2): {e}");
+                                }
+                            }
+                        }
+
+                        // Drain + mix decoded audio for local playback/recording
+                        // -- single-leg case is just leg1's buffer, unchanged
+                        // in effect from the old direct recv-to-playback push.
+                        let leg1_frame = drain_leg(&send_leg1_buf);
+                        let mixed = if let Some(buf2) = send_leg2_buf.as_ref() {
+                            mix_frames(&leg1_frame, &drain_leg(buf2))
+                        } else {
+                            leg1_frame
+                        };
+                        write_recording(&send_recorder, &pcm, &mixed);
+                        push_to_jitter(&hw_playback_tx, &mixed);
                     }
                     Some(ch) = dtmf_rx.recv() => {
                         if let Some(event) = char_to_event(ch) {
@@ -248,6 +355,28 @@ impl MediaEngine {
                                     error!("DTMF RTP send: {e}");
                                 }
                             }
+                            // Broadcast DTMF to both legs during a conference.
+                            if let (Some(sock2), Some(remote2), Some(ssrc2), Some(pt2), Some(sender2)) =
+                                (send_sock2.as_ref(), leg2_remote, dtmf_ssrc2, leg2_dtmf_pt, rtp_send2.as_ref())
+                            {
+                                let base_ts2 = sender2.timestamp;
+                                let pkts2 = build_dtmf_burst(
+                                    event, ssrc2, &mut dtmf_seq2,
+                                    base_ts2, pt2,
+                                );
+                                for pkt in pkts2 {
+                                    let out = match leg2_encrypt_ctx.as_mut() {
+                                        Some(ctx) => match ctx.encrypt_rtp(&pkt) {
+                                            Ok(b) => b.to_vec(),
+                                            Err(e) => { error!("SRTP encrypt (DTMF leg2): {e}"); continue; }
+                                        },
+                                        None => pkt,
+                                    };
+                                    if let Err(e) = sock2.send_to(&out, remote2).await {
+                                        error!("DTMF RTP send (leg2): {e}");
+                                    }
+                                }
+                            }
                         }
                     }
                     Ok(()) = stop_send.changed() => {
@@ -258,9 +387,8 @@ impl MediaEngine {
             debug!("RTP send task stopped");
         });
 
-        // ── Recv task ─────────────────────────────────────────────────────────
+        // ── Recv task (leg 1) ─────────────────────────────────────────────────
         let recv_sock = socket;
-        let recv_record_far = record_far;
         let mut opus_dec = if codec == AudioCodec::Opus {
             Some(OpusDecoder::new().context("Creating Opus decoder")?)
         } else {
@@ -293,8 +421,7 @@ impl MediaEngine {
                                 AudioCodec::Pcma => decode_pcma(&pkt.payload),
                                 AudioCodec::Pcmu => decode_pcmu(&pkt.payload),
                             };
-                            push_to_jitter(&playback_tx, &pcm);
-                            push_to_jitter(&recv_record_far, &pcm);
+                            push_to_jitter(&leg1_buf, &pcm);
                         }
                     }
                     Ok(()) = stop_recv.changed() => {
@@ -305,7 +432,58 @@ impl MediaEngine {
             debug!("RTP recv task stopped");
         });
 
-        Ok(Self { _audio: audio_streams, send_task, recv_task, stop_tx, dtmf_tx, muted, recorder })
+        // ── Recv task (leg 2, conference only) ────────────────────────────────
+        let recv_task2 = if let Some(leg) = &second_leg {
+            let recv_sock2 = leg2_socket.clone().unwrap();
+            let mut opus_dec2 = if leg.codec == AudioCodec::Opus {
+                Some(OpusDecoder::new().context("Creating Opus decoder (leg2)")?)
+            } else {
+                None
+            };
+            let codec2   = leg.codec;
+            let pt2      = leg2_dtmf_pt.unwrap();
+            let mut decrypt_ctx2 = leg2_decrypt_ctx;
+            let leg2_buf_recv = leg2_buf.clone().unwrap();
+            let mut stop_recv2 = stop_tx.subscribe();
+
+            Some(tokio::spawn(async move {
+                let mut buf = vec![0u8; 2048];
+                loop {
+                    tokio::select! {
+                        Ok((len, _from)) = recv_sock2.recv_from(&mut buf) => {
+                            let decrypted;
+                            let plain: &[u8] = if let Some(ctx) = decrypt_ctx2.as_mut() {
+                                match ctx.decrypt_rtp(&buf[..len]) {
+                                    Ok(b) => { decrypted = b; &decrypted[..] }
+                                    Err(e) => { warn!("SRTP decrypt (leg2): {e}"); continue; }
+                                }
+                            } else {
+                                &buf[..len]
+                            };
+                            if let Some(pkt) = RtpPacket::decode(plain) {
+                                if pkt.payload_type == DTMF_PAYLOAD_TYPE || pkt.payload_type == pt2 {
+                                    continue;
+                                }
+                                let pcm = match codec2 {
+                                    AudioCodec::Opus => opus_dec2.as_mut().unwrap().decode(&pkt.payload),
+                                    AudioCodec::Pcma => decode_pcma(&pkt.payload),
+                                    AudioCodec::Pcmu => decode_pcmu(&pkt.payload),
+                                };
+                                push_to_jitter(&leg2_buf_recv, &pcm);
+                            }
+                        }
+                        Ok(()) = stop_recv2.changed() => {
+                            if *stop_recv2.borrow() { break; }
+                        }
+                    }
+                }
+                debug!("RTP recv task (leg2) stopped");
+            }))
+        } else {
+            None
+        };
+
+        Ok(Self { _audio: audio_streams, send_task, recv_task, recv_task2, stop_tx, dtmf_tx, muted, recorder })
     }
 
     /// Queue a DTMF digit for immediate out-of-band RTP transmission.
@@ -324,14 +502,31 @@ impl MediaEngine {
         self.muted.load(Ordering::Relaxed)
     }
 
-    pub fn stop(self) {
+    /// Async so callers can actually wait for the send/recv tasks to finish,
+    /// not just be scheduled for cancellation -- `abort()` alone doesn't
+    /// guarantee the task (and whatever it holds, e.g. a TURN relay `Conn`)
+    /// is really gone by the time this returns. That matters once a caller
+    /// can immediately reuse the *same* relay `Conn` in a brand new engine
+    /// (conference merge does exactly this): if the old task's `recv_from`
+    /// is still alive even momentarily, it races the new engine's recv task
+    /// for the same incoming packets and can "steal" them, silently
+    /// starving the new one. Awaiting here closes that window.
+    pub async fn stop(self) {
         let _ = self.stop_tx.send(true);
         self.send_task.abort();
         self.recv_task.abort();
+        if let Some(t2) = &self.recv_task2 {
+            t2.abort();
+        }
+        let _ = self.send_task.await;
+        let _ = self.recv_task.await;
+        if let Some(t2) = self.recv_task2 {
+            let _ = t2.await;
+        }
         // Finalize here (not inside the send task) so it runs deterministically
-        // regardless of the abort-without-awaiting race above -- hound needs an
-        // explicit finalize() to fix up the RIFF header sizes; Drop alone would
-        // leave a malformed file.
+        // regardless of the abort race above -- hound needs an explicit
+        // finalize() to fix up the RIFF header sizes; Drop alone would leave
+        // a malformed file.
         if let Some(writer) = self.recorder.lock().unwrap().take() {
             if let Err(e) = writer.finalize() {
                 error!("Failed to finalize call recording: {e}");
@@ -348,17 +543,36 @@ fn push_to_jitter(jitter: &PlaybackTx, pcm: &[i16]) {
     }
 }
 
-/// Write one interleaved stereo frame (left = near-end `pcm`, right =
-/// far-end audio drained from `record_far`, zero-padded on underrun so the
-/// two channels stay aligned to the near-end's real-time capture cadence).
-/// No-op if recording isn't enabled for this call.
-fn write_recording(recorder: &Mutex<Option<WavWriter>>, record_far: &RecordFarBuf, pcm: &[i16]) {
+/// Drain up to `FRAME_SAMPLES` from a per-leg decode buffer, zero-padding on
+/// underrun so mixing stays aligned to the near-end's real-time capture
+/// cadence (same idiom as `write_recording`'s near/far pairing).
+fn drain_leg(buf: &PlaybackTx) -> Vec<i16> {
+    let mut b = buf.lock().unwrap();
+    (0..FRAME_SAMPLES).map(|_| b.pop_front().unwrap_or(0)).collect()
+}
+
+/// Sum two PCM frames sample-by-sample, halving each first so two
+/// simultaneously-loud sources (e.g. a live mic vs. a pre-recorded
+/// announcement at a different natural level) can't clip and don't have
+/// one leg drown out the other by default, then clamping to `i16` range.
+fn mix_frames(a: &[i16], b: &[i16]) -> Vec<i16> {
+    a.iter().zip(b.iter())
+        .map(|(&x, &y)| {
+            let mixed = (x as i32) / 2 + (y as i32) / 2;
+            mixed.clamp(i16::MIN as i32, i16::MAX as i32) as i16
+        })
+        .collect()
+}
+
+/// Write one interleaved stereo frame (left = near-end `pcm`, right = the
+/// already-mixed far-end audio for this same frame). No-op if recording
+/// isn't enabled for this call.
+fn write_recording(recorder: &Mutex<Option<WavWriter>>, near: &[i16], far: &[i16]) {
     let mut guard = recorder.lock().unwrap();
     let Some(writer) = guard.as_mut() else { return };
-    let mut far = record_far.lock().unwrap();
-    for &near in pcm {
-        let far_sample = far.pop_front().unwrap_or(0);
-        let _ = writer.write_sample(near);
+    for (i, &near_sample) in near.iter().enumerate() {
+        let far_sample = far.get(i).copied().unwrap_or(0);
+        let _ = writer.write_sample(near_sample);
         let _ = writer.write_sample(far_sample);
     }
 }
@@ -406,5 +620,16 @@ mod tests {
         let raw = RtpPacket::new(0, 1, 160, 0xDEAD_BEEF, vec![1, 2, 3]).encode();
         let encrypted = enc_ctx.encrypt_rtp(&raw).unwrap();
         assert!(dec_ctx.decrypt_rtp(&encrypted).is_err());
+    }
+
+    #[test]
+    fn mix_frames_sums_and_clamps() {
+        let a = vec![100i16, -100, i16::MAX, i16::MIN];
+        let b = vec![50i16, -50, i16::MAX, i16::MIN];
+        let mixed = mix_frames(&a, &b);
+        // Each leg halved (integer truncation) before summing:
+        // 100/2 + 50/2 = 75; -100/2 + -50/2 = -75;
+        // MAX/2 + MAX/2 = 32766 (truncation loses 1); MIN/2 + MIN/2 = MIN exactly.
+        assert_eq!(mixed, vec![75, -75, 32766, i16::MIN]);
     }
 }

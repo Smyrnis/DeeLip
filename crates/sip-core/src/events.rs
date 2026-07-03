@@ -53,4 +53,7 @@ pub enum SipCommand {
     SubscribePresence { target_uri: String },
     /// Unsubscribe from a contact's presence (sends SUBSCRIBE with Expires: 0).
     UnsubscribePresence { target_uri: String },
+    /// Attended-transfer `call_id` (the original call) via REFER with a
+    /// `Replaces` parameter referencing `consultation_call_id`'s dialog.
+    AttendedTransfer { call_id: String, consultation_call_id: String },
 }

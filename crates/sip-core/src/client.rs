@@ -87,6 +87,13 @@ impl SipHandle {
     pub fn unsubscribe_presence(&self, target_uri: String) {
         let _ = self.cmd_tx.send(SipCommand::UnsubscribePresence { target_uri });
     }
+    /// Attended-transfer `call_id` via REFER with a `Replaces` parameter
+    /// referencing `consultation_call_id`'s dialog.
+    pub fn attended_transfer(&self, call_id: &str, consultation_call_id: &str) {
+        let _ = self.cmd_tx.send(SipCommand::AttendedTransfer {
+            call_id: call_id.to_string(), consultation_call_id: consultation_call_id.to_string(),
+        });
+    }
 }
 
 // ── SIP Stack ─────────────────────────────────────────────────────────────────
@@ -379,6 +386,8 @@ impl SipStack {
             SipCommand::RedirectCall  { call_id, target }  => self.redirect_call(&call_id, &target).await,
             SipCommand::SubscribePresence   { target_uri } => self.subscribe_presence(&target_uri).await,
             SipCommand::UnsubscribePresence { target_uri } => self.unsubscribe_presence(&target_uri).await,
+            SipCommand::AttendedTransfer { call_id, consultation_call_id } =>
+                self.attended_transfer(&call_id, &consultation_call_id).await,
         }
     }
 
@@ -532,6 +541,66 @@ impl SipStack {
              Content-Length: 0\r\n\r\n"
         );
         debug!("→ REFER {to_uri} (Refer-To: {target})");
+        let _ = self.transport.send(refer.as_bytes(), contact).await;
+    }
+
+    /// Attended transfer: sends REFER on the ORIGINAL call's dialog with a
+    /// `Replaces` parameter (RFC 3891) referencing the CONSULTATION call's
+    /// dialog identity, so the transferee re-INVITEs the consultation
+    /// target directly instead of dialing fresh. Mirrors `blind_transfer`'s
+    /// header shape exactly, differing only in the `Refer-To` value.
+    async fn attended_transfer(&mut self, call_id: &str, consultation_call_id: &str) {
+        let (target, replaces) = {
+            let Some(consult) = self.dialogs.get(consultation_call_id) else { return };
+            let replaces = format!(
+                "{};to-tag={};from-tag={}",
+                consult.call_id,
+                consult.remote_tag.as_deref().unwrap_or(""),
+                consult.local_tag,
+            );
+            (consult.remote_uri.clone(), replaces)
+        };
+        let refer_to = format!("{target}?Replaces={}", encode_replaces_param(&replaces));
+
+        let dialog = match self.dialogs.get_mut(call_id) {
+            Some(d) if d.state == DialogState::Confirmed => d,
+            _ => return,
+        };
+
+        let cseq   = dialog.next_local_cseq();
+        let branch = new_branch();
+
+        let server     = self.account.server.clone();
+        let username   = self.account.username.clone();
+        let display    = self.account.display_name.clone().unwrap_or_else(|| username.clone());
+        let adv_ip     = self.advertised_ip.clone();
+        let local_ip   = self.local_ip.clone();
+        let local_port = self.local_port;
+        let call_id_s  = dialog.call_id.clone();
+        let from_tag   = dialog.local_tag.clone();
+        let to_uri     = dialog.remote_uri.clone();
+        let to_tag     = dialog.remote_tag.as_deref()
+            .map(|t| format!(";tag={t}")).unwrap_or_default();
+        let contact: SocketAddr = dialog.remote_contact
+            .as_deref()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(self.server_addr);
+        let via_proto = self.via_proto();
+
+        let refer = format!(
+            "REFER {to_uri} SIP/2.0\r\n\
+             Via: SIP/2.0/{via_proto} {local_ip}:{local_port};branch={branch};rport\r\n\
+             Max-Forwards: 70\r\n\
+             To: <{to_uri}>{to_tag}\r\n\
+             From: \"{display}\" <sip:{username}@{server}>;tag={from_tag}\r\n\
+             Call-ID: {call_id_s}\r\n\
+             CSeq: {cseq} REFER\r\n\
+             Contact: <sip:{username}@{adv_ip}:{local_port}>\r\n\
+             Refer-To: <{refer_to}>\r\n\
+             User-Agent: DeeLip/0.1.0\r\n\
+             Content-Length: 0\r\n\r\n"
+        );
+        debug!("→ REFER {to_uri} (attended transfer, Replaces: {replaces})");
         let _ = self.transport.send(refer.as_bytes(), contact).await;
     }
 
@@ -1282,4 +1351,16 @@ fn parse_uri(header: &str) -> Option<String> {
         }
     }
     Some(header.split(';').next()?.trim().to_string())
+}
+
+/// Percent-encode a `Replaces` value (RFC 3891) for embedding as a URI
+/// parameter. Our own generated call-ids/tags are plain hex and never
+/// actually contain these characters, but this is correct regardless.
+/// `%` must be encoded first to avoid double-encoding the others' output.
+fn encode_replaces_param(s: &str) -> String {
+    s.replace('%', "%25")
+        .replace(';', "%3B")
+        .replace('=', "%3D")
+        .replace(',', "%2C")
+        .replace('@', "%40")
 }

@@ -6,7 +6,7 @@ use deelip_config::{
     AppConfig, CallDirection, CallHistory, CallRecord, CallStatus,
     Contact, ContactBook, SipAccount, TransportProtocol,
 };
-use deelip_media::{alloc_rtp_port, MediaEngine};
+use deelip_media::{alloc_rtp_port, ConferenceLeg, MediaEngine};
 use deelip_sip::{
     build_answer, build_hold_offer, build_offer, build_resume_offer,
     parse_sdp, AudioCodec, PresenceState, SipEvent, SipHandle, SrtpParams, SrtpSession,
@@ -96,6 +96,20 @@ pub struct DeelipApp {
     /// Inline blind-transfer box state for the focused call.
     transfer_target:  String,
     showing_transfer: bool,
+    /// Inline attended-transfer box state for the focused call — mirrors
+    /// `transfer_target`/`showing_transfer` exactly.
+    attended_target:  String,
+    showing_attended: bool,
+    /// Index into `calls` of the call being attended-transferred, set when
+    /// its consultation call is dialed. `None` means no attended transfer
+    /// is in progress. Cleared by `remove_call` whenever either leg ends,
+    /// since both must still exist for Complete Transfer to make sense.
+    attended_transfer_original: Option<usize>,
+    /// Both calls in `calls` are bridged into one local 3-way mix. While
+    /// true, `focused_call` is just an arbitrary "media is running" marker
+    /// (always `Some(0)`) rather than meaning "only this one is active" --
+    /// both slots are simultaneously un-held.
+    in_conference: bool,
 
     /// Live while a call is ringing (incoming) or dialing out (outgoing) —
     /// see `sync_ringtone`. `None` whenever neither applies.
@@ -265,6 +279,10 @@ impl DeelipApp {
             pending_call:     None,
             transfer_target:  String::new(),
             showing_transfer: false,
+            attended_target:  String::new(),
+            showing_attended: false,
+            attended_transfer_original: None,
+            in_conference: false,
             ringtone:            None,
             was_ringing:         false,
             last_notified_call:  None,
@@ -390,12 +408,29 @@ impl DeelipApp {
                 self.status_line = "Call resumed by remote party".into();
             }
             SipEvent::TransferAccepted { call_id } => {
-                tracing::info!(call_id, "Blind transfer accepted");
+                tracing::info!(call_id, "Transfer accepted");
                 self.status_line = "Transfer accepted".into();
+                // Attended transfer only (blind transfer never sets this):
+                // both legs are done once the transferee re-INVITEs the
+                // target directly via Replaces, so hang up both ourselves
+                // rather than blind transfer's passive wait-for-BYE.
+                if let Some(original_idx) = self.attended_transfer_original.take() {
+                    if self.calls.len() == 2 {
+                        let consult_idx = 1 - original_idx;
+                        let (first, second) = if original_idx > consult_idx {
+                            (original_idx, consult_idx)
+                        } else {
+                            (consult_idx, original_idx)
+                        };
+                        self.do_hangup(first);
+                        self.do_hangup(second);
+                    }
+                }
             }
             SipEvent::TransferFailed { call_id, reason } => {
-                tracing::warn!(call_id, reason, "Blind transfer failed");
+                tracing::warn!(call_id, reason, "Transfer failed");
                 self.status_line = format!("Transfer failed: {reason}");
+                self.attended_transfer_original = None;
             }
             SipEvent::PresenceSubscribed { uri, expires } => {
                 tracing::debug!(uri, expires, "Presence subscribed");
@@ -465,12 +500,24 @@ impl DeelipApp {
         }
     }
 
-    /// Remove call `idx`, stopping its media first if it was the focused one,
-    /// and fixing up `focused_call` for the index shift. Returns the removed
-    /// slot so the caller can record history from it.
+    /// Remove call `idx`, stopping its media first if it was the focused
+    /// one, and fixing up `focused_call` for the index shift. If a
+    /// conference was in progress, the shared engine is always stopped
+    /// (regardless of which leg is being removed) and, if one call
+    /// survives, ordinary single-leg media is restarted for it -- there's
+    /// no "drop one party but keep mixing" mode. This is the single
+    /// chokepoint both a local hangup (`do_hangup`) and a remote BYE/
+    /// failure (`on_call_terminated`) go through, so both get this
+    /// behavior identically. Returns the removed slot so the caller can
+    /// record history from it.
     fn remove_call(&mut self, idx: usize) -> CallSlot {
-        if self.focused_call == Some(idx) {
-            if let Some(engine) = self.media.take() { engine.stop(); }
+        let was_conference = self.in_conference;
+        if was_conference || self.focused_call == Some(idx) {
+            if let Some(engine) = self.media.take() { self.rt.block_on(engine.stop()); }
+        }
+        if was_conference {
+            self.focused_call  = None;
+            self.in_conference = false;
         }
         let slot = self.calls.remove(idx);
         self.focused_call = match self.focused_call {
@@ -478,6 +525,15 @@ impl DeelipApp {
             Some(f) if f > idx  => Some(f - 1),
             other               => other,
         };
+        // Either call ending invalidates a pending attended transfer --
+        // both legs must still exist for Complete Transfer to make sense.
+        self.attended_transfer_original = None;
+        if was_conference {
+            if let Some(remaining) = self.calls.first() {
+                let remote_sdp = remaining.remote_sdp.clone();
+                self.start_media(0, &remote_sdp);
+            }
+        }
         slot
     }
 
@@ -554,10 +610,112 @@ impl DeelipApp {
             self.config.audio.echo_cancellation,
             input_device.as_deref(), output_device.as_deref(),
             self.config.recording_enabled, &self.calls[idx].call_id,
+            None,
         ));
         match engine {
             Ok(e)  => { self.media = Some(e); self.focused_call = Some(idx); }
             Err(e) => { tracing::error!("MediaEngine failed: {e}"); }
+        }
+    }
+
+    /// Merge the two currently-connected calls into a local 3-way
+    /// conference: stops the single-leg `MediaEngine` and starts a
+    /// conference-mode one bridging both remote parties into the same
+    /// mic/speaker pair. Needs no new SIP signaling -- both remote parties
+    /// stay in an ordinary 2-party call with DeeLip; only local audio
+    /// mixing changes.
+    fn start_conference(&mut self) {
+        if self.calls.len() != 2 { return; }
+
+        let Some(parsed0) = parse_sdp(&self.calls[0].remote_sdp) else {
+            tracing::error!("Cannot parse call 0's remote SDP for conference");
+            return;
+        };
+        let Some(parsed1) = parse_sdp(&self.calls[1].remote_sdp) else {
+            tracing::error!("Cannot parse call 1's remote SDP for conference");
+            return;
+        };
+        self.calls[0].codec     = parsed0.codec;
+        self.calls[0].dtmf_type = parsed0.dtmf_type;
+        self.calls[1].codec     = parsed1.codec;
+        self.calls[1].dtmf_type = parsed1.dtmf_type;
+
+        let secure0 = self.accounts.get(self.calls[0].account).is_some_and(|a| a.handle.secure);
+        let srtp0 = match (&self.calls[0].local_srtp, &parsed0.srtp) {
+            (Some(l), Some(r)) => Some(SrtpSession { local: l.clone(), remote: r.clone() }),
+            _ => {
+                if secure0 { tracing::warn!("TLS signaling active but remote SDP has no a=crypto (leg0) — falling back to plaintext RTP"); }
+                None
+            }
+        };
+        let secure1 = self.accounts.get(self.calls[1].account).is_some_and(|a| a.handle.secure);
+        let srtp1 = match (&self.calls[1].local_srtp, &parsed1.srtp) {
+            (Some(l), Some(r)) => Some(SrtpSession { local: l.clone(), remote: r.clone() }),
+            _ => {
+                if secure1 { tracing::warn!("TLS signaling active but remote SDP has no a=crypto (leg1) — falling back to plaintext RTP"); }
+                None
+            }
+        };
+
+        // Any held leg was put on hold with a=sendonly, telling the far end
+        // to stop sending us audio -- send a real resume re-INVITE
+        // (a=sendrecv) so it actually resumes before we start mixing it
+        // in, or that leg would come through silent even though we're now
+        // "listening" locally (this is exactly the case for a call held
+        // as part of the attended-transfer consultation flow, and equally
+        // for an ordinary call-waiting pair where one side is on hold).
+        let mut resumed = false;
+        if self.calls[0].is_held { self.send_resume(0); resumed = true; }
+        if self.calls[1].is_held { self.send_resume(1); resumed = true; }
+        if resumed {
+            // Fire-and-forget like hold/resume already is everywhere else in
+            // this codebase, but this one case is more timing-sensitive than
+            // usual: we're about to tear down and rebuild the whole engine
+            // right after, so give the far end a brief moment to actually
+            // process the re-INVITE and resume sending before we do (same
+            // precedent as `hangup_before_exit`'s post-BYE grace sleep).
+            // (See `hangup_before_exit` for why this must be an async block,
+            // not a bare `tokio::time::sleep(...)` argument.)
+            self.rt.block_on(async { tokio::time::sleep(Duration::from_millis(300)).await });
+        }
+
+        if let Some(engine) = self.media.take() { self.rt.block_on(engine.stop()); }
+
+        let port0  = self.calls[0].local_rtp;
+        let relay0 = self.calls[0].relay.as_ref().map(|r| r.conn.clone());
+        let port1  = self.calls[1].local_rtp;
+        let relay1 = self.calls[1].relay.as_ref().map(|r| r.conn.clone());
+        let rt     = self.rt.clone();
+        let input_device  = self.config.audio.input_device.clone();
+        let output_device = self.config.audio.output_device.clone();
+
+        let leg2 = ConferenceLeg {
+            local_rtp_port: port1,
+            remote_rtp: parsed1.rtp_addr,
+            codec: parsed1.codec,
+            dtmf_pt: parsed1.dtmf_type,
+            srtp: srtp1,
+            relay: relay1,
+        };
+
+        let engine = rt.block_on(MediaEngine::start(
+            port0, parsed0.rtp_addr, parsed0.codec, parsed0.dtmf_type, srtp0, relay0,
+            self.config.audio.echo_cancellation,
+            input_device.as_deref(), output_device.as_deref(),
+            self.config.recording_enabled, &self.calls[0].call_id,
+            Some(leg2),
+        ));
+        match engine {
+            Ok(e) => {
+                self.media = Some(e);
+                self.focused_call = Some(0);
+                self.calls[0].is_held = false;
+                self.calls[1].is_held = false;
+                self.in_conference = true;
+                self.attended_transfer_original = None;
+                self.status_line = "In conference".into();
+            }
+            Err(e) => tracing::error!("Conference MediaEngine failed: {e}"),
         }
     }
 
@@ -603,14 +761,19 @@ impl DeelipApp {
 
     // ── Call actions ─────────────────────────────────────────────────────────
 
-    fn do_call(&mut self, target: Option<String>) {
-        let raw = target.unwrap_or_else(|| self.call_target.trim().to_string());
-        if raw.is_empty() { return; }
-        let Some(acc) = self.selected_account_idx() else { return };
+    /// Core dialing mechanics shared by ordinary dialing and the attended-
+    /// transfer consultation call -- no gating here; callers check their
+    /// own preconditions before calling this, mirroring this codebase's
+    /// existing per-call-site `can_dial` convention rather than
+    /// centralizing it. Takes an explicit account so the consultation call
+    /// can be placed from the *same* account as the call being
+    /// transferred, rather than whichever account the Dialer tab happens
+    /// to have selected.
+    fn place_call(&mut self, acc: usize, target: &str) {
         let domain = self.accounts[acc].handle.domain.clone();
         let secure = self.accounts[acc].handle.secure;
         let advertised_ip = self.accounts[acc].handle.advertised_ip.clone();
-        let t = normalize_target(&raw, &domain);
+        let t = normalize_target(target, &domain);
         let local_rtp = alloc_rtp_port();
         let mut relay: Option<TurnRelay> = None;
         let rt = self.rt.clone();
@@ -627,10 +790,53 @@ impl DeelipApp {
         self.status_line = format!("Calling {}…", short_uri(&t));
     }
 
+    fn do_call(&mut self, target: Option<String>) {
+        let raw = target.unwrap_or_else(|| self.call_target.trim().to_string());
+        if raw.is_empty() { return; }
+        let Some(acc) = self.selected_account_idx() else { return };
+        self.place_call(acc, &raw);
+    }
+
     fn do_redial(&mut self) {
         if let Some(target) = self.last_dialed.clone() {
             self.do_call(Some(target));
         }
+    }
+
+    /// Start the consultation call for an attended transfer: holds the
+    /// focused call and dials `self.attended_target` as a genuine 2nd
+    /// outbound call, placed from the *same* account. This is the one path
+    /// allowed to dial while a call is already connected — normal dialing
+    /// stays blocked by `can_dial` everywhere else, matching the existing
+    /// "up to 2 concurrent calls" cap.
+    fn do_attended_transfer_dial(&mut self) {
+        let Some(idx) = self.focused_call else { return };
+        let raw = self.attended_target.trim().to_string();
+        if raw.is_empty() { return; }
+        if self.calls.len() != 1 || self.pending_call.is_some() || self.pending_outbound.is_some() {
+            return;
+        }
+        let acc = self.calls[idx].account;
+        self.do_hold_slot(idx);
+        self.attended_transfer_original = Some(idx);
+        self.attended_target.clear();
+        self.showing_attended = false;
+        self.place_call(acc, &raw);
+    }
+
+    /// Complete a pending attended transfer: send REFER-with-Replaces on
+    /// the original call, referencing the consultation call's dialog.
+    /// Both legs are hung up once `TransferAccepted` confirms the far end
+    /// accepted it (see `handle_sip_event`), not here.
+    fn do_complete_attended_transfer(&mut self) {
+        let Some(original_idx) = self.attended_transfer_original else { return };
+        if self.calls.len() != 2 { return; }
+        let consult_idx = 1 - original_idx;
+        let acc = self.calls[original_idx].account;
+        let original_call_id = self.calls[original_idx].call_id.clone();
+        let consult_call_id  = self.calls[consult_idx].call_id.clone();
+        self.accounts[acc].handle.attended_transfer(&original_call_id, &consult_call_id);
+        self.status_line = "Completing transfer…".into();
     }
 
     fn do_accept(&mut self) {
@@ -639,7 +845,7 @@ impl DeelipApp {
         // Free the audio device for the new call if another one is focused.
         if let Some(cur) = self.focused_call {
             self.send_hold(cur);
-            if let Some(engine) = self.media.take() { engine.stop(); }
+            if let Some(engine) = self.media.take() { self.rt.block_on(engine.stop()); }
             self.focused_call = None;
         }
         let codec = parse_sdp(&pending.remote_sdp).map(|p| p.codec).unwrap_or(AudioCodec::Pcmu);
@@ -716,7 +922,7 @@ impl DeelipApp {
     fn do_hold_slot(&mut self, idx: usize) {
         self.send_hold(idx);
         if self.focused_call == Some(idx) {
-            if let Some(engine) = self.media.take() { engine.stop(); }
+            if let Some(engine) = self.media.take() { self.rt.block_on(engine.stop()); }
             self.focused_call = None;
         }
         self.refresh_call_status();
@@ -729,7 +935,7 @@ impl DeelipApp {
         if self.focused_call == Some(idx) { return; }
         if let Some(cur) = self.focused_call {
             self.send_hold(cur);
-            if let Some(engine) = self.media.take() { engine.stop(); }
+            if let Some(engine) = self.media.take() { self.rt.block_on(engine.stop()); }
             self.focused_call = None;
         }
         self.send_resume(idx);
@@ -962,7 +1168,12 @@ impl DeelipApp {
             sent = true;
         }
         if sent {
-            self.rt.block_on(tokio::time::sleep(Duration::from_millis(200)));
+            // `tokio::time::sleep(...)` must be constructed *inside* the
+            // future block_on drives, not as a bare argument -- as a plain
+            // expression it's evaluated before block_on enters the runtime
+            // context, and registering a timer with no ambient runtime
+            // context panics ("there is no reactor running").
+            self.rt.block_on(async { tokio::time::sleep(Duration::from_millis(200)).await });
         }
     }
 }
@@ -1061,7 +1272,11 @@ impl DeelipApp {
                                 hangup_idx = Some(idx);
                             }
                             ui.add_space(4.0);
-                            if focused {
+                            if self.in_conference {
+                                // No hold/swap semantics inside a conference --
+                                // only dropping a party (Hang Up above), which
+                                // falls back to an ordinary single-leg call.
+                            } else if focused {
                                 let hold = format!("{}  Hold", egui_phosphor::regular::PHONE_PAUSE);
                                 if ui.button(hold).clicked() { hold_idx = Some(idx); }
                             } else {
@@ -1069,7 +1284,7 @@ impl DeelipApp {
                                 if ui.button(resume).clicked() { swap_idx = Some(idx); }
                             }
                             ui.add_space(4.0);
-                            let state = if focused { "Active" } else { "On hold" };
+                            let state = if self.in_conference { "In conference" } else if focused { "Active" } else { "On hold" };
                             ui.label(RichText::new(state).color(self.palette.muted));
                             if focused && self.config.recording_enabled {
                                 ui.add_space(4.0);
@@ -1084,6 +1299,16 @@ impl DeelipApp {
             if let Some(idx) = hangup_idx { self.do_hangup(idx); }
             if let Some(idx) = hold_idx   { self.do_hold_slot(idx); }
             if let Some(idx) = swap_idx   { self.do_swap_to(idx); }
+
+            // Orthogonal to attended transfer -- applies equally to two
+            // calls that arrived via ordinary call-waiting.
+            if self.calls.len() == 2 && !self.in_conference {
+                ui.add_space(4.0);
+                let merge = format!("{}  Merge into Conference", egui_phosphor::regular::PHONE);
+                if ui.button(merge).clicked() {
+                    self.start_conference();
+                }
+            }
         }
 
         // ── Call target + Call/Redial buttons ────────────────────────────────
@@ -1145,6 +1370,12 @@ impl DeelipApp {
                     if ui.button(transfer_label).clicked() {
                         self.showing_transfer = !self.showing_transfer;
                     }
+                    ui.add_space(4.0);
+                    let can_attend = self.calls.len() == 1;
+                    let attended_label = format!("{}  {}", egui_phosphor::regular::ARROW_BEND_UP_RIGHT, if self.showing_attended { "Cancel attended" } else { "Attended" });
+                    if ui.add_enabled(can_attend, egui::Button::new(attended_label)).clicked() {
+                        self.showing_attended = !self.showing_attended;
+                    }
                 });
                 if self.showing_transfer {
                     ui.add_space(4.0);
@@ -1156,6 +1387,24 @@ impl DeelipApp {
                             self.do_transfer();
                         }
                     });
+                }
+                if self.showing_attended {
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        ui.add(egui::TextEdit::singleline(&mut self.attended_target)
+                            .hint_text("sip:carol@example.com")
+                            .desired_width(f32::INFINITY));
+                        if ui.button("Call").clicked() {
+                            self.do_attended_transfer_dial();
+                        }
+                    });
+                }
+                if self.attended_transfer_original.is_some() && self.calls.len() == 2 {
+                    ui.add_space(4.0);
+                    let complete = format!("{}  Complete Transfer", egui_phosphor::regular::CHECK_CIRCLE);
+                    if ui.button(complete).clicked() {
+                        self.do_complete_attended_transfer();
+                    }
                 }
             });
 
