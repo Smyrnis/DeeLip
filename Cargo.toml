@@ -39,6 +39,9 @@ base64              = "0.22"
 turn                = "0.17"
 webrtc-util         = "0.17"
 fdaf-aec            = "0.1"
+tray-icon           = { version = "0.24", default-features = false, features = ["gtk"] }
+image               = "0.25"
+gtk                 = "0.18"
 
 deelip-config = { path = "crates/config" }
 deelip-sip    = { path = "crates/sip-core" }

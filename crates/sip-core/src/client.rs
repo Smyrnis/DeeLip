@@ -63,6 +63,19 @@ impl SipHandle {
             call_id: call_id.to_string(), local_sdp,
         });
     }
+    /// `target` must already be a fully-qualified SIP URI (e.g. from
+    /// `normalize_target`) — it's placed verbatim into the Refer-To header.
+    pub fn blind_transfer(&self, call_id: &str, target: String) {
+        let _ = self.cmd_tx.send(SipCommand::BlindTransfer {
+            call_id: call_id.to_string(), target,
+        });
+    }
+    /// `target` must already be a fully-qualified SIP URI.
+    pub fn redirect_call(&self, call_id: &str, target: String) {
+        let _ = self.cmd_tx.send(SipCommand::RedirectCall {
+            call_id: call_id.to_string(), target,
+        });
+    }
 }
 
 // ── SIP Stack ─────────────────────────────────────────────────────────────────
@@ -223,7 +236,9 @@ impl SipStack {
                     SipMethod::Bye     => self.on_bye(msg, from).await,
                     SipMethod::Ack     => self.on_ack(msg),
                     SipMethod::Cancel  => self.on_cancel(msg, from).await,
-                    SipMethod::Options => self.send_options_ok(&msg, from).await,
+                    // NOTIFY arrives during blind transfer (transfer-progress sipfrag) —
+                    // we don't act on its content, just ack it so the far end stops retransmitting.
+                    SipMethod::Options | SipMethod::Notify => self.send_ok(&msg, from).await,
                     _                  => debug!(?method, "Ignoring unhandled request"),
                 }
             }
@@ -351,6 +366,8 @@ impl SipStack {
             SipCommand::HangUp     { call_id }             => self.hang_up(&call_id).await,
             SipCommand::HoldCall   { call_id, local_sdp } => self.send_reinvite(&call_id, &local_sdp, true).await,
             SipCommand::ResumeCall { call_id, local_sdp } => self.send_reinvite(&call_id, &local_sdp, false).await,
+            SipCommand::BlindTransfer { call_id, target }  => self.blind_transfer(&call_id, &target).await,
+            SipCommand::RedirectCall  { call_id, target }  => self.redirect_call(&call_id, &target).await,
         }
     }
 
@@ -457,6 +474,93 @@ impl SipStack {
         let _ = self.transport.send(reinvite.as_bytes(), contact).await;
     }
 
+    // ── Blind transfer (REFER) ────────────────────────────────────────────────
+
+    /// Blind-transfer an active call via REFER. `target` must already be a
+    /// fully-qualified SIP URI. Fire-and-forget beyond the REFER response
+    /// itself (see `SipEvent::TransferAccepted`/`TransferFailed`) — no NOTIFY
+    /// sipfrag progress tracking; the far end normally sends BYE on this
+    /// dialog once the transferred call succeeds.
+    async fn blind_transfer(&mut self, call_id: &str, target: &str) {
+        let dialog = match self.dialogs.get_mut(call_id) {
+            Some(d) if d.state == DialogState::Confirmed => d,
+            _ => return,
+        };
+
+        let cseq   = dialog.next_local_cseq();
+        let branch = new_branch();
+
+        let server     = self.account.server.clone();
+        let username   = self.account.username.clone();
+        let display    = self.account.display_name.clone().unwrap_or_else(|| username.clone());
+        let adv_ip     = self.advertised_ip.clone();
+        let local_ip   = self.local_ip.clone();
+        let local_port = self.local_port;
+        let call_id_s  = dialog.call_id.clone();
+        let from_tag   = dialog.local_tag.clone();
+        let to_uri     = dialog.remote_uri.clone();
+        let to_tag     = dialog.remote_tag.as_deref()
+            .map(|t| format!(";tag={t}")).unwrap_or_default();
+        let contact: SocketAddr = dialog.remote_contact
+            .as_deref()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(self.server_addr);
+        let via_proto = self.via_proto();
+
+        let refer = format!(
+            "REFER {to_uri} SIP/2.0\r\n\
+             Via: SIP/2.0/{via_proto} {local_ip}:{local_port};branch={branch};rport\r\n\
+             Max-Forwards: 70\r\n\
+             To: <{to_uri}>{to_tag}\r\n\
+             From: \"{display}\" <sip:{username}@{server}>;tag={from_tag}\r\n\
+             Call-ID: {call_id_s}\r\n\
+             CSeq: {cseq} REFER\r\n\
+             Contact: <sip:{username}@{adv_ip}:{local_port}>\r\n\
+             Refer-To: <{target}>\r\n\
+             User-Agent: DeeLip/0.1.0\r\n\
+             Content-Length: 0\r\n\r\n"
+        );
+        debug!("→ REFER {to_uri} (Refer-To: {target})");
+        let _ = self.transport.send(refer.as_bytes(), contact).await;
+    }
+
+    /// Redirect a not-yet-answered incoming call via 302 Moved Temporarily —
+    /// `target` must already be a fully-qualified SIP URI. Used for the
+    /// no-answer-forward timeout; removes the dialog like `reject_call` does.
+    async fn redirect_call(&mut self, call_id: &str, target: &str) {
+        if let Some(dialog) = self.dialogs.remove(call_id) {
+            let contact: SocketAddr = dialog.remote_contact
+                .as_deref()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(self.server_addr);
+            let branch     = new_branch();
+            let local_ip   = &self.local_ip;
+            let local_port = self.local_port;
+            let username   = &self.account.username;
+            let server     = &self.account.server;
+            let display    = self.account.display_name.as_deref().unwrap_or(username);
+            let local_tag  = &dialog.local_tag;
+            let remote_uri = &dialog.remote_uri;
+            let from_tag   = dialog.remote_tag.as_deref()
+                .map(|t| format!(";tag={t}")).unwrap_or_default();
+            let cseq_n = dialog.remote_cseq.unwrap_or(1);
+            let via_proto = self.via_proto();
+
+            let redirect = format!(
+                "SIP/2.0 302 Moved Temporarily\r\n\
+                 Via: SIP/2.0/{via_proto} {local_ip}:{local_port};branch={branch}\r\n\
+                 To: \"{display}\" <sip:{username}@{server}>;tag={local_tag}\r\n\
+                 From: <{remote_uri}>{from_tag}\r\n\
+                 Call-ID: {call_id}\r\n\
+                 CSeq: {cseq_n} INVITE\r\n\
+                 Contact: <{target}>\r\n\
+                 Content-Length: 0\r\n\r\n"
+            );
+            debug!("→ 302 Moved Temporarily {call_id} (Contact: {target})");
+            let _ = self.transport.send(redirect.as_bytes(), contact).await;
+        }
+    }
+
     // ── Response handler ──────────────────────────────────────────────────────
 
     async fn on_response(&mut self, msg: SipMessage, status: u16, _from: SocketAddr) {
@@ -465,6 +569,19 @@ impl SipStack {
             None     => return,
         };
         if call_id == self.reg_call_id { return; }
+
+        // REFER responses (blind transfer) don't follow the INVITE/BYE 200
+        // convention (success is 202 Accepted) — handle by CSeq method
+        // before the status-keyed dispatch below.
+        if matches!(msg.cseq(), Some((_, SipMethod::Refer))) {
+            let ev = if status < 300 {
+                SipEvent::TransferAccepted { call_id }
+            } else {
+                SipEvent::TransferFailed { call_id, reason: format!("{status}") }
+            };
+            let _ = self.event_tx.send(ev);
+            return;
+        }
 
         enum Act {
             Nothing,
@@ -882,7 +999,7 @@ impl SipStack {
         }
     }
 
-    async fn send_options_ok(&self, req: &SipMessage, from: SocketAddr) {
+    async fn send_ok(&self, req: &SipMessage, from: SocketAddr) {
         let ok = self.build_response(req, 200, "OK", "", "");
         let _ = self.transport.send(ok.as_bytes(), from).await;
     }

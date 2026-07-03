@@ -10,6 +10,7 @@ pub enum SipMethod {
     Info,
     Notify,
     Subscribe,
+    Refer,
     Other(String),
 }
 
@@ -25,6 +26,7 @@ impl SipMethod {
             Self::Info      => "INFO",
             Self::Notify    => "NOTIFY",
             Self::Subscribe => "SUBSCRIBE",
+            Self::Refer     => "REFER",
             Self::Other(s)  => s.as_str(),
         }
     }
@@ -42,6 +44,7 @@ impl From<&str> for SipMethod {
             "INFO"      => Self::Info,
             "NOTIFY"    => Self::Notify,
             "SUBSCRIBE" => Self::Subscribe,
+            "REFER"     => Self::Refer,
             other       => Self::Other(other.to_string()),
         }
     }

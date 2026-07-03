@@ -23,17 +23,23 @@ pub struct AudioStreams {
     _output: cpal::Stream,
 }
 
-/// Open default input + output devices at 8 kHz mono.
+/// Open input + output devices at 8 kHz mono — `input_device`/`output_device`
+/// name a specific cpal device to use (falling back to the system default if
+/// unset or not found); pass `None` for both to always use the defaults.
 /// Returns the streams (keep alive), a receiver for captured audio, a shared
 /// jitter buffer to push playback audio into, and — when `echo_cancellation`
 /// is true — a far-end reference buffer mirroring everything written to the
 /// output device, for echo cancellation to compare against the mic capture.
-pub fn open_streams(echo_cancellation: bool) -> anyhow::Result<(AudioStreams, CaptureRx, PlaybackTx, Option<EchoRefBuf>)> {
+pub fn open_streams(
+    input_device:  Option<&str>,
+    output_device: Option<&str>,
+    echo_cancellation: bool,
+) -> anyhow::Result<(AudioStreams, CaptureRx, PlaybackTx, Option<EchoRefBuf>)> {
     let host = cpal::default_host();
 
-    let in_dev = host.default_input_device()
+    let in_dev = find_device(&host, input_device, true)
         .ok_or_else(|| anyhow::anyhow!("No default input device"))?;
-    let out_dev = host.default_output_device()
+    let out_dev = find_device(&host, output_device, false)
         .ok_or_else(|| anyhow::anyhow!("No default output device"))?;
 
     let config = StreamConfig {
@@ -74,6 +80,27 @@ pub fn open_streams(echo_cancellation: bool) -> anyhow::Result<(AudioStreams, Ca
         jitter,
         echo_ref,
     ))
+}
+
+/// Find a named cpal device (input or output), falling back to the system
+/// default if `name` is `None` or doesn't match any available device.
+fn find_device(host: &cpal::Host, name: Option<&str>, is_input: bool) -> Option<cpal::Device> {
+    let default = || if is_input { host.default_input_device() } else { host.default_output_device() };
+    let Some(name) = name else { return default() };
+
+    let mut devices: Box<dyn Iterator<Item = cpal::Device>> = if is_input {
+        match host.input_devices() { Ok(d) => Box::new(d), Err(_) => return default() }
+    } else {
+        match host.output_devices() { Ok(d) => Box::new(d), Err(_) => return default() }
+    };
+
+    match devices.find(|d| d.name().map(|n| n == name).unwrap_or(false)) {
+        Some(device) => Some(device),
+        None => {
+            tracing::warn!("Configured audio device {name:?} not found, using default");
+            default()
+        }
+    }
 }
 
 fn push_frame_to_echo_ref(echo_ref: &Option<EchoRefBuf>, samples: &[i16]) {

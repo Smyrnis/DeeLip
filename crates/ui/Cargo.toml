@@ -13,3 +13,10 @@ egui          = { workspace = true }
 anyhow        = { workspace = true }
 tracing       = { workspace = true }
 tokio         = { workspace = true }
+tray-icon     = { workspace = true }
+image         = { workspace = true }
+gtk           = { workspace = true }
+cpal          = { workspace = true }
+notify-rust = "4.18.0"
+rodio = { version = "0.19", default-features = false }
+rfd = "0.17.2"

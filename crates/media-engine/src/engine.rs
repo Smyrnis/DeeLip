@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -64,6 +65,7 @@ pub struct MediaEngine {
     recv_task: tokio::task::JoinHandle<()>,
     stop_tx:   watch::Sender<bool>,
     dtmf_tx:   mpsc::UnboundedSender<char>,
+    muted:     Arc<AtomicBool>,
 }
 
 impl MediaEngine {
@@ -77,6 +79,9 @@ impl MediaEngine {
     ///   if the call is relaying media instead of using a direct local socket.
     /// - `echo_cancellation`: run acoustic echo cancellation on the mic path
     ///   (see `crate::aec`) — only useful on speakers/mic, not headsets.
+    /// - `input_device`/`output_device`: specific cpal device names to use,
+    ///   falling back to the system default if unset or not found.
+    #[allow(clippy::too_many_arguments)]
     pub async fn start(
         local_rtp_port: u16,
         remote_rtp:     SocketAddr,
@@ -85,9 +90,12 @@ impl MediaEngine {
         srtp:           Option<SrtpSession>,
         relay:          Option<Arc<dyn Conn + Send + Sync>>,
         echo_cancellation: bool,
+        input_device:   Option<&str>,
+        output_device:  Option<&str>,
     ) -> anyhow::Result<Self> {
         let (audio_streams, mut cap_rx, playback_tx, echo_ref) =
-            open_streams(echo_cancellation).context("Opening audio streams")?;
+            open_streams(input_device, output_device, echo_cancellation)
+                .context("Opening audio streams")?;
 
         let socket = Arc::new(match relay {
             Some(conn) => RtpSocket::Relay(conn),
@@ -129,11 +137,18 @@ impl MediaEngine {
             None
         };
         let mut echo_canceller = echo_ref.as_ref().map(|_| EchoCanceller::new());
+        let muted = Arc::new(AtomicBool::new(false));
+        let send_muted = muted.clone();
 
         let send_task = tokio::spawn(async move {
             loop {
                 tokio::select! {
                     Some(pcm) = cap_rx.recv() => {
+                        let pcm = if send_muted.load(Ordering::Relaxed) {
+                            vec![0i16; pcm.len()]
+                        } else {
+                            pcm
+                        };
                         let pcm = match (echo_canceller.as_mut(), echo_ref.as_ref()) {
                             (Some(canceller), Some(echo_ref)) => canceller.process(&pcm, echo_ref),
                             _ => pcm,
@@ -229,12 +244,23 @@ impl MediaEngine {
             debug!("RTP recv task stopped");
         });
 
-        Ok(Self { _audio: audio_streams, send_task, recv_task, stop_tx, dtmf_tx })
+        Ok(Self { _audio: audio_streams, send_task, recv_task, stop_tx, dtmf_tx, muted })
     }
 
     /// Queue a DTMF digit for immediate out-of-band RTP transmission.
     pub fn send_dtmf(&self, digit: char) {
         let _ = self.dtmf_tx.send(digit);
+    }
+
+    /// Mute/unmute the local microphone — captured audio is replaced with
+    /// silence before encoding (RTP keeps flowing, so the remote side and
+    /// any NAT bindings aren't affected, only the audio content is).
+    pub fn set_muted(&self, muted: bool) {
+        self.muted.store(muted, Ordering::Relaxed);
+    }
+
+    pub fn is_muted(&self) -> bool {
+        self.muted.load(Ordering::Relaxed)
     }
 
     pub fn stop(self) {

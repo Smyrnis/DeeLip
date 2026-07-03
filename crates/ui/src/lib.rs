@@ -2,8 +2,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use deelip_config::{
-    CallDirection, CallHistory, CallRecord, CallStatus,
-    Contact, ContactBook,
+    AppConfig, CallDirection, CallHistory, CallRecord, CallStatus,
+    Contact, ContactBook, SipAccount, TransportProtocol,
 };
 use deelip_media::{alloc_rtp_port, MediaEngine};
 use deelip_sip::{
@@ -15,77 +15,181 @@ use tokio::runtime::Handle;
 
 use deelip_nat::TurnRelay;
 
+pub mod tray;
+use tray::{CtxSlot, QuitState};
+
+mod notify;
+mod ringtone;
+use ringtone::{RingKind, Ringtone};
+
 // ── Tab navigation ────────────────────────────────────────────────────────────
 
 #[derive(PartialEq, Eq, Clone, Copy, Default)]
-enum Tab { #[default] Dialer, History, Contacts }
+enum Tab { #[default] Dialer, History, Contacts, Settings }
 
 // ── App state ─────────────────────────────────────────────────────────────────
 
 pub struct DeelipApp {
-    sip: SipHandle,
+    /// One registered SIP identity per enabled account in `config.accounts`,
+    /// each independently registering/re-registering on its own transport.
+    accounts: Vec<AccountState>,
     rt:  Handle,
 
     tab: Tab,
 
     // Dialer
     call_target: String,
+    /// Index into `accounts` — which identity new outgoing calls are placed
+    /// from. Irrelevant (and hidden in the UI) when there's only one account.
+    selected_account: usize,
+    /// Last successfully-dialed target (already normalized), for Redial.
+    last_dialed: Option<String>,
 
     // Status
     status_line: String,
     reg_ok:      bool,
 
-    // Active call
-    call_id:          Option<String>,
-    media:            Option<MediaEngine>,
-    local_rtp:        u16,
-    is_held:          bool,
-    call_codec:       AudioCodec,
-    call_dtmf_type:   Option<u8>,
-    call_local_srtp:  Option<SrtpParams>,
-    call_relay:       Option<TurnRelay>,
-
-    /// Configured TURN server (server, username, password) — when set, every
-    /// call relays its RTP through it instead of dialing direct.
-    turn_config: Option<(String, String, String)>,
-
-    /// Run acoustic echo cancellation on the mic path (see `deelip_media::aec`)
-    /// — only useful on speakers/mic, not headsets.
-    echo_cancellation: bool,
-
-    // Incoming call waiting for user action
+    /// Confirmed (connected) calls — capped at 2 (one focused + one held),
+    /// matching a simple "call waiting" model rather than arbitrary
+    /// multi-call/conferencing. A 3rd simultaneous incoming call is
+    /// auto-rejected with 486 Busy.
+    calls: Vec<CallSlot>,
+    /// Index into `calls` currently bound to `media` (the only call with a
+    /// live mic/speaker — cpal only opens one set of device streams at a
+    /// time). `None` means every call in `calls` is held.
+    focused_call: Option<usize>,
+    media: Option<MediaEngine>,
+    /// Not-yet-answered outgoing call (between `make_call` and `CallConnected`/
+    /// `CallFailed`) — dialing a 2nd number is blocked while this is `Some`.
+    pending_outbound: Option<PendingOutbound>,
+    /// Not-yet-answered incoming call — either the only call ringing, or a
+    /// "call waiting" second call while `calls` is non-empty (distinguished
+    /// in the UI, not in this struct).
     pending_call: Option<PendingCall>,
 
-    // Call timing (for history duration)
-    call_start_time: Option<u64>,
-    call_direction:  Option<CallDirection>,
-    call_remote_uri: Option<String>,
+    /// Inline blind-transfer box state for the focused call.
+    transfer_target:  String,
+    showing_transfer: bool,
+
+    /// Live while a call is ringing (incoming) or dialing out (outgoing) —
+    /// see `sync_ringtone`. `None` whenever neither applies.
+    ringtone: Option<Ringtone>,
+    /// Whether something was ringing/dialing as of last frame — used to
+    /// attempt `Ringtone::start` only once per ringing episode (on the
+    /// false→true edge), not on every frame a failed start left `ringtone`
+    /// as `None` (that retried the audio backend 20x/sec on any real device
+    /// failure — the ALSA/jack probe spam this was fixed after).
+    was_ringing: bool,
+    /// The `call_id` last notified about, so `sync_notifications` fires once
+    /// per incoming call rather than every frame it's still ringing.
+    last_notified_call: Option<String>,
+
+    /// Live-edited settings draft, shown/edited in the Settings tab and
+    /// saved to `config_path` on demand — takes effect on next restart.
+    config: AppConfig,
+    config_path: PathBuf,
+    /// Set after a successful Settings save; cleared on the next edit.
+    settings_saved_notice: bool,
+    /// Index into `config.accounts` currently shown in the Settings tab's
+    /// Account section (distinct from `selected_account`, which picks which
+    /// *running/registered* identity places outgoing calls).
+    edit_account_idx: usize,
+
+    /// Shared handles for the tray's independent event-handling threads (see
+    /// `tray` module docs) — `None` degrades to normal close-quits-the-app
+    /// behavior if the tray icon failed to start.
+    tray: Option<(CtxSlot, QuitState)>,
 
     // History
     history:      CallHistory,
     history_path: Option<PathBuf>,
+    history_search: String,
+    /// `None` = show every status.
+    history_status_filter: Option<CallStatus>,
 
     // Contacts
     contacts:       ContactBook,
     contacts_path:  Option<PathBuf>,
     contact_search: String,
     new_contact:    Contact,
+    /// Index into `contacts.contacts` currently loaded into `new_contact`
+    /// for editing — `None` means the form is in "Add" mode.
+    editing_contact_idx: Option<usize>,
 }
 
+/// A not-yet-answered incoming call.
 struct PendingCall {
+    /// Index into `DeelipApp::accounts` — which identity this INVITE arrived on.
+    account:    usize,
     call_id:    String,
     from:       String,
     remote_sdp: String,
+    start_time: u64,
+    /// (redirect deadline as a unix timestamp, forward-to URI) if the
+    /// owning account has `no_answer_forward` configured.
+    forward: Option<(u64, String)>,
+}
+
+/// A not-yet-answered outgoing call — at most one at a time (placing a 2nd
+/// outbound call is blocked while this is `Some`). Which account it's on
+/// doesn't need to be stored here: `CallConnected`/`CallFailed` already carry
+/// that as the account index tagged onto the event itself.
+struct PendingOutbound {
+    remote_uri: String,
+    start_time: u64,
+    local_rtp:  u16,
+    local_srtp: Option<SrtpParams>,
+    relay:      Option<TurnRelay>,
+}
+
+/// A confirmed (connected) call — held or focused. Only the focused call has
+/// a live `MediaEngine`; a held call keeps just enough state here to restart
+/// media (with a fresh SDP offer/answer) if the user swaps back to it.
+struct CallSlot {
+    account:    usize,
+    call_id:    String,
+    remote_uri: String,
+    direction:  CallDirection,
+    start_time: u64,
+    is_held:    bool,
+    codec:      AudioCodec,
+    dtmf_type:  Option<u8>,
+    local_srtp: Option<SrtpParams>,
+    relay:      Option<TurnRelay>,
+    local_rtp:  u16,
+    /// Last known remote SDP — reused to restart media on resume (the
+    /// negotiated RTP endpoint doesn't change between hold and resume).
+    remote_sdp: String,
+}
+
+/// A single registered SIP identity: its stack handle plus the registration
+/// status shown next to it in the account picker.
+struct AccountState {
+    handle: SipHandle,
+    /// The account as spawned at startup — NOT the live Settings draft
+    /// (which may have since diverged; settings are restart-required).
+    account: SipAccount,
+    /// Display label for pickers — `display_name` if set, else `user@server`.
+    label:  String,
+    reg_ok: bool,
+    status: String,
 }
 
 impl DeelipApp {
     pub fn new(
-        sip: SipHandle,
+        accounts: Vec<(SipAccount, SipHandle)>,
         rt: Handle,
-        turn_config: Option<(String, String, String)>,
-        echo_cancellation: bool,
+        config: AppConfig,
+        config_path: PathBuf,
+        tray: Option<(CtxSlot, QuitState)>,
     ) -> Self {
-        let local_rtp = alloc_rtp_port();
+        let accounts = accounts.into_iter().map(|(account, handle)| AccountState {
+            label: account_label(&account),
+            account,
+            handle,
+            reg_ok: false,
+            status: "Registering…".into(),
+        }).collect();
 
         let history_path = CallHistory::default_path().ok();
         let history = history_path.as_deref()
@@ -98,174 +202,310 @@ impl DeelipApp {
             .unwrap_or_default();
 
         Self {
-            sip,
+            accounts,
             rt,
             tab:              Tab::Dialer,
             call_target:      String::new(),
+            selected_account: 0,
+            last_dialed:      None,
             status_line:      "Registering…".into(),
             reg_ok:           false,
-            call_id:          None,
+            calls:            Vec::new(),
+            focused_call:     None,
             media:            None,
-            local_rtp,
-            is_held:          false,
-            call_codec:       AudioCodec::Pcmu,
-            call_dtmf_type:   None,
-            call_local_srtp:  None,
-            call_relay:       None,
-            turn_config,
-            echo_cancellation,
+            pending_outbound: None,
             pending_call:     None,
-            call_start_time:  None,
-            call_direction:   None,
-            call_remote_uri:  None,
+            transfer_target:  String::new(),
+            showing_transfer: false,
+            ringtone:            None,
+            was_ringing:         false,
+            last_notified_call:  None,
+            config,
+            config_path,
+            settings_saved_notice: false,
+            edit_account_idx: 0,
+            tray,
             history,
             history_path,
+            history_search:         String::new(),
+            history_status_filter:  None,
             contacts,
             contacts_path,
             contact_search:   String::new(),
             new_contact:      Contact::default(),
+            editing_contact_idx: None,
         }
     }
 
     // ── SIP event processing ─────────────────────────────────────────────────
 
+    /// Drain every account's event queue first, tagging each event with the
+    /// account index it came from, then process them — a single loop can't
+    /// borrow `self.accounts[i].handle.event_rx` mutably while also calling
+    /// `&mut self` methods to react to what it received.
     fn process_sip_events(&mut self) {
-        while let Ok(event) = self.sip.event_rx.try_recv() {
-            match event {
-                SipEvent::Registered { expires } => {
-                    self.reg_ok      = true;
-                    self.status_line = format!("Registered (expires {expires}s)");
+        let mut events: Vec<(usize, SipEvent)> = Vec::new();
+        for (i, acc) in self.accounts.iter_mut().enumerate() {
+            while let Ok(event) = acc.handle.event_rx.try_recv() {
+                events.push((i, event));
+            }
+        }
+        for (account, event) in events {
+            self.handle_sip_event(account, event);
+        }
+    }
+
+    fn handle_sip_event(&mut self, account: usize, event: SipEvent) {
+        match event {
+            SipEvent::Registered { expires } => {
+                self.accounts[account].reg_ok = true;
+                self.accounts[account].status = format!("Registered (expires {expires}s)");
+                self.refresh_idle_status();
+            }
+            SipEvent::RegistrationFailed { reason } => {
+                self.accounts[account].reg_ok = false;
+                self.accounts[account].status = format!("Registration failed: {reason}");
+                self.refresh_idle_status();
+            }
+            SipEvent::CallRinging { .. } => {
+                self.status_line = "Ringing…".into();
+            }
+            SipEvent::CallConnected { call_id, remote_sdp } => {
+                let Some(out) = self.pending_outbound.take() else {
+                    tracing::warn!(call_id, "CallConnected with no pending outbound call — ignoring");
+                    return;
+                };
+                let slot = CallSlot {
+                    account, call_id, remote_uri: out.remote_uri.clone(),
+                    direction: CallDirection::Outbound, start_time: out.start_time, is_held: false,
+                    codec: AudioCodec::Pcmu, dtmf_type: None,
+                    local_srtp: out.local_srtp, relay: out.relay, local_rtp: out.local_rtp,
+                    remote_sdp: remote_sdp.clone(),
+                };
+                self.calls.push(slot);
+                let idx = self.calls.len() - 1;
+                self.status_line = format!("In call — {}", short_uri(&out.remote_uri));
+                self.start_media(idx, &remote_sdp);
+            }
+            SipEvent::IncomingCall { call_id, from, remote_sdp } => {
+                if self.calls.len() >= 2 || self.pending_call.is_some() {
+                    // Already at capacity (2 concurrent + at most 1 ringing) — decline immediately.
+                    self.accounts[account].handle.reject_call(&call_id);
+                    return;
                 }
-                SipEvent::RegistrationFailed { reason } => {
-                    self.reg_ok      = false;
-                    self.status_line = format!("Registration failed: {reason}");
+                let waiting = !self.calls.is_empty();
+                self.status_line = if waiting {
+                    format!("Call waiting: {}", short_uri(&from))
+                } else {
+                    format!("Incoming from {}", short_uri(&from))
+                };
+                let acc = &self.accounts[account].account;
+                let forward = acc.no_answer_forward.clone()
+                    .filter(|s| !s.is_empty())
+                    .map(|target| {
+                        let target = normalize_target(&target, &acc.server);
+                        (unix_now() + acc.no_answer_timeout_secs as u64, target)
+                    });
+                self.pending_call = Some(PendingCall {
+                    account, call_id, from, remote_sdp, start_time: unix_now(), forward,
+                });
+            }
+            SipEvent::CallEnded { call_id } => {
+                self.on_call_terminated(&call_id, None);
+                tracing::debug!(call_id, "Call ended normally");
+            }
+            SipEvent::CallFailed { call_id, code, reason } => {
+                self.on_call_terminated(&call_id, Some((code, reason)));
+            }
+            SipEvent::CallHeld { call_id } => {
+                if let Some(slot) = self.calls.iter_mut().find(|c| c.call_id == call_id) {
+                    slot.is_held = true;
                 }
-                SipEvent::CallRinging { .. } => {
-                    self.status_line = "Ringing…".into();
+                self.refresh_call_status();
+            }
+            SipEvent::CallResumed { call_id } => {
+                if let Some(slot) = self.calls.iter_mut().find(|c| c.call_id == call_id) {
+                    slot.is_held = false;
                 }
-                SipEvent::CallConnected { call_id, remote_sdp } => {
-                    self.call_id         = Some(call_id.clone());
-                    self.status_line     = format!("In call — {}", short_uri(&call_id));
-                    self.call_start_time = Some(unix_now());
-                    self.start_media(&remote_sdp);
-                }
-                SipEvent::IncomingCall { call_id, from, remote_sdp } => {
-                    self.status_line  = format!("Incoming from {}", short_uri(&from));
-                    self.call_direction  = Some(CallDirection::Inbound);
-                    self.call_remote_uri = Some(from.clone());
-                    self.call_start_time = Some(unix_now());
-                    self.pending_call    = Some(PendingCall { call_id, from, remote_sdp });
-                }
-                SipEvent::CallEnded { call_id } => {
-                    self.record_history(CallStatus::Answered);
-                    self.end_call();
-                    tracing::debug!(call_id, "Call ended normally");
-                }
-                SipEvent::CallFailed { call_id, code, reason } => {
-                    // If there was a pending incoming call that we never answered, it's missed.
-                    let status = if self.pending_call.as_ref().is_some_and(|p| p.call_id == call_id) {
-                        CallStatus::Missed
-                    } else {
-                        CallStatus::Failed
-                    };
-                    self.record_history(status);
-                    self.end_call();
-                    self.status_line = format!("Call failed ({code}): {reason}");
-                }
-                SipEvent::CallHeld { .. } => {
-                    self.is_held     = true;
-                    self.status_line = "Call on hold".into();
-                }
-                SipEvent::CallResumed { .. } => {
-                    self.is_held     = false;
-                    self.status_line = format!("In call — {}", self.call_remote_uri.as_deref().unwrap_or("?"));
-                }
-                SipEvent::RemoteHeld { .. } => {
-                    self.status_line = "Remote party put you on hold".into();
-                }
-                SipEvent::RemoteResumed { .. } => {
-                    self.status_line = "Call resumed by remote party".into();
-                }
+                self.refresh_call_status();
+            }
+            SipEvent::RemoteHeld { .. } => {
+                self.status_line = "Remote party put you on hold".into();
+            }
+            SipEvent::RemoteResumed { .. } => {
+                self.status_line = "Call resumed by remote party".into();
+            }
+            SipEvent::TransferAccepted { call_id } => {
+                tracing::info!(call_id, "Blind transfer accepted");
+                self.status_line = "Transfer accepted".into();
+            }
+            SipEvent::TransferFailed { call_id, reason } => {
+                tracing::warn!(call_id, reason, "Blind transfer failed");
+                self.status_line = format!("Transfer failed: {reason}");
             }
         }
     }
 
-    fn start_media(&mut self, remote_sdp: &str) {
+    /// A call in `calls` ended or an outstanding attempt failed — figure out
+    /// which of `pending_call` / `calls` / `pending_outbound` `call_id`
+    /// refers to, tear it down, and record it in history.
+    fn on_call_terminated(&mut self, call_id: &str, failure: Option<(u16, String)>) {
+        if self.pending_call.as_ref().is_some_and(|p| p.call_id == call_id) {
+            let pending = self.pending_call.take().unwrap();
+            self.record_history(pending.from, CallDirection::Inbound, pending.start_time, CallStatus::Missed);
+            self.refresh_call_status();
+            return;
+        }
+        if let Some(idx) = self.calls.iter().position(|c| c.call_id == call_id) {
+            let status = if let Some((code, reason)) = &failure {
+                self.status_line = format!("Call failed ({code}): {reason}");
+                CallStatus::Failed
+            } else {
+                CallStatus::Answered
+            };
+            let slot = self.remove_call(idx);
+            self.record_history(slot.remote_uri, slot.direction, slot.start_time, status);
+            self.refresh_call_status();
+            return;
+        }
+        if let Some(out) = self.pending_outbound.take() {
+            if let Some((code, reason)) = &failure {
+                self.status_line = format!("Call failed ({code}): {reason}");
+            }
+            self.record_history(out.remote_uri, CallDirection::Outbound, out.start_time, CallStatus::Failed);
+            self.refresh_call_status();
+        }
+    }
+
+    /// Remove call `idx`, stopping its media first if it was the focused one,
+    /// and fixing up `focused_call` for the index shift. Returns the removed
+    /// slot so the caller can record history from it.
+    fn remove_call(&mut self, idx: usize) -> CallSlot {
+        if self.focused_call == Some(idx) {
+            if let Some(engine) = self.media.take() { engine.stop(); }
+        }
+        let slot = self.calls.remove(idx);
+        self.focused_call = match self.focused_call {
+            Some(f) if f == idx => None,
+            Some(f) if f > idx  => Some(f - 1),
+            other               => other,
+        };
+        slot
+    }
+
+    /// Recompute the top status line from current call state: in-call text
+    /// for the focused call, a "held" hint if calls remain but none is
+    /// focused, or the idle registration summary once everything's cleared.
+    fn refresh_call_status(&mut self) {
+        if let Some(idx) = self.focused_call {
+            self.status_line = format!("In call — {}", short_uri(&self.calls[idx].remote_uri));
+        } else if !self.calls.is_empty() {
+            self.status_line = "On hold — tap Resume to continue".into();
+        } else if self.pending_call.is_none() {
+            self.refresh_idle_status();
+        }
+    }
+
+    /// Recompute the top status bar from the *selected* account's
+    /// registration state — a no-op while a call or incoming ring is in
+    /// progress, since call-related events drive `status_line` directly
+    /// during that time. Call after any registration change or whenever
+    /// `selected_account` changes (e.g. the dialer's account picker).
+    fn refresh_idle_status(&mut self) {
+        if !self.calls.is_empty() || self.pending_call.is_some() { return; }
+        match self.accounts.get(self.selected_account) {
+            Some(acc) => {
+                self.reg_ok       = acc.reg_ok;
+                self.status_line  = if acc.reg_ok { "Ready".into() } else { "Not registered".into() };
+            }
+            None => {
+                self.reg_ok      = false;
+                self.status_line = "No accounts configured".into();
+            }
+        }
+    }
+
+    /// (server, username, password) if a TURN relay is configured, derived
+    /// from the current settings draft.
+    fn turn_config(&self) -> Option<(String, String, String)> {
+        self.config.turn_server.clone().map(|server| (
+            server,
+            self.config.turn_username.clone().unwrap_or_default(),
+            self.config.turn_password.clone().unwrap_or_default(),
+        ))
+    }
+
+    /// Start (or restart, on resume) media for `calls[idx]`, using its own
+    /// stored codec/srtp/relay/local_rtp — marks it `focused_call` on success.
+    fn start_media(&mut self, idx: usize, remote_sdp: &str) {
         let Some(parsed) = parse_sdp(remote_sdp) else {
             tracing::error!("Cannot parse remote SDP");
             return;
         };
-        self.call_codec      = parsed.codec;
-        self.call_dtmf_type  = parsed.dtmf_type;
+        self.calls[idx].codec     = parsed.codec;
+        self.calls[idx].dtmf_type = parsed.dtmf_type;
 
-        let srtp_session = match (&self.call_local_srtp, &parsed.srtp) {
+        let secure = self.accounts.get(self.calls[idx].account).is_some_and(|a| a.handle.secure);
+        let srtp_session = match (&self.calls[idx].local_srtp, &parsed.srtp) {
             (Some(local), Some(remote)) => Some(SrtpSession { local: local.clone(), remote: remote.clone() }),
             _ => {
-                if self.sip.secure {
+                if secure {
                     tracing::warn!("TLS signaling active but remote SDP has no a=crypto — falling back to plaintext RTP");
                 }
                 None
             }
         };
 
-        let port    = self.local_rtp;
-        let relay   = self.call_relay.as_ref().map(|r| r.conn.clone());
+        let port    = self.calls[idx].local_rtp;
+        let relay   = self.calls[idx].relay.as_ref().map(|r| r.conn.clone());
         let rt      = self.rt.clone();
+        let input_device  = self.config.audio.input_device.clone();
+        let output_device = self.config.audio.output_device.clone();
         let engine  = rt.block_on(MediaEngine::start(
             port, parsed.rtp_addr, parsed.codec, parsed.dtmf_type, srtp_session, relay,
-            self.echo_cancellation,
+            self.config.audio.echo_cancellation,
+            input_device.as_deref(), output_device.as_deref(),
         ));
         match engine {
-            Ok(e)  => { self.media = Some(e); }
+            Ok(e)  => { self.media = Some(e); self.focused_call = Some(idx); }
             Err(e) => { tracing::error!("MediaEngine failed: {e}"); }
         }
     }
 
-    /// Resolve the (ip, port) to advertise in this call's SDP. Allocates a
-    /// TURN relay on first use if one is configured (`turn_config`), reusing
-    /// the same allocation across hold/resume within the call; falls back to
-    /// the direct local address if no relay is configured or allocation fails.
-    fn resolve_rtp_endpoint(&mut self) -> (String, u16) {
-        if self.call_relay.is_none() {
-            if let Some((server, username, password)) = self.turn_config.clone() {
-                match self.rt.block_on(deelip_nat::allocate_relay(&server, &username, &password)) {
-                    Ok(relay) => { self.call_relay = Some(relay); }
+    /// Resolve the (ip, port) to advertise in an SDP offer/answer, using
+    /// `advertised_ip` as the direct-path fallback. Allocates a TURN relay on
+    /// first use if one is configured, storing it into `relay` for reuse
+    /// across hold/resume within that same call. Not a method (despite living
+    /// in `impl DeelipApp`) so it can be called with `relay` borrowed from
+    /// `self.calls[idx].relay` without aliasing `self`.
+    fn resolve_rtp_endpoint(
+        rt: &Handle,
+        turn_config: Option<(String, String, String)>,
+        advertised_ip: &str,
+        local_rtp: u16,
+        relay: &mut Option<TurnRelay>,
+    ) -> (String, u16) {
+        if relay.is_none() {
+            if let Some((server, username, password)) = turn_config {
+                match rt.block_on(deelip_nat::allocate_relay(&server, &username, &password)) {
+                    Ok(r) => *relay = Some(r),
                     Err(e) => tracing::warn!("TURN allocation failed ({e}), falling back to direct"),
                 }
             }
         }
-        match &self.call_relay {
-            Some(relay) => (relay.relayed_addr.ip().to_string(), relay.relayed_addr.port()),
-            None => (self.sip.advertised_ip.clone(), self.local_rtp),
+        match relay {
+            Some(r) => (r.relayed_addr.ip().to_string(), r.relayed_addr.port()),
+            None => (advertised_ip.to_string(), local_rtp),
         }
     }
 
-    fn end_call(&mut self) {
-        if let Some(engine) = self.media.take() {
-            engine.stop();
-        }
-        self.call_id         = None;
-        self.pending_call    = None;
-        self.is_held         = false;
-        self.call_start_time = None;
-        self.call_direction  = None;
-        self.call_remote_uri = None;
-        self.call_local_srtp = None;
-        self.call_relay      = None;
-        self.local_rtp       = alloc_rtp_port();
-        self.status_line     = if self.reg_ok { "Ready".into() } else { "Not registered".into() };
-    }
-
-    fn record_history(&mut self, status: CallStatus) {
-        let Some(start) = self.call_start_time else { return };
-        let Some(uri)   = self.call_remote_uri.take() else { return };
-        let direction   = self.call_direction.take().unwrap_or(CallDirection::Outbound);
-        let duration    = if matches!(status, CallStatus::Answered) {
-            (unix_now().saturating_sub(start)) as u32
+    fn record_history(&mut self, remote_uri: String, direction: CallDirection, start_time: u64, status: CallStatus) {
+        let duration = if matches!(status, CallStatus::Answered) {
+            (unix_now().saturating_sub(start_time)) as u32
         } else {
             0
         };
-        let record = CallRecord { remote_uri: uri, direction, timestamp: start, duration_secs: duration, status };
+        let record = CallRecord { remote_uri, direction, timestamp: start_time, duration_secs: duration, status };
         self.history.push(record);
         if let Some(path) = &self.history_path {
             let _ = self.history.save(path);
@@ -277,65 +517,144 @@ impl DeelipApp {
     fn do_call(&mut self, target: Option<String>) {
         let raw = target.unwrap_or_else(|| self.call_target.trim().to_string());
         if raw.is_empty() { return; }
-        let t = normalize_target(&raw, &self.sip.domain);
-        let (rtp_ip, rtp_port) = self.resolve_rtp_endpoint();
-        let srtp = if self.sip.secure { Some(SrtpParams::generate()) } else { None };
+        let Some(acc) = self.selected_account_idx() else { return };
+        let domain = self.accounts[acc].handle.domain.clone();
+        let secure = self.accounts[acc].handle.secure;
+        let advertised_ip = self.accounts[acc].handle.advertised_ip.clone();
+        let t = normalize_target(&raw, &domain);
+        let local_rtp = alloc_rtp_port();
+        let mut relay: Option<TurnRelay> = None;
+        let rt = self.rt.clone();
+        let turn_config = self.turn_config();
+        let (rtp_ip, rtp_port) = Self::resolve_rtp_endpoint(&rt, turn_config, &advertised_ip, local_rtp, &mut relay);
+        let srtp = if secure { Some(SrtpParams::generate()) } else { None };
         let sdp = build_offer(&rtp_ip, rtp_port, srtp.as_ref());
-        self.call_local_srtp = srtp;
-        self.sip.make_call(&t, sdp);
-        self.call_direction  = Some(CallDirection::Outbound);
-        self.call_remote_uri = Some(t.clone());
-        self.call_start_time = Some(unix_now());
-        self.status_line     = format!("Calling {}…", short_uri(&t));
+        self.accounts[acc].handle.make_call(&t, sdp);
+        self.last_dialed = Some(t.clone());
+        self.pending_outbound = Some(PendingOutbound {
+            remote_uri: t.clone(), start_time: unix_now(),
+            local_rtp, local_srtp: srtp, relay,
+        });
+        self.status_line = format!("Calling {}…", short_uri(&t));
+    }
+
+    fn do_redial(&mut self) {
+        if let Some(target) = self.last_dialed.clone() {
+            self.do_call(Some(target));
+        }
     }
 
     fn do_accept(&mut self) {
-        if let Some(pending) = self.pending_call.take() {
-            let codec    = parse_sdp(&pending.remote_sdp).map(|p| p.codec).unwrap_or(AudioCodec::Pcmu);
-            let (rtp_ip, rtp_port) = self.resolve_rtp_endpoint();
-            let srtp     = if self.sip.secure { Some(SrtpParams::generate()) } else { None };
-            let sdp      = build_answer(&rtp_ip, rtp_port, codec, srtp.as_ref());
-            self.call_local_srtp = srtp;
-            self.sip.accept_call(&pending.call_id, sdp);
-            self.call_id     = Some(pending.call_id);
-            self.status_line = "Accepted — connecting…".into();
-            self.start_media(&pending.remote_sdp);
+        let Some(pending) = self.pending_call.take() else { return };
+        let acc = pending.account;
+        // Free the audio device for the new call if another one is focused.
+        if let Some(cur) = self.focused_call {
+            self.send_hold(cur);
+            if let Some(engine) = self.media.take() { engine.stop(); }
+            self.focused_call = None;
         }
+        let codec = parse_sdp(&pending.remote_sdp).map(|p| p.codec).unwrap_or(AudioCodec::Pcmu);
+        let local_rtp = alloc_rtp_port();
+        let mut relay: Option<TurnRelay> = None;
+        let advertised_ip = self.accounts[acc].handle.advertised_ip.clone();
+        let rt = self.rt.clone();
+        let turn_config = self.turn_config();
+        let (rtp_ip, rtp_port) = Self::resolve_rtp_endpoint(&rt, turn_config, &advertised_ip, local_rtp, &mut relay);
+        let secure = self.accounts[acc].handle.secure;
+        let srtp   = if secure { Some(SrtpParams::generate()) } else { None };
+        let sdp    = build_answer(&rtp_ip, rtp_port, codec, srtp.as_ref());
+        self.accounts[acc].handle.accept_call(&pending.call_id, sdp);
+        let slot = CallSlot {
+            account: acc, call_id: pending.call_id.clone(), remote_uri: pending.from.clone(),
+            direction: CallDirection::Inbound, start_time: pending.start_time, is_held: false,
+            codec, dtmf_type: None, local_srtp: srtp, relay, local_rtp,
+            remote_sdp: pending.remote_sdp.clone(),
+        };
+        self.calls.push(slot);
+        let idx = self.calls.len() - 1;
+        self.status_line = "Accepted — connecting…".into();
+        self.start_media(idx, &pending.remote_sdp);
     }
 
     fn do_reject(&mut self) {
         if let Some(pending) = self.pending_call.take() {
-            self.record_history(CallStatus::Rejected);
-            self.sip.reject_call(&pending.call_id);
-            self.call_start_time = None;
-            self.call_direction  = None;
-            self.call_remote_uri = None;
-            self.status_line = "Ready".into();
+            self.record_history(pending.from, CallDirection::Inbound, pending.start_time, CallStatus::Rejected);
+            self.accounts[pending.account].handle.reject_call(&pending.call_id);
+            self.refresh_call_status();
         }
     }
 
-    fn do_hangup(&mut self) {
-        if let Some(id) = self.call_id.clone() {
-            self.sip.hang_up(&id);
-        }
-        self.record_history(CallStatus::Answered);
-        self.end_call();
+    fn do_hangup(&mut self, idx: usize) {
+        let call_id = self.calls[idx].call_id.clone();
+        let acc     = self.calls[idx].account;
+        self.accounts[acc].handle.hang_up(&call_id);
+        let slot = self.remove_call(idx);
+        self.record_history(slot.remote_uri, slot.direction, slot.start_time, CallStatus::Answered);
+        self.refresh_call_status();
     }
 
-    fn do_hold(&mut self) {
-        if let Some(id) = self.call_id.clone() {
-            let (rtp_ip, rtp_port) = self.resolve_rtp_endpoint();
-            let sdp = build_hold_offer(&rtp_ip, rtp_port, self.call_codec, self.call_local_srtp.as_ref());
-            self.sip.hold_call(&id, sdp);
-        }
+    /// Send the hold re-INVITE for `idx` (optimistic — doesn't wait for the
+    /// confirming `SipEvent::CallHeld`). Doesn't touch `media`/`focused_call`;
+    /// callers that are actually switching audio away from this call do that
+    /// themselves (see `do_hold_slot`/`do_accept`/`do_swap_to`).
+    fn send_hold(&mut self, idx: usize) {
+        let call_id = self.calls[idx].call_id.clone();
+        let acc     = self.calls[idx].account;
+        let advertised_ip = self.accounts[acc].handle.advertised_ip.clone();
+        let local_rtp = self.calls[idx].local_rtp;
+        let rt = self.rt.clone();
+        let turn_config = self.turn_config();
+        let (rtp_ip, rtp_port) = Self::resolve_rtp_endpoint(&rt, turn_config, &advertised_ip, local_rtp, &mut self.calls[idx].relay);
+        let sdp = build_hold_offer(&rtp_ip, rtp_port, self.calls[idx].codec, self.calls[idx].local_srtp.as_ref());
+        self.calls[idx].is_held = true;
+        self.accounts[acc].handle.hold_call(&call_id, sdp);
     }
 
-    fn do_resume(&mut self) {
-        if let Some(id) = self.call_id.clone() {
-            let (rtp_ip, rtp_port) = self.resolve_rtp_endpoint();
-            let sdp = build_resume_offer(&rtp_ip, rtp_port, self.call_codec, self.call_local_srtp.as_ref());
-            self.sip.resume_call(&id, sdp);
+    fn send_resume(&mut self, idx: usize) {
+        let call_id = self.calls[idx].call_id.clone();
+        let acc     = self.calls[idx].account;
+        let advertised_ip = self.accounts[acc].handle.advertised_ip.clone();
+        let local_rtp = self.calls[idx].local_rtp;
+        let rt = self.rt.clone();
+        let turn_config = self.turn_config();
+        let (rtp_ip, rtp_port) = Self::resolve_rtp_endpoint(&rt, turn_config, &advertised_ip, local_rtp, &mut self.calls[idx].relay);
+        let sdp = build_resume_offer(&rtp_ip, rtp_port, self.calls[idx].codec, self.calls[idx].local_srtp.as_ref());
+        self.accounts[acc].handle.resume_call(&call_id, sdp);
+    }
+
+    /// Hold call `idx` — if it's the focused one, its media stops and no
+    /// call has live audio until the user swaps back to something.
+    fn do_hold_slot(&mut self, idx: usize) {
+        self.send_hold(idx);
+        if self.focused_call == Some(idx) {
+            if let Some(engine) = self.media.take() { engine.stop(); }
+            self.focused_call = None;
         }
+        self.refresh_call_status();
+    }
+
+    /// Switch live audio to call `idx`: holds whatever's currently focused
+    /// (there's at most one other call), then resumes and restarts media
+    /// for `idx` using its last-known remote SDP.
+    fn do_swap_to(&mut self, idx: usize) {
+        if self.focused_call == Some(idx) { return; }
+        if let Some(cur) = self.focused_call {
+            self.send_hold(cur);
+            if let Some(engine) = self.media.take() { engine.stop(); }
+            self.focused_call = None;
+        }
+        self.send_resume(idx);
+        self.calls[idx].is_held = false;
+        let remote_sdp = self.calls[idx].remote_sdp.clone();
+        self.start_media(idx, &remote_sdp);
+        self.refresh_call_status();
+    }
+
+    /// `selected_account` clamped to a valid index — `None` if there are no
+    /// accounts at all (nothing to call from).
+    fn selected_account_idx(&self) -> Option<usize> {
+        if self.accounts.is_empty() { return None; }
+        Some(self.selected_account.min(self.accounts.len() - 1))
     }
 
     fn do_dtmf(&self, digit: char) {
@@ -343,17 +662,144 @@ impl DeelipApp {
             engine.send_dtmf(digit);
         }
     }
+
+    fn is_muted(&self) -> bool {
+        self.media.as_ref().is_some_and(|m| m.is_muted())
+    }
+
+    fn do_mute_toggle(&self) {
+        if let Some(engine) = &self.media {
+            engine.set_muted(!engine.is_muted());
+        }
+    }
+
+    /// Blind-transfer the focused call to `self.transfer_target`.
+    fn do_transfer(&mut self) {
+        let Some(idx) = self.focused_call else { return };
+        let raw = self.transfer_target.trim().to_string();
+        if raw.is_empty() { return; }
+        let acc    = self.calls[idx].account;
+        let domain = self.accounts[acc].handle.domain.clone();
+        let target = normalize_target(&raw, &domain);
+        let call_id = self.calls[idx].call_id.clone();
+        self.accounts[acc].handle.blind_transfer(&call_id, target);
+        self.status_line      = "Transferring…".into();
+        self.transfer_target.clear();
+        self.showing_transfer = false;
+    }
+
+    /// If the pending incoming call has a no-answer-forward deadline and
+    /// it's elapsed, redirect it (302) instead of leaving it ringing forever.
+    /// Called once per frame from `update()`.
+    fn check_pending_call_timeout(&mut self) {
+        let Some(pending) = &self.pending_call else { return };
+        let Some((deadline, target)) = &pending.forward else { return };
+        if unix_now() < *deadline { return; }
+        let target = target.clone();
+        let pending = self.pending_call.take().unwrap();
+        self.accounts[pending.account].handle.redirect_call(&pending.call_id, target);
+        self.record_history(pending.from, CallDirection::Inbound, pending.start_time, CallStatus::Missed);
+        self.refresh_call_status();
+    }
+
+    /// Start/stop the ringtone to match current call state — a no-op if it's
+    /// already playing the right thing (or nothing). Called once per frame.
+    fn sync_ringtone(&mut self) {
+        let desired = if !self.config.ringtone_enabled {
+            None
+        } else if self.pending_call.is_some() {
+            Some(RingKind::Incoming)
+        } else if self.pending_outbound.is_some() {
+            Some(RingKind::Outgoing)
+        } else {
+            None
+        };
+
+        let is_ringing = desired.is_some();
+        if is_ringing && !self.was_ringing {
+            // Rising edge — attempt exactly once per ringing episode. A
+            // failure here must NOT leave room for a retry next frame (see
+            // `was_ringing` doc comment) — it's still `None` either way.
+            match Ringtone::start(desired.unwrap()) {
+                Ok(r) => self.ringtone = Some(r),
+                Err(e) => tracing::warn!("Ringtone failed to start: {e}"),
+            }
+        } else if !is_ringing {
+            self.ringtone = None;
+        }
+        self.was_ringing = is_ringing;
+    }
+
+    /// Fire a desktop notification once per incoming call (not every frame
+    /// it's still ringing). Called once per frame.
+    fn sync_notifications(&mut self) {
+        if !self.config.notifications_enabled {
+            self.last_notified_call = None;
+            return;
+        }
+        match &self.pending_call {
+            Some(p) if self.last_notified_call.as_deref() != Some(p.call_id.as_str()) => {
+                self.last_notified_call = Some(p.call_id.clone());
+                notify::notify_incoming_call(&p.from);
+            }
+            None => self.last_notified_call = None,
+            _ => {}
+        }
+    }
+
+    /// Persist `config` immediately, without the Settings tab's "restart to
+    /// apply" notice — for the appearance/notification toggles that apply
+    /// live and don't go through the explicit Save button.
+    fn save_config_quietly(&self) {
+        if let Err(e) = self.config.save(&self.config_path) {
+            tracing::error!("Failed to save config: {e}");
+        }
+    }
 }
 
 // ── eframe::App ───────────────────────────────────────────────────────────────
 
+impl DeelipApp {
+    /// Minimize-to-tray: hide instead of quitting on window close, and
+    /// restore/quit in response to tray icon clicks or menu selections.
+    /// No-op (falls back to normal close-quits-the-app behavior) if the
+    /// tray icon failed to start. Actual click/menu handling happens on
+    /// independent background threads (see `tray` module docs) — this just
+    /// (a) intercepts close-to-minimize, which can only happen from inside
+    /// `update()`, and (b) keeps the background threads' shared state fresh
+    /// for whenever they do run.
+    fn process_tray_events(&mut self, ctx: &egui::Context) {
+        let Some((ctx_slot, quit_state)) = &self.tray else { return };
+
+        *ctx_slot.lock().unwrap() = Some(ctx.clone());
+        *quit_state.calls.lock().unwrap() = self.calls.iter()
+            .map(|c| (self.accounts[c.account].handle.cmd_tx.clone(), c.call_id.clone()))
+            .collect();
+        *quit_state.pending.lock().unwrap() = self.pending_call.as_ref()
+            .map(|p| (self.accounts[p.account].handle.cmd_tx.clone(), p.call_id.clone()));
+
+        if ctx.input(|i| i.viewport().close_requested()) {
+            tracing::debug!("Tray: close requested, minimizing to tray instead");
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+        }
+    }
+}
+
 impl eframe::App for DeelipApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.process_sip_events();
+        self.check_pending_call_timeout();
+        self.sync_ringtone();
+        self.sync_notifications();
+        self.process_tray_events(ctx);
+
+        ctx.set_visuals(if self.config.dark_mode { egui::Visuals::dark() } else { egui::Visuals::light() });
 
         // ── Status bar ───────────────────────────────────────────────────────
+        let on_hold = self.focused_call.is_none() && !self.calls.is_empty();
         egui::TopBottomPanel::top("status").show(ctx, |ui| {
-            status_bar(ui, &self.status_line, self.reg_ok, self.is_held);
+            status_bar(ui, &self.status_line, self.reg_ok, on_hold);
         });
 
         // ── Tab bar ──────────────────────────────────────────────────────────
@@ -362,6 +808,14 @@ impl eframe::App for DeelipApp {
                 ui.selectable_value(&mut self.tab, Tab::Dialer,   "Dialer");
                 ui.selectable_value(&mut self.tab, Tab::History,  "History");
                 ui.selectable_value(&mut self.tab, Tab::Contacts, "Contacts");
+                ui.selectable_value(&mut self.tab, Tab::Settings, "Settings");
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let icon = if self.config.dark_mode { "☀" } else { "🌙" };
+                    if ui.button(icon).on_hover_text("Toggle light/dark theme").clicked() {
+                        self.config.dark_mode = !self.config.dark_mode;
+                        self.save_config_quietly();
+                    }
+                });
             });
         });
 
@@ -370,6 +824,7 @@ impl eframe::App for DeelipApp {
                 Tab::Dialer   => self.show_dialer(ui),
                 Tab::History  => self.show_history(ui, ctx),
                 Tab::Contacts => self.show_contacts(ui, ctx),
+                Tab::Settings => self.show_settings(ui),
             }
         });
 
@@ -377,19 +832,27 @@ impl eframe::App for DeelipApp {
     }
 
     /// Hang up any in-progress call before the process exits, so the remote
-    /// side and server don't keep a dangling channel around. Sending BYE only
-    /// queues it on the SipStack's command channel; block briefly so the
-    /// background task actually transmits it before the runtime is torn down.
+    /// side and server don't keep a dangling channel around.
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        let sent = if let Some(id) = self.call_id.clone() {
-            self.sip.hang_up(&id);
-            true
-        } else if let Some(pending) = self.pending_call.take() {
-            self.sip.reject_call(&pending.call_id);
-            true
-        } else {
-            false
-        };
+        self.hangup_before_exit();
+    }
+}
+
+impl DeelipApp {
+    /// Hang up any in-progress call (or reject a pending incoming one).
+    /// Sending BYE only queues it on the SipStack's command channel; block
+    /// briefly so the background task actually transmits it before the
+    /// runtime is torn down.
+    fn hangup_before_exit(&mut self) {
+        let mut sent = false;
+        for call in &self.calls {
+            self.accounts[call.account].handle.hang_up(&call.call_id);
+            sent = true;
+        }
+        if let Some(pending) = self.pending_call.take() {
+            self.accounts[pending.account].handle.reject_call(&pending.call_id);
+            sent = true;
+        }
         if sent {
             self.rt.block_on(tokio::time::sleep(Duration::from_millis(200)));
         }
@@ -401,14 +864,50 @@ impl eframe::App for DeelipApp {
 impl DeelipApp {
     fn show_dialer(&mut self, ui: &mut Ui) {
         ui.add_space(8.0);
-        let in_call = self.call_id.is_some() || self.pending_call.is_some();
+        let can_dial = self.calls.is_empty() && self.pending_call.is_none() && self.pending_outbound.is_none();
 
-        // ── Incoming call banner ─────────────────────────────────────────────
+        // ── Account picker (only shown with more than one account) ──────────
+        if self.accounts.len() > 1 {
+            ui.horizontal(|ui| {
+                ui.label("Call from:");
+                let current = self.selected_account_idx().unwrap_or(0);
+                let selected_label = {
+                    let acc = &self.accounts[current];
+                    format!("{} {}", if acc.reg_ok { "●" } else { "○" }, acc.label)
+                };
+                egui::ComboBox::from_id_source("dialer_account_picker")
+                    .selected_text(selected_label)
+                    .show_ui(ui, |ui| {
+                        for i in 0..self.accounts.len() {
+                            let acc = &self.accounts[i];
+                            let label = format!("{} {}", if acc.reg_ok { "●" } else { "○" }, acc.label);
+                            if ui.add_enabled(can_dial, egui::SelectableLabel::new(current == i, label)).clicked() {
+                                self.selected_account = i;
+                                self.refresh_idle_status();
+                            }
+                        }
+                    });
+            });
+            ui.add_space(6.0);
+        }
+
+        // ── Waiting/incoming call banner ──────────────────────────────────────
         if let Some(pending) = &self.pending_call {
+            let waiting = !self.calls.is_empty();
             let from = pending.from.clone();
+            let account_suffix = if self.accounts.len() > 1 {
+                format!(" (on {})", self.accounts[pending.account].label)
+            } else {
+                String::new()
+            };
+            let heading = if waiting {
+                format!("Call waiting: {}{account_suffix}", short_uri(&from))
+            } else {
+                format!("Incoming call from {}{account_suffix}", short_uri(&from))
+            };
             ui.group(|ui| {
                 ui.label(
-                    RichText::new(format!("Incoming call from {}", short_uri(&from)))
+                    RichText::new(heading)
                         .color(Color32::YELLOW)
                         .font(FontId::proportional(17.0)),
                 );
@@ -425,46 +924,123 @@ impl DeelipApp {
             ui.add_space(8.0);
         }
 
-        // ── Call target + Call/Hang Up buttons ───────────────────────────────
+        // ── Active/held calls ────────────────────────────────────────────────
+        if !self.calls.is_empty() {
+            let mut hangup_idx: Option<usize> = None;
+            let mut hold_idx:   Option<usize> = None;
+            let mut swap_idx:   Option<usize> = None;
+
+            for idx in 0..self.calls.len() {
+                let focused = self.focused_call == Some(idx);
+                let (icon, color, uri) = {
+                    let call = &self.calls[idx];
+                    let (icon, color) = match call.direction {
+                        CallDirection::Inbound  => ("←", Color32::LIGHT_BLUE),
+                        CallDirection::Outbound => ("→", Color32::LIGHT_GREEN),
+                    };
+                    (icon, color, call.remote_uri.clone())
+                };
+                ui.group(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(icon).color(color));
+                        ui.label(short_uri(&uri));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button(RichText::new("Hang Up").color(Color32::RED)).clicked() {
+                                hangup_idx = Some(idx);
+                            }
+                            ui.add_space(4.0);
+                            if focused {
+                                if ui.button("Hold").clicked() { hold_idx = Some(idx); }
+                            } else if ui.button("Resume").clicked() {
+                                swap_idx = Some(idx);
+                            }
+                            ui.add_space(4.0);
+                            let state = if focused { "Active" } else { "On hold" };
+                            ui.label(RichText::new(state).color(Color32::GRAY));
+                        });
+                    });
+                });
+                ui.add_space(4.0);
+            }
+
+            if let Some(idx) = hangup_idx { self.do_hangup(idx); }
+            if let Some(idx) = hold_idx   { self.do_hold_slot(idx); }
+            if let Some(idx) = swap_idx   { self.do_swap_to(idx); }
+        }
+
+        // ── Call target + Call/Redial buttons ────────────────────────────────
         ui.group(|ui| {
             ui.label("SIP address / number:");
             ui.add_space(4.0);
             let resp = ui.add_enabled(
-                !in_call,
+                can_dial,
                 egui::TextEdit::singleline(&mut self.call_target)
                     .hint_text("sip:bob@example.com")
                     .desired_width(f32::INFINITY),
             );
-            if resp.lost_focus()
-                && ctx_key_enter(ui)
-                && !in_call
-            {
+            if resp.lost_focus() && ctx_key_enter(ui) && can_dial {
                 self.do_call(None);
             }
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                if self.call_id.is_some() {
-                    // Hold / Resume
-                    if self.is_held {
-                        if ui.button("Resume").clicked() { self.do_resume(); }
-                    } else {
-                        if ui.button("Hold").clicked() { self.do_hold(); }
-                    }
-                    ui.add_space(4.0);
-                    if ui.button(RichText::new("Hang Up").color(Color32::RED)).clicked() {
-                        self.do_hangup();
-                    }
-                } else if ui
-                    .add_enabled(!in_call && self.reg_ok, egui::Button::new(" Call "))
-                    .clicked()
-                {
+                if ui.add_enabled(can_dial && self.reg_ok, egui::Button::new(" Call ")).clicked() {
                     self.do_call(None);
+                }
+                ui.add_space(4.0);
+                let can_redial = can_dial && self.reg_ok && self.last_dialed.is_some();
+                if ui.add_enabled(can_redial, egui::Button::new("Redial")).clicked() {
+                    self.do_redial();
                 }
             });
         });
 
-        // ── DTMF keypad (only while in active call) ──────────────────────────
-        if self.call_id.is_some() {
+        // ── Compose keypad (build up a number by clicking, not typing) ───────
+        if can_dial {
+            ui.add_space(8.0);
+            ui.group(|ui| {
+                for row in &[['1','2','3'], ['4','5','6'], ['7','8','9'], ['*','0','#']] {
+                    ui.horizontal(|ui| {
+                        for &digit in row {
+                            if ui.add_sized([40.0, 34.0], egui::Button::new(digit.to_string())).clicked() {
+                                self.call_target.push(digit);
+                            }
+                        }
+                    });
+                }
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    if ui.button("⌫").clicked() { self.call_target.pop(); }
+                    if ui.button("Clear").clicked() { self.call_target.clear(); }
+                });
+            });
+        }
+
+        // ── Focused-call controls: Mute, Transfer, DTMF ──────────────────────
+        if self.focused_call.is_some() {
+            ui.add_space(8.0);
+            ui.group(|ui| {
+                ui.horizontal(|ui| {
+                    let mute_label = if self.is_muted() { "Unmute" } else { "Mute" };
+                    if ui.button(mute_label).clicked() { self.do_mute_toggle(); }
+                    ui.add_space(4.0);
+                    let transfer_label = if self.showing_transfer { "Cancel transfer" } else { "Transfer" };
+                    if ui.button(transfer_label).clicked() {
+                        self.showing_transfer = !self.showing_transfer;
+                    }
+                });
+                if self.showing_transfer {
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        ui.add(egui::TextEdit::singleline(&mut self.transfer_target)
+                            .hint_text("sip:carol@example.com")
+                            .desired_width(f32::INFINITY));
+                        if ui.button("Send").clicked() {
+                            self.do_transfer();
+                        }
+                    });
+                }
+            });
+
             ui.add_space(8.0);
             ui.group(|ui| {
                 ui.label("DTMF:");
@@ -493,10 +1069,45 @@ impl DeelipApp {
             return;
         }
 
+        // ── Search / filter / export bar ─────────────────────────────────────
+        ui.horizontal(|ui| {
+            ui.label("Search:");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.history_search)
+                    .desired_width(140.0)
+                    .hint_text("name or URI"),
+            );
+            ui.label("Status:");
+            egui::ComboBox::from_id_source("history_status_filter")
+                .selected_text(status_filter_label(&self.history_status_filter))
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut self.history_status_filter, None, "All");
+                    ui.selectable_value(&mut self.history_status_filter, Some(CallStatus::Answered), "Answered");
+                    ui.selectable_value(&mut self.history_status_filter, Some(CallStatus::Missed), "Missed");
+                    ui.selectable_value(&mut self.history_status_filter, Some(CallStatus::Rejected), "Rejected");
+                    ui.selectable_value(&mut self.history_status_filter, Some(CallStatus::Failed), "Failed");
+                });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button("Export CSV…").clicked() {
+                    self.export_history_csv();
+                }
+            });
+        });
+        ui.add_space(4.0);
+
+        let query = self.history_search.to_lowercase();
+        let filtered: Vec<&CallRecord> = self.history.records.iter()
+            .filter(|r| self.history_status_filter.as_ref().is_none_or(|s| *s == r.status))
+            .filter(|r| query.is_empty() || r.remote_uri.to_lowercase().contains(&query))
+            .collect();
+
         let mut call_target: Option<String> = None;
 
         egui::ScrollArea::vertical().show(ui, |ui| {
-            for record in &self.history.records {
+            if filtered.is_empty() {
+                ui.label(RichText::new("No matching calls.").color(Color32::GRAY));
+            }
+            for record in filtered {
                 let (dir_icon, dir_color) = match record.direction {
                     CallDirection::Inbound  => ("←", Color32::LIGHT_BLUE),
                     CallDirection::Outbound => ("→", Color32::LIGHT_GREEN),
@@ -526,10 +1137,49 @@ impl DeelipApp {
         if let Some(target) = call_target {
             self.tab         = Tab::Dialer;
             self.call_target = target.clone();
-            let in_call = self.call_id.is_some() || self.pending_call.is_some();
-            if !in_call && self.reg_ok {
+            let can_dial = self.calls.is_empty() && self.pending_call.is_none() && self.pending_outbound.is_none();
+            if can_dial && self.reg_ok {
                 self.do_call(Some(target));
             }
+        }
+    }
+
+    /// Export the currently filtered history view (respecting the search box
+    /// and status dropdown) to a CSV file via a native save dialog.
+    fn export_history_csv(&self) {
+        let Some(path) = rfd::FileDialog::new()
+            .set_file_name("deelip_history.csv")
+            .add_filter("CSV", &["csv"])
+            .save_file()
+        else {
+            return;
+        };
+
+        let query = self.history_search.to_lowercase();
+        let filtered = self.history.records.iter()
+            .filter(|r| self.history_status_filter.as_ref().is_none_or(|s| *s == r.status))
+            .filter(|r| query.is_empty() || r.remote_uri.to_lowercase().contains(&query));
+
+        let mut csv = String::from("timestamp,direction,remote_uri,status,duration_secs\n");
+        for r in filtered {
+            let direction = match r.direction {
+                CallDirection::Inbound  => "inbound",
+                CallDirection::Outbound => "outbound",
+            };
+            let status = match r.status {
+                CallStatus::Answered => "answered",
+                CallStatus::Missed   => "missed",
+                CallStatus::Rejected => "rejected",
+                CallStatus::Failed   => "failed",
+            };
+            csv.push_str(&format!(
+                "{},{},{},{},{}\n",
+                r.timestamp, direction, csv_escape(&r.remote_uri), status, r.duration_secs,
+            ));
+        }
+
+        if let Err(e) = std::fs::write(&path, csv) {
+            tracing::error!("Failed to export history to {}: {e}", path.display());
         }
     }
 }
@@ -552,16 +1202,15 @@ impl DeelipApp {
         ui.add_space(4.0);
 
         let mut call_target: Option<String> = None;
+        let mut edit_idx:    Option<usize>   = None;
+        let mut delete_idx:  Option<usize>   = None;
 
         // Contact list
-        let results: Vec<(String, String)> = {
-            let q = &self.contact_search;
-            self.contacts
-                .search(q)
-                .iter()
-                .map(|c| (c.name.clone(), c.sip_uri.clone()))
-                .collect()
-        };
+        let results: Vec<(usize, String, String)> = self.contacts
+            .search(&self.contact_search)
+            .into_iter()
+            .map(|(i, c)| (i, c.name.clone(), c.sip_uri.clone()))
+            .collect();
 
         egui::ScrollArea::vertical()
             .max_height(200.0)
@@ -569,12 +1218,18 @@ impl DeelipApp {
                 if results.is_empty() {
                     ui.label(RichText::new("No contacts found.").color(Color32::GRAY));
                 }
-                for (name, uri) in &results {
+                for (idx, name, uri) in &results {
                     ui.horizontal(|ui| {
                         ui.label(name);
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui.small_button("Call").clicked() {
                                 call_target = Some(uri.clone());
+                            }
+                            if ui.small_button("Delete").clicked() {
+                                delete_idx = Some(*idx);
+                            }
+                            if ui.small_button("Edit").clicked() {
+                                edit_idx = Some(*idx);
                             }
                             ui.label(RichText::new(uri).color(Color32::GRAY));
                         });
@@ -583,11 +1238,27 @@ impl DeelipApp {
                 }
             });
 
+        if let Some(idx) = edit_idx {
+            self.editing_contact_idx = Some(idx);
+            self.new_contact = self.contacts.contacts[idx].clone();
+        }
+        if let Some(idx) = delete_idx {
+            self.contacts.contacts.remove(idx);
+            if self.editing_contact_idx == Some(idx) {
+                self.editing_contact_idx = None;
+                self.new_contact = Contact::default();
+            }
+            if let Some(path) = &self.contacts_path {
+                let _ = self.contacts.save(path);
+            }
+        }
+
         ui.add_space(8.0);
         ui.separator();
 
-        // Add contact form
-        ui.label(RichText::new("Add Contact").strong());
+        // Add/Edit contact form
+        let heading = if self.editing_contact_idx.is_some() { "Edit Contact" } else { "Add Contact" };
+        ui.label(RichText::new(heading).strong());
         ui.add_space(4.0);
         ui.horizontal(|ui| {
             ui.label("Name:");
@@ -599,24 +1270,328 @@ impl DeelipApp {
                 .desired_width(f32::INFINITY));
         });
         ui.add_space(4.0);
-        let can_add = !self.new_contact.name.is_empty() && !self.new_contact.sip_uri.is_empty();
-        if ui.add_enabled(can_add, egui::Button::new("Save Contact")).clicked() {
-            let c = std::mem::take(&mut self.new_contact);
-            self.contacts.contacts.push(c);
-            if let Some(path) = &self.contacts_path {
-                let _ = self.contacts.save(path);
+        ui.horizontal(|ui| {
+            let can_save = !self.new_contact.name.is_empty() && !self.new_contact.sip_uri.is_empty();
+            if ui.add_enabled(can_save, egui::Button::new("Save Contact")).clicked() {
+                let c = std::mem::take(&mut self.new_contact);
+                if let Some(idx) = self.editing_contact_idx.take() {
+                    self.contacts.contacts[idx] = c;
+                } else {
+                    self.contacts.contacts.push(c);
+                }
+                if let Some(path) = &self.contacts_path {
+                    let _ = self.contacts.save(path);
+                }
             }
-        }
+            if self.editing_contact_idx.is_some() && ui.button("Cancel").clicked() {
+                self.editing_contact_idx = None;
+                self.new_contact = Contact::default();
+            }
+        });
 
         if let Some(target) = call_target {
             self.tab         = Tab::Dialer;
             self.call_target = target.clone();
-            let in_call = self.call_id.is_some() || self.pending_call.is_some();
-            if !in_call && self.reg_ok {
+            let can_dial = self.calls.is_empty() && self.pending_call.is_none() && self.pending_outbound.is_none();
+            if can_dial && self.reg_ok {
                 self.do_call(Some(target));
             }
         }
     }
+}
+
+// ── Tab: Settings ─────────────────────────────────────────────────────────────
+
+impl DeelipApp {
+    fn show_settings(&mut self, ui: &mut Ui) {
+        if self.config.accounts.is_empty() {
+            self.config.accounts.push(deelip_config::SipAccount::default());
+        }
+        self.edit_account_idx = self.edit_account_idx.min(self.config.accounts.len() - 1);
+        let mut edited = false;
+
+        ui.add_space(8.0);
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            // ── Notifications & Ringtone (applies immediately) ──────────────
+            ui.label(RichText::new("Notifications & Ringtone").strong());
+            ui.group(|ui| {
+                if ui.checkbox(&mut self.config.notifications_enabled, "Desktop notification on incoming calls").changed() {
+                    self.save_config_quietly();
+                }
+                if ui.checkbox(&mut self.config.ringtone_enabled, "Ringtone (incoming) / ringback (outgoing)").changed() {
+                    self.save_config_quietly();
+                }
+                ui.label(RichText::new("Applies immediately — no restart needed.").color(Color32::GRAY).small());
+            });
+            ui.add_space(10.0);
+
+            // ── Account ───────────────────────────────────────────────────
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Accounts").strong());
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let can_remove = self.config.accounts.len() > 1;
+                    if ui.add_enabled(can_remove, egui::Button::new("Remove")).clicked() {
+                        self.config.accounts.remove(self.edit_account_idx);
+                        self.edit_account_idx = self.edit_account_idx.min(self.config.accounts.len() - 1);
+                        edited = true;
+                    }
+                    if ui.button("+ Add account").clicked() {
+                        self.config.accounts.push(SipAccount::default());
+                        self.edit_account_idx = self.config.accounts.len() - 1;
+                        edited = true;
+                    }
+                });
+            });
+            ui.add_space(4.0);
+            egui::ComboBox::from_id_source("settings_account_picker")
+                .selected_text(format!(
+                    "{}. {}",
+                    self.edit_account_idx + 1,
+                    account_label(&self.config.accounts[self.edit_account_idx]),
+                ))
+                .show_ui(ui, |ui| {
+                    for i in 0..self.config.accounts.len() {
+                        let label = format!("{}. {}", i + 1, account_label(&self.config.accounts[i]));
+                        ui.selectable_value(&mut self.edit_account_idx, i, label);
+                    }
+                });
+            ui.add_space(6.0);
+
+            ui.group(|ui| {
+                let account = &mut self.config.accounts[self.edit_account_idx];
+
+                edited |= ui.checkbox(&mut account.enabled, "Enabled (register this account on next restart)").changed();
+                ui.add_space(4.0);
+
+                egui::Grid::new("settings_account_grid")
+                    .num_columns(2)
+                    .spacing([8.0, 4.0])
+                    .show(ui, |ui| {
+                        ui.label("Username:");
+                        edited |= ui.add(egui::TextEdit::singleline(&mut account.username)
+                            .desired_width(f32::INFINITY)).changed();
+                        ui.end_row();
+
+                        ui.label("Password:");
+                        edited |= ui.add(egui::TextEdit::singleline(&mut account.password)
+                            .password(true)
+                            .desired_width(f32::INFINITY)).changed();
+                        ui.end_row();
+
+                        ui.label("Server:");
+                        edited |= ui.add(egui::TextEdit::singleline(&mut account.server)
+                            .desired_width(f32::INFINITY)).changed();
+                        ui.end_row();
+
+                        ui.label("Port:");
+                        edited |= ui.add(egui::DragValue::new(&mut account.port)).changed();
+                        ui.end_row();
+
+                        ui.label("Display name:");
+                        let mut display_name = account.display_name.clone().unwrap_or_default();
+                        if ui.add(egui::TextEdit::singleline(&mut display_name)
+                            .desired_width(f32::INFINITY)).changed()
+                        {
+                            account.display_name = if display_name.is_empty() { None } else { Some(display_name) };
+                            edited = true;
+                        }
+                        ui.end_row();
+
+                        ui.label("Transport:");
+                        egui::ComboBox::from_id_source("settings_transport")
+                            .selected_text(match account.transport {
+                                TransportProtocol::Udp => "UDP",
+                                TransportProtocol::Tcp => "TCP",
+                                TransportProtocol::Tls => "TLS",
+                            })
+                            .show_ui(ui, |ui| {
+                                edited |= ui.selectable_value(&mut account.transport, TransportProtocol::Udp, "UDP").changed();
+                                edited |= ui.selectable_value(&mut account.transport, TransportProtocol::Tcp, "TCP").changed();
+                                edited |= ui.selectable_value(&mut account.transport, TransportProtocol::Tls, "TLS").changed();
+                            });
+                        ui.end_row();
+                    });
+
+                if account.transport == TransportProtocol::Tls {
+                    edited |= ui.checkbox(
+                        &mut account.tls_insecure_skip_verify,
+                        "Skip TLS certificate verification (self-signed/home-lab PBXes)",
+                    ).changed();
+                    if account.tls_insecure_skip_verify {
+                        ui.label(RichText::new(
+                            "Warning: certificate verification is disabled — traffic can be intercepted."
+                        ).color(Color32::from_rgb(255, 165, 0)));
+                    }
+                }
+
+                ui.add_space(6.0);
+                ui.label("Forward if unanswered (optional):");
+                ui.horizontal(|ui| {
+                    edited |= optional_text_field(ui, &mut account.no_answer_forward, "sip:voicemail@example.com");
+                });
+                ui.horizontal(|ui| {
+                    ui.label("after (seconds):");
+                    edited |= ui.add(egui::DragValue::new(&mut account.no_answer_timeout_secs).range(1..=300)).changed();
+                });
+            });
+
+            if !self.config.accounts.iter().any(|a| a.enabled) {
+                ui.label(RichText::new(
+                    "Warning: no accounts are enabled — DeeLip won't be able to register on restart."
+                ).color(Color32::from_rgb(255, 165, 0)));
+            }
+            ui.label(RichText::new(
+                "Each enabled account registers independently on its own local SIP port \
+                 (base port below, incrementing by one per additional account)."
+            ).color(Color32::GRAY).small());
+
+            ui.add_space(10.0);
+
+            // ── Audio ─────────────────────────────────────────────────────
+            ui.label(RichText::new("Audio").strong());
+            ui.group(|ui| {
+                let input_names  = list_device_names(true);
+                let output_names = list_device_names(false);
+
+                egui::Grid::new("settings_audio_grid")
+                    .num_columns(2)
+                    .spacing([8.0, 4.0])
+                    .show(ui, |ui| {
+                        ui.label("Input device:");
+                        let selected = self.config.audio.input_device.clone()
+                            .unwrap_or_else(|| "Default".into());
+                        egui::ComboBox::from_id_source("settings_input_device")
+                            .selected_text(selected)
+                            .show_ui(ui, |ui| {
+                                if ui.selectable_label(self.config.audio.input_device.is_none(), "Default").clicked() {
+                                    self.config.audio.input_device = None;
+                                    edited = true;
+                                }
+                                for name in &input_names {
+                                    let is_sel = self.config.audio.input_device.as_deref() == Some(name.as_str());
+                                    if ui.selectable_label(is_sel, name).clicked() {
+                                        self.config.audio.input_device = Some(name.clone());
+                                        edited = true;
+                                    }
+                                }
+                            });
+                        ui.end_row();
+
+                        ui.label("Output device:");
+                        let selected = self.config.audio.output_device.clone()
+                            .unwrap_or_else(|| "Default".into());
+                        egui::ComboBox::from_id_source("settings_output_device")
+                            .selected_text(selected)
+                            .show_ui(ui, |ui| {
+                                if ui.selectable_label(self.config.audio.output_device.is_none(), "Default").clicked() {
+                                    self.config.audio.output_device = None;
+                                    edited = true;
+                                }
+                                for name in &output_names {
+                                    let is_sel = self.config.audio.output_device.as_deref() == Some(name.as_str());
+                                    if ui.selectable_label(is_sel, name).clicked() {
+                                        self.config.audio.output_device = Some(name.clone());
+                                        edited = true;
+                                    }
+                                }
+                            });
+                        ui.end_row();
+                    });
+
+                edited |= ui.checkbox(&mut self.config.audio.echo_cancellation, "Echo cancellation").changed();
+            });
+
+            ui.add_space(10.0);
+
+            // ── Network ───────────────────────────────────────────────────
+            ui.label(RichText::new("Network").strong());
+            ui.group(|ui| {
+                egui::Grid::new("settings_network_grid")
+                    .num_columns(2)
+                    .spacing([8.0, 4.0])
+                    .show(ui, |ui| {
+                        ui.label("Local SIP port:");
+                        edited |= ui.add(egui::DragValue::new(&mut self.config.local_sip_port)).changed();
+                        ui.end_row();
+
+                        ui.label("STUN server:");
+                        edited |= optional_text_field(ui, &mut self.config.stun_server, "e.g. stun.l.google.com:19302");
+                        ui.end_row();
+
+                        ui.label("TURN server:");
+                        edited |= optional_text_field(ui, &mut self.config.turn_server, "e.g. turn.example.com:3478");
+                        ui.end_row();
+
+                        ui.label("TURN username:");
+                        edited |= optional_text_field(ui, &mut self.config.turn_username, "");
+                        ui.end_row();
+
+                        ui.label("TURN password:");
+                        edited |= optional_password_field(ui, &mut self.config.turn_password);
+                        ui.end_row();
+                    });
+            });
+
+            ui.add_space(10.0);
+
+            if ui.button("Save").clicked() {
+                match self.config.save(&self.config_path) {
+                    Ok(())   => self.settings_saved_notice = true,
+                    Err(err) => {
+                        self.settings_saved_notice = false;
+                        tracing::error!("Failed to save config: {err}");
+                    }
+                }
+            }
+            if self.settings_saved_notice {
+                ui.label(RichText::new("Saved — restart DeeLip to apply changes.").color(Color32::LIGHT_GREEN));
+            }
+        });
+
+        if edited {
+            self.settings_saved_notice = false;
+        }
+    }
+}
+
+/// List available cpal device names (input or output), for populating the
+/// Settings device pickers.
+fn list_device_names(input: bool) -> Vec<String> {
+    use cpal::traits::{DeviceTrait, HostTrait};
+    let host = cpal::default_host();
+    let devices = if input { host.input_devices() } else { host.output_devices() };
+    match devices {
+        Ok(devices) => devices.filter_map(|d| d.name().ok()).collect(),
+        Err(_)      => Vec::new(),
+    }
+}
+
+/// Text field bound to an `Option<String>` — an empty field maps to `None`.
+fn optional_text_field(ui: &mut Ui, value: &mut Option<String>, hint: &str) -> bool {
+    let mut text = value.clone().unwrap_or_default();
+    let changed = ui.add(
+        egui::TextEdit::singleline(&mut text)
+            .hint_text(hint)
+            .desired_width(f32::INFINITY),
+    ).changed();
+    if changed {
+        *value = if text.is_empty() { None } else { Some(text) };
+    }
+    changed
+}
+
+/// Masked text field bound to an `Option<String>` — an empty field maps to `None`.
+fn optional_password_field(ui: &mut Ui, value: &mut Option<String>) -> bool {
+    let mut text = value.clone().unwrap_or_default();
+    let changed = ui.add(
+        egui::TextEdit::singleline(&mut text)
+            .password(true)
+            .desired_width(f32::INFINITY),
+    ).changed();
+    if changed {
+        *value = if text.is_empty() { None } else { Some(text) };
+    }
+    changed
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -633,6 +1608,33 @@ fn status_bar(ui: &mut Ui, text: &str, ok: bool, held: bool) {
         ui.label(RichText::new("●").color(color));
         ui.label(text);
     });
+}
+
+/// Display label for an account picker — `display_name` if set, else `user@server`.
+fn account_label(account: &SipAccount) -> String {
+    match account.display_name.as_deref() {
+        Some(name) if !name.is_empty() => name.to_string(),
+        _ => format!("{}@{}", account.username, account.server),
+    }
+}
+
+fn status_filter_label(filter: &Option<CallStatus>) -> &'static str {
+    match filter {
+        None                        => "All",
+        Some(CallStatus::Answered) => "Answered",
+        Some(CallStatus::Missed)   => "Missed",
+        Some(CallStatus::Rejected) => "Rejected",
+        Some(CallStatus::Failed)   => "Failed",
+    }
+}
+
+/// Quote a CSV field if it contains a comma, quote, or newline.
+fn csv_escape(s: &str) -> String {
+    if s.contains(',') || s.contains('"') || s.contains('\n') {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s.to_string()
+    }
 }
 
 /// Shorten a SIP URI for display: `sip:alice@example.com` → `alice@example.com`.

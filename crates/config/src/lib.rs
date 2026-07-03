@@ -31,10 +31,18 @@ pub struct SipAccount {
     /// Skip TLS certificate verification (self-signed/home-lab PBXes). Off by default.
     #[serde(default)]
     pub tls_insecure_skip_verify: bool,
+    /// If set, an incoming call on this account that rings unanswered for
+    /// `no_answer_timeout_secs` is redirected here (302 Moved Temporarily)
+    /// instead of continuing to ring indefinitely. Empty/unset disables it.
+    #[serde(default)]
+    pub no_answer_forward: Option<String>,
+    #[serde(default = "default_no_answer_timeout")]
+    pub no_answer_timeout_secs: u32,
 }
 
 fn default_sip_port() -> u16 { 5060 }
 fn default_true() -> bool { true }
+fn default_no_answer_timeout() -> u32 { 20 }
 
 impl Default for SipAccount {
     fn default() -> Self {
@@ -47,6 +55,8 @@ impl Default for SipAccount {
             transport:    TransportProtocol::Udp,
             enabled:      true,
             tls_insecure_skip_verify: false,
+            no_answer_forward: None,
+            no_answer_timeout_secs: default_no_answer_timeout(),
         }
     }
 }
@@ -55,10 +65,16 @@ impl Default for SipAccount {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AudioConfig {
+    /// cpal device name to capture from; `None` uses the system default.
+    /// Falls back to the default with a warning if the named device isn't found.
     pub input_device:  Option<String>,
+    /// cpal device name to play back to; `None` uses the system default.
+    /// Falls back to the default with a warning if the named device isn't found.
     pub output_device: Option<String>,
+    /// Not currently used — audio is always captured/played at 8 kHz.
     #[serde(default = "default_sample_rate")]
     pub sample_rate: u32,
+    /// Not currently used — RTP frames are always 20ms.
     #[serde(default = "default_frame_ms")]
     pub frame_size_ms: u32,
     /// Acoustic echo cancellation. Off by default — only useful when using
@@ -87,10 +103,15 @@ impl Default for AudioConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
+    /// All configured accounts; every one with `enabled = true` is registered
+    /// simultaneously on its own independent SIP stack.
     #[serde(default)]
     pub accounts: Vec<SipAccount>,
     #[serde(default)]
     pub audio: AudioConfig,
+    /// Local port for the first enabled account's SIP stack; each
+    /// subsequent enabled account binds `local_sip_port + N` (one UDP/TCP
+    /// bind can't serve two independent stacks at once).
     #[serde(default = "default_sip_port")]
     pub local_sip_port: u16,
     /// Optional STUN server for NAT traversal, e.g. "stun.l.google.com:19302".
@@ -101,6 +122,16 @@ pub struct AppConfig {
     pub turn_server:   Option<String>,
     pub turn_username: Option<String>,
     pub turn_password: Option<String>,
+
+    /// UI appearance/behavior toggles below — unlike accounts/audio/network,
+    /// these apply immediately (no restart needed) since they don't touch
+    /// any running SipStack/MediaEngine state.
+    #[serde(default = "default_true")]
+    pub dark_mode: bool,
+    #[serde(default = "default_true")]
+    pub notifications_enabled: bool,
+    #[serde(default = "default_true")]
+    pub ringtone_enabled: bool,
 }
 
 impl Default for AppConfig {
@@ -113,6 +144,9 @@ impl Default for AppConfig {
             turn_server:    None,
             turn_username:  None,
             turn_password:  None,
+            dark_mode:              true,
+            notifications_enabled: true,
+            ringtone_enabled:      true,
         }
     }
 }
@@ -180,15 +214,14 @@ impl ContactBook {
         Ok(deelip_dir()?.join("contacts.json"))
     }
 
-    /// Return contacts whose name or URI contains `query` (case-insensitive).
-    pub fn search<'a>(&'a self, query: &str) -> Vec<&'a Contact> {
-        if query.is_empty() {
-            return self.contacts.iter().collect();
-        }
+    /// Contacts whose name or URI contains `query` (case-insensitive), paired
+    /// with their index in `self.contacts` so callers can edit/delete them.
+    pub fn search<'a>(&'a self, query: &str) -> Vec<(usize, &'a Contact)> {
         let q = query.to_lowercase();
         self.contacts
             .iter()
-            .filter(|c| c.name.to_lowercase().contains(&q) || c.sip_uri.to_lowercase().contains(&q))
+            .enumerate()
+            .filter(|(_, c)| q.is_empty() || c.name.to_lowercase().contains(&q) || c.sip_uri.to_lowercase().contains(&q))
             .collect()
     }
 }

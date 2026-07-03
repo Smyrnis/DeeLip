@@ -19,6 +19,11 @@ pub enum SipEvent {
     RemoteHeld { call_id: String },
     /// Remote side resumed us via re-INVITE.
     RemoteResumed { call_id: String },
+    /// Our blind-transfer REFER was accepted (2xx) — the far end will
+    /// typically send BYE on this dialog once the transferred call succeeds.
+    TransferAccepted { call_id: String },
+    /// Our blind-transfer REFER was rejected.
+    TransferFailed { call_id: String, reason: String },
 }
 
 /// Commands sent from the application into the SIP stack.
@@ -32,4 +37,8 @@ pub enum SipCommand {
     HoldCall { call_id: String, local_sdp: String },
     /// Send a resume re-INVITE (a=sendrecv).
     ResumeCall { call_id: String, local_sdp: String },
+    /// Blind-transfer an active (Confirmed) call to `target` (a full SIP URI) via REFER.
+    BlindTransfer { call_id: String, target: String },
+    /// Redirect a not-yet-answered incoming call via 302 Moved Temporarily.
+    RedirectCall { call_id: String, target: String },
 }
