@@ -336,9 +336,7 @@ impl DeelipApp {
         let is_missed = status == CallStatus::Missed;
         let record = CallRecord { remote_uri, direction, timestamp: start_time, duration_secs: duration, status };
         self.history.push(record);
-        if let Some(path) = &self.history_path {
-            let _ = self.history.save(path);
-        }
+        let _ = self.history.save(&self.db);
         if is_missed {
             self.unseen_missed_calls += 1;
             self.sync_tray_badge();

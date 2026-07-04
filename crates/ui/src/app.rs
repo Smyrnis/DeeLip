@@ -1,7 +1,6 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
 
-use deelip_config::{AppConfig, CallDirection, CallHistory, CallStatus, Contact, ContactBook, SipAccount};
+use deelip_config::{AppConfig, CallDirection, CallHistory, CallStatus, Contact, ContactBook, Db, SipAccount};
 use deelip_media::MediaEngine;
 use deelip_sip::{AudioCodec, MwiState, PresenceState, SipHandle, SrtpParams};
 use tokio::runtime::Handle;
@@ -90,9 +89,11 @@ pub struct DeelipApp {
     pub(crate) last_notified_call: Option<String>,
 
     /// Live-edited settings draft, shown/edited in the Settings tab and
-    /// saved to `config_path` on demand — takes effect on next restart.
+    /// saved to `db` on demand — takes effect on next restart.
     pub(crate) config: AppConfig,
-    pub(crate) config_path: PathBuf,
+    /// Handle to `~/.config/deelip/deelip.db` -- the single SQLite database
+    /// backing `config`/`contacts`/`history` alike (see `deelip_config::db`).
+    pub(crate) db: Db,
     /// Set after a successful Settings save; cleared on the next edit.
     pub(crate) settings_saved_notice: bool,
     /// Index into `config.accounts` currently shown in the Settings tab's
@@ -135,7 +136,6 @@ pub struct DeelipApp {
 
     // History
     pub(crate) history:      CallHistory,
-    pub(crate) history_path: Option<PathBuf>,
     pub(crate) history_search: String,
     /// `None` = show every status.
     pub(crate) history_status_filter: Option<CallStatus>,
@@ -145,7 +145,6 @@ pub struct DeelipApp {
 
     // Contacts
     pub(crate) contacts:       ContactBook,
-    pub(crate) contacts_path:  Option<PathBuf>,
     pub(crate) contact_search: String,
     pub(crate) new_contact:    Contact,
     /// Index into `contacts.contacts` currently loaded into `new_contact`
@@ -237,7 +236,7 @@ impl DeelipApp {
         accounts: Vec<(SipAccount, SipHandle)>,
         rt: Handle,
         config: AppConfig,
-        config_path: PathBuf,
+        db: Db,
         tray: Option<(CtxSlot, QuitState, tray::BadgeSender)>,
     ) -> Self {
         let accounts = accounts.into_iter().map(|(account, handle)| AccountState {
@@ -249,15 +248,8 @@ impl DeelipApp {
             mwi: None,
         }).collect();
 
-        let history_path = CallHistory::default_path().ok();
-        let history = history_path.as_deref()
-            .and_then(|p| CallHistory::load(p).ok())
-            .unwrap_or_default();
-
-        let contacts_path = ContactBook::default_path().ok();
-        let contacts = contacts_path.as_deref()
-            .and_then(|p| ContactBook::load(p).ok())
-            .unwrap_or_default();
+        let history = CallHistory::load(&db).unwrap_or_default();
+        let contacts = ContactBook::load(&db).unwrap_or_default();
 
         let hotkeys = if config.global_hotkeys_enabled {
             match Hotkeys::spawn(&config.hotkey_answer, &config.hotkey_hangup, &config.hotkey_mute) {
@@ -295,7 +287,7 @@ impl DeelipApp {
             was_ringing:         false,
             last_notified_call:  None,
             config,
-            config_path,
+            db,
             settings_saved_notice: false,
             edit_account_idx: 0,
             audio_device_cache: None,
@@ -306,12 +298,10 @@ impl DeelipApp {
             unseen_missed_calls: 0,
             hotkeys,
             history,
-            history_path,
             history_search:         String::new(),
             history_status_filter:  None,
             blocklist_input:        String::new(),
             contacts,
-            contacts_path,
             contact_search:   String::new(),
             new_contact:      Contact::default(),
             editing_contact_idx: None,

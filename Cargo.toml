@@ -51,6 +51,7 @@ gsm-sys             = "0.0.2"
 oxideav-ilbc        = "0.0.7"
 oxideav-core        = "0.1"
 global-hotkey       = "0.8"
+rusqlite            = { version = "0.32", features = ["bundled"] }
 
 deelip-config = { path = "crates/config" }
 deelip-sip    = { path = "crates/sip-core" }

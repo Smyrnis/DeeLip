@@ -413,7 +413,7 @@ impl DeelipApp {
             ui.add_space(10.0);
 
             if ui.button("Save").clicked() {
-                match self.config.save(&self.config_path) {
+                match self.config.save(&self.db) {
                     Ok(())   => self.settings_saved_notice = true,
                     Err(err) => {
                         self.settings_saved_notice = false;

@@ -56,7 +56,7 @@ impl DeelipApp {
     /// apply" notice — for the appearance/notification toggles that apply
     /// live and don't go through the explicit Save button.
     pub(crate) fn save_config_quietly(&self) {
-        if let Err(e) = self.config.save(&self.config_path) {
+        if let Err(e) = self.config.save(&self.db) {
             tracing::error!("Failed to save config: {e}");
         }
     }

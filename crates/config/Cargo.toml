@@ -10,3 +10,4 @@ toml       = { workspace = true }
 anyhow     = { workspace = true }
 thiserror  = { workspace = true }
 dirs       = { workspace = true }
+rusqlite   = { workspace = true }

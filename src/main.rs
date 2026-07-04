@@ -2,7 +2,7 @@ use anyhow::Context;
 use tracing::warn;
 use tracing_subscriber::EnvFilter;
 
-use deelip_config::{default_config_path, AppConfig};
+use deelip_config::{AppConfig, Db};
 use deelip_sip::SipStack;
 use deelip_ui::DeelipApp;
 
@@ -20,21 +20,22 @@ fn main() -> anyhow::Result<()> {
     tracing::info!("DeeLip v{}", env!("CARGO_PKG_VERSION"));
 
     // ── Config ────────────────────────────────────────────────────────────────
-    let config_path = default_config_path().context("Config path")?;
-    let config = if config_path.exists() {
-        AppConfig::load(&config_path).context("Loading config")?
-    } else {
-        warn!("No config at {}", config_path.display());
-        let default = AppConfig::default();
-        default.save(&config_path)?;
-        tracing::info!("Default config written to {}", config_path.display());
-        tracing::info!("Edit it with your SIP credentials and re-run.");
-        return Ok(());
-    };
+    // `Db::open_default()` creates `~/.config/deelip/deelip.db` on first run,
+    // one-time-importing any existing `config.toml`/`contacts.json`/
+    // `history.json` into it (left on disk untouched), or seeding a single
+    // default account if there's no legacy data to import either.
+    let db = Db::open_default().context("Opening database")?;
+    let config = AppConfig::load(&db).context("Loading config")?;
 
     let enabled_accounts: Vec<_> = config.accounts.iter().filter(|a| a.enabled).cloned().collect();
-    if enabled_accounts.is_empty() {
-        anyhow::bail!("No enabled accounts in config");
+    let had_enabled_accounts = !enabled_accounts.is_empty();
+    if !had_enabled_accounts {
+        // No hand-editable config file to point the user at anymore -- the
+        // Settings tab is already a full account editor, so launch the GUI
+        // instead of exiting, same as today's zero-accounts-configured state
+        // (`refresh_idle_status`'s "No accounts configured" branch) already
+        // renders correctly.
+        warn!("No enabled accounts configured — launching DeeLip so you can add one in Settings");
     }
 
     // ── Tokio runtime (background) ────────────────────────────────────────────
@@ -76,7 +77,7 @@ fn main() -> anyhow::Result<()> {
             Err(e) => warn!("Account {username} failed to start ({e}), skipping"),
         }
     }
-    if account_handles.is_empty() {
+    if account_handles.is_empty() && had_enabled_accounts {
         anyhow::bail!("All configured accounts failed to start");
     }
 
@@ -123,7 +124,7 @@ fn main() -> anyhow::Result<()> {
     std::env::remove_var("WAYLAND_DISPLAY");
 
     let rt_handle = rt.handle().clone();
-    let app       = DeelipApp::new(account_handles, rt_handle, config, config_path, tray);
+    let app       = DeelipApp::new(account_handles, rt_handle, config, db, tray);
 
     let native_opts = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()

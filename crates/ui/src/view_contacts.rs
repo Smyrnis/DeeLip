@@ -90,9 +90,7 @@ impl DeelipApp {
                 self.editing_contact_idx = None;
                 self.new_contact = Contact::default();
             }
-            if let Some(path) = &self.contacts_path {
-                let _ = self.contacts.save(path);
-            }
+            let _ = self.contacts.save(&self.db);
         }
 
         ui.add_space(8.0);
@@ -151,9 +149,7 @@ impl DeelipApp {
                     self.contacts.contacts.push(c.clone());
                     self.subscribe_contact_presence(&c);
                 }
-                if let Some(path) = &self.contacts_path {
-                    let _ = self.contacts.save(path);
-                }
+                let _ = self.contacts.save(&self.db);
             }
             if self.editing_contact_idx.is_some() && ui.button("Cancel").clicked() {
                 self.editing_contact_idx = None;
@@ -260,9 +256,7 @@ impl DeelipApp {
         }
 
         self.contacts.contacts.extend(imported);
-        if let Some(path) = &self.contacts_path {
-            let _ = self.contacts.save(path);
-        }
+                let _ = self.contacts.save(&self.db);
     }
 }
 
