@@ -250,6 +250,20 @@ impl SipStack {
         }
     }
 
+    /// `;transport=...` URI parameter for our own `Contact:` header — empty
+    /// for UDP (the default the far end assumes with no parameter at all),
+    /// explicit otherwise so a peer sending a fresh request back to us
+    /// (e.g. an Asterisk-originated INVITE) knows to reuse/re-establish
+    /// TCP/TLS rather than defaulting to UDP on our registered port, which
+    /// silently goes nowhere since we never bind a UDP listener there.
+    fn contact_transport_param(&self) -> &'static str {
+        match self.account.transport {
+            TransportProtocol::Udp => "",
+            TransportProtocol::Tcp => ";transport=tcp",
+            TransportProtocol::Tls => ";transport=tls",
+        }
+    }
+
     // ── Message dispatcher ────────────────────────────────────────────────────
 
     async fn dispatch(&mut self, msg: SipMessage, from: SocketAddr) {
@@ -326,6 +340,7 @@ impl SipStack {
         let from_tag   = &self.reg_from_tag;
         let display    = self.account.display_name.as_deref().unwrap_or(username);
         let via_proto  = self.via_proto();
+        let contact_transport = self.contact_transport_param();
 
         let mut msg = format!(
             "REGISTER sip:{server} SIP/2.0\r\n\
@@ -335,7 +350,7 @@ impl SipStack {
              From: \"{display}\" <sip:{username}@{server}>;tag={from_tag}\r\n\
              Call-ID: {call_id}\r\n\
              CSeq: {cseq} REGISTER\r\n\
-             Contact: <sip:{username}@{adv_ip}:{local_port}>\r\n\
+             Contact: <sip:{username}@{adv_ip}:{local_port}{contact_transport}>\r\n\
              Expires: {REG_EXPIRES}\r\n\
              User-Agent: DeeLip/0.1.0\r\n"
         );
@@ -426,6 +441,7 @@ impl SipStack {
         let display    = self.account.display_name.as_deref().unwrap_or(username);
         let body_len   = sdp.len();
         let via_proto  = self.via_proto();
+        let contact_transport = self.contact_transport_param();
 
         let mut msg = format!(
             "INVITE {to} SIP/2.0\r\n\
@@ -435,7 +451,7 @@ impl SipStack {
              From: \"{display}\" <sip:{username}@{server}>;tag={from_tag}\r\n\
              Call-ID: {call_id}\r\n\
              CSeq: {cseq} INVITE\r\n\
-             Contact: <sip:{username}@{adv_ip}:{local_port}>\r\n\
+             Contact: <sip:{username}@{adv_ip}:{local_port}{contact_transport}>\r\n\
              Content-Type: application/sdp\r\n\
              User-Agent: DeeLip/0.1.0\r\n"
         );
@@ -475,6 +491,7 @@ impl SipStack {
         dialog.hold_pending = Some(hold);
         dialog.local_sdp    = Some(local_sdp.to_string());
         let via_proto = self.via_proto();
+        let contact_transport = self.contact_transport_param();
 
         let reinvite = format!(
             "INVITE {to_uri} SIP/2.0\r\n\
@@ -484,7 +501,7 @@ impl SipStack {
              From: \"{display}\" <sip:{username}@{server}>;tag={from_tag}\r\n\
              Call-ID: {call_id_s}\r\n\
              CSeq: {cseq} INVITE\r\n\
-             Contact: <sip:{username}@{adv_ip}:{local_port}>\r\n\
+             Contact: <sip:{username}@{adv_ip}:{local_port}{contact_transport}>\r\n\
              Content-Type: application/sdp\r\n\
              User-Agent: DeeLip/0.1.0\r\n\
              Content-Length: {body_len}\r\n\r\n\
@@ -526,6 +543,7 @@ impl SipStack {
             .and_then(|s| s.parse().ok())
             .unwrap_or(self.server_addr);
         let via_proto = self.via_proto();
+        let contact_transport = self.contact_transport_param();
 
         let refer = format!(
             "REFER {to_uri} SIP/2.0\r\n\
@@ -535,7 +553,7 @@ impl SipStack {
              From: \"{display}\" <sip:{username}@{server}>;tag={from_tag}\r\n\
              Call-ID: {call_id_s}\r\n\
              CSeq: {cseq} REFER\r\n\
-             Contact: <sip:{username}@{adv_ip}:{local_port}>\r\n\
+             Contact: <sip:{username}@{adv_ip}:{local_port}{contact_transport}>\r\n\
              Refer-To: <{target}>\r\n\
              User-Agent: DeeLip/0.1.0\r\n\
              Content-Length: 0\r\n\r\n"
@@ -586,6 +604,7 @@ impl SipStack {
             .and_then(|s| s.parse().ok())
             .unwrap_or(self.server_addr);
         let via_proto = self.via_proto();
+        let contact_transport = self.contact_transport_param();
 
         let refer = format!(
             "REFER {to_uri} SIP/2.0\r\n\
@@ -595,7 +614,7 @@ impl SipStack {
              From: \"{display}\" <sip:{username}@{server}>;tag={from_tag}\r\n\
              Call-ID: {call_id_s}\r\n\
              CSeq: {cseq} REFER\r\n\
-             Contact: <sip:{username}@{adv_ip}:{local_port}>\r\n\
+             Contact: <sip:{username}@{adv_ip}:{local_port}{contact_transport}>\r\n\
              Refer-To: <{refer_to}>\r\n\
              User-Agent: DeeLip/0.1.0\r\n\
              Content-Length: 0\r\n\r\n"
@@ -720,6 +739,7 @@ impl SipStack {
         let local_port = self.local_port;
         let display    = self.account.display_name.as_deref().unwrap_or(username);
         let via_proto  = self.via_proto();
+        let contact_transport = self.contact_transport_param();
 
         let mut msg = format!(
             "SUBSCRIBE {target_uri} SIP/2.0\r\n\
@@ -729,7 +749,7 @@ impl SipStack {
              From: \"{display}\" <sip:{username}@{server}>;tag={from_tag}\r\n\
              Call-ID: {call_id}\r\n\
              CSeq: {cseq} SUBSCRIBE\r\n\
-             Contact: <sip:{username}@{adv_ip}:{local_port}>\r\n\
+             Contact: <sip:{username}@{adv_ip}:{local_port}{contact_transport}>\r\n\
              Event: presence\r\n\
              Accept: application/pidf+xml\r\n\
              Expires: {expires}\r\n\
@@ -966,7 +986,7 @@ impl SipStack {
                 c if c >= 300 => Act::Failed {
                     call_id: call_id.clone(),
                     code:    c,
-                    reason:  msg.header("Reason").unwrap_or("").to_string(),
+                    reason:  msg.reason_phrase().unwrap_or("").to_string(),
                 },
                 _ => Act::Nothing,
             }
@@ -1043,6 +1063,7 @@ impl SipStack {
         let to_tag_part = to_tag.map(|t| format!(";tag={t}")).unwrap_or_default();
         let display     = self.account.display_name.as_deref().unwrap_or(username);
         let via_proto   = self.via_proto();
+        let contact_transport = self.contact_transport_param();
 
         format!(
             "ACK {to_uri} SIP/2.0\r\n\
@@ -1052,7 +1073,7 @@ impl SipStack {
              From: \"{display}\" <sip:{username}@{server}>;tag={from_tag}\r\n\
              Call-ID: {call_id}\r\n\
              CSeq: {cseq} ACK\r\n\
-             Contact: <sip:{username}@{adv_ip}:{local_port}>\r\n\
+             Contact: <sip:{username}@{adv_ip}:{local_port}{contact_transport}>\r\n\
              Content-Length: 0\r\n\r\n"
         )
     }
@@ -1116,6 +1137,7 @@ impl SipStack {
 
     async fn accept_call(&mut self, call_id: &str, local_sdp: &str) {
         let via_proto = self.via_proto();
+        let contact_transport = self.contact_transport_param();
         let dialog = match self.dialogs.get_mut(call_id) {
             Some(d) => d,
             None    => return,
@@ -1152,7 +1174,7 @@ impl SipStack {
              From: <{remote_uri}>{from_tag_part}\r\n\
              Call-ID: {call_id_str}\r\n\
              CSeq: {cseq_n} INVITE\r\n\
-             Contact: <sip:{username}@{adv_ip}:{local_port}>\r\n\
+             Contact: <sip:{username}@{adv_ip}:{local_port}{contact_transport}>\r\n\
              Content-Type: application/sdp\r\n\
              User-Agent: DeeLip/0.1.0\r\n\
              Content-Length: {body_len}\r\n\r\n\
@@ -1221,6 +1243,7 @@ impl SipStack {
             .and_then(|s| s.parse().ok())
             .unwrap_or(self.server_addr);
         let via_proto = self.via_proto();
+        let contact_transport = self.contact_transport_param();
 
         let bye = format!(
             "BYE {to_uri} SIP/2.0\r\n\
@@ -1230,7 +1253,7 @@ impl SipStack {
              From: \"{display}\" <sip:{username}@{server}>;tag={from_tag}\r\n\
              Call-ID: {call_id_s}\r\n\
              CSeq: {cseq} BYE\r\n\
-             Contact: <sip:{username}@{adv_ip}:{local_port}>\r\n\
+             Contact: <sip:{username}@{adv_ip}:{local_port}{contact_transport}>\r\n\
              User-Agent: DeeLip/0.1.0\r\n\
              Content-Length: 0\r\n\r\n"
         );

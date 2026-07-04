@@ -541,7 +541,13 @@ impl DeelipApp {
             };
             let slot = self.remove_call(idx);
             self.record_history(slot.remote_uri, slot.direction, slot.start_time, status);
-            self.refresh_call_status();
+            // Only recompute the idle/in-call status text on a clean end —
+            // on failure, `status_line` above already holds the message the
+            // user needs to see, and `refresh_call_status()` would instantly
+            // clobber it back to "Ready" before it's ever rendered.
+            if failure.is_none() {
+                self.refresh_call_status();
+            }
             return;
         }
         if let Some(out) = self.pending_outbound.take() {
@@ -549,7 +555,9 @@ impl DeelipApp {
                 self.status_line = format!("Call failed ({code}): {reason}");
             }
             self.record_history(out.remote_uri, CallDirection::Outbound, out.start_time, CallStatus::Failed);
-            self.refresh_call_status();
+            if failure.is_none() {
+                self.refresh_call_status();
+            }
         }
     }
 
@@ -909,16 +917,21 @@ impl DeelipApp {
         let turn_config = self.turn_config();
 
         let ice_gathered = if attempt_ice { self.try_gather_ice(true) } else { None };
-        let (rtp_ip, rtp_port, ice_attrs) = match &ice_gathered {
-            Some(g) => (
-                g.default_addr.ip().to_string(), g.default_addr.port(),
-                Some(IceAttrs { ufrag: g.local_ufrag.clone(), pwd: g.local_pwd.clone(), candidates: g.candidates.clone() }),
-            ),
-            None => {
-                let (ip, port) = Self::resolve_rtp_endpoint(&rt, turn_config, &advertised_ip, local_rtp, &mut relay);
-                (ip, port, None)
-            }
-        };
+        let ice_attrs = ice_gathered.as_ref().map(|g| {
+            IceAttrs { ufrag: g.local_ufrag.clone(), pwd: g.local_pwd.clone(), candidates: g.candidates.clone() }
+        });
+        // The plain c=/m= fallback address is deliberately *never* the ICE
+        // agent's own gathered candidate socket — that socket only becomes
+        // usable via `finish_ice_connect` once the remote's answer confirms
+        // it also speaks ICE, and if it doesn't (the common case against a
+        // plain SIP/PBX peer), `finish_ice_connect` drops the ICE agent
+        // (and that socket) entirely. Advertising it here and then binding
+        // an unrelated `local_rtp` in `start_media` would leave the far end
+        // sending RTP to a socket nothing is listening on — one-way-silent
+        // audio on every ICE-enabled call to a non-ICE peer. Always
+        // resolving the fallback through the same STUN/TURN path used
+        // pre-ICE guarantees it's a socket `start_media` will actually bind.
+        let (rtp_ip, rtp_port) = Self::resolve_rtp_endpoint(&rt, turn_config, &advertised_ip, local_rtp, &mut relay);
 
         let srtp = if secure { Some(SrtpParams::generate()) } else { None };
         let codecs = account_codecs(&self.accounts[acc].account);

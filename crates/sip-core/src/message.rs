@@ -147,6 +147,16 @@ impl SipMessage {
         }
     }
 
+    /// The status line's reason phrase (e.g. "Not Acceptable Here" from
+    /// `SIP/2.0 488 Not Acceptable Here`) — distinct from, and far more
+    /// commonly populated than, the optional RFC 3326 `Reason:` header.
+    pub fn reason_phrase(&self) -> Option<&str> {
+        match &self.start_line {
+            SipStartLine::Response { reason, .. } => Some(reason.as_str()),
+            _ => None,
+        }
+    }
+
     pub fn method(&self) -> Option<&SipMethod> {
         match &self.start_line {
             SipStartLine::Request { method, .. } => Some(method),
