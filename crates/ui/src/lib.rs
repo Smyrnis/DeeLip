@@ -1111,6 +1111,7 @@ impl DeelipApp {
         let idx = self.calls.len() - 1;
         self.status_line = "Accepted — connecting…".into();
         self.start_media(idx, &pending.remote_sdp);
+        self.refresh_call_status();
     }
 
     fn do_reject(&mut self) {
