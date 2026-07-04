@@ -202,6 +202,13 @@ impl SipStack {
             return;
         }
 
+        // MESSAGE (RFC 3428) is a standalone transaction, not a `Dialog` --
+        // resolved against `pending_messages` instead.
+        if matches!(msg.cseq(), Some((_, SipMethod::Message))) {
+            self.on_message_response(msg, status, call_id).await;
+            return;
+        }
+
         enum Act {
             Nothing,
             Ringing,
@@ -407,8 +414,10 @@ impl SipStack {
         let from_tag  = parse_tag(&from_hdr).unwrap_or_default();
         let (cseq_n, _) = msg.cseq().unwrap_or((1, SipMethod::Invite));
         let remote_sdp = String::from_utf8_lossy(&msg.body).into_owned();
+        let remote_via = msg.header("Via").unwrap_or("").to_string();
         let local_tag  = new_tag();
 
+        debug!("← INVITE from {from_uri} ({from})");
         let trying  = self.build_response(&msg, 100, "Trying",  &local_tag, "");
         let ringing = self.build_response(&msg, 180, "Ringing", &local_tag, "");
         let _ = self.transport.send(trying.as_bytes(),  from).await;
@@ -416,7 +425,7 @@ impl SipStack {
 
         let mut dialog = Dialog::new_incoming(
             call_id.clone(), local_tag, from_uri.clone(),
-            from_tag, cseq_n, remote_sdp.clone(),
+            from_tag, cseq_n, remote_sdp.clone(), remote_via,
         );
         dialog.remote_contact = Some(from.to_string());
         self.dialogs.insert(call_id.clone(), dialog);
@@ -425,7 +434,6 @@ impl SipStack {
     }
 
     pub(crate) async fn accept_call(&mut self, call_id: &str, local_sdp: &str) {
-        let via_proto = self.via_proto();
         let contact_transport = self.contact_transport_param();
         let dialog = match self.dialogs.get_mut(call_id) {
             Some(d) => d,
@@ -442,15 +450,14 @@ impl SipStack {
         let local_tag    = dialog.local_tag.clone();
         let remote_tag   = dialog.remote_tag.clone();
         let remote_uri   = dialog.remote_uri.clone();
+        let remote_via   = dialog.remote_via.clone();
         let adv_ip       = self.advertised_ip.clone();
-        let local_ip     = self.local_ip.clone();
         let local_port   = self.local_port;
         let username     = self.account.username.clone();
         let server       = self.account.server.clone();
         let display      = self.account.display_name.clone()
             .unwrap_or_else(|| username.clone());
         let body_len     = local_sdp.len();
-        let branch       = new_branch();
 
         let from_tag_part = remote_tag.as_deref()
             .map(|t| format!(";tag={t}"))
@@ -458,7 +465,7 @@ impl SipStack {
 
         let ok_msg = format!(
             "SIP/2.0 200 OK\r\n\
-             Via: SIP/2.0/{via_proto} {local_ip}:{local_port};branch={branch}\r\n\
+             Via: {remote_via}\r\n\
              To: \"{display}\" <sip:{username}@{server}>;tag={local_tag}\r\n\
              From: <{remote_uri}>{from_tag_part}\r\n\
              Call-ID: {call_id_str}\r\n\
@@ -481,29 +488,29 @@ impl SipStack {
                 .as_deref()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(self.server_addr);
-            let branch     = new_branch();
-            let local_ip   = &self.local_ip;
-            let local_port = self.local_port;
             let username   = &self.account.username;
             let server     = &self.account.server;
             let display    = self.account.display_name.as_deref().unwrap_or(username);
             let local_tag  = &dialog.local_tag;
             let remote_uri = &dialog.remote_uri;
+            let remote_via = &dialog.remote_via;
             let from_tag   = dialog.remote_tag.as_deref()
                 .map(|t| format!(";tag={t}")).unwrap_or_default();
             let cseq_n = dialog.remote_cseq.unwrap_or(1);
-            let via_proto = self.via_proto();
 
             let decline = format!(
                 "SIP/2.0 486 Busy Here\r\n\
-                 Via: SIP/2.0/{via_proto} {local_ip}:{local_port};branch={branch}\r\n\
+                 Via: {remote_via}\r\n\
                  To: \"{display}\" <sip:{username}@{server}>;tag={local_tag}\r\n\
                  From: <{remote_uri}>{from_tag}\r\n\
                  Call-ID: {call_id}\r\n\
                  CSeq: {cseq_n} INVITE\r\n\
                  Content-Length: 0\r\n\r\n"
             );
-            let _ = self.transport.send(decline.as_bytes(), contact).await;
+            debug!("→ 486 Busy Here {call_id} to {contact}");
+            if let Err(e) = self.transport.send(decline.as_bytes(), contact).await {
+                error!("Failed to send 486 for {call_id}: {e}");
+            }
         }
     }
 
@@ -556,6 +563,7 @@ impl SipStack {
             Some(id) => id.to_string(),
             None     => return,
         };
+        debug!("← BYE {call_id}");
         let ok = self.build_response(&msg, 200, "OK", "", "");
         let _ = self.transport.send(ok.as_bytes(), from).await;
         if let Some(mut dialog) = self.dialogs.remove(&call_id) {
@@ -579,6 +587,7 @@ impl SipStack {
         let _ = self.transport.send(ok.as_bytes(), from).await;
         if let Some(call_id) = msg.call_id() {
             let call_id = call_id.to_string();
+            debug!("← CANCEL {call_id}");
             self.dialogs.remove(&call_id);
             let _ = self.event_tx.send(SipEvent::CallEnded { call_id });
         }

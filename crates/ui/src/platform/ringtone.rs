@@ -1,12 +1,17 @@
-//! Synthesized ring cadence for incoming calls and outgoing ringback —
+//! Ring cadence for incoming calls and outgoing ringback. Incoming can be a
+//! user-picked WAV file; both fall back to a synthesized two-tone cadence
 //! generated sine waves rather than a bundled audio file, since there's no
-//! license-safe ringtone asset to embed in the repo.
+//! license-safe ringtone asset to embed in the repo, or if no file is set or
+//! it fails to load.
 
+use std::fs::File;
+use std::io::BufReader;
 use std::time::Duration;
 
-use rodio::{OutputStream, OutputStreamHandle, Sink, Source};
+use cpal::traits::{DeviceTrait, HostTrait};
+use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, Source};
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum RingKind {
     /// Played while a call is ringing at us, unanswered.
     Incoming,
@@ -26,13 +31,57 @@ pub struct Ringtone {
 }
 
 impl Ringtone {
-    pub fn start(kind: RingKind) -> anyhow::Result<Self> {
-        let (stream, handle): (OutputStream, OutputStreamHandle) = OutputStream::try_default()?;
+    /// `device_name`: cpal output device to ring through, `None` for the
+    /// system default -- independent of the in-call audio device, so a
+    /// headset can handle the call while the ring itself plays on speakers.
+    /// `ringtone_file`: a WAV path to play instead of the synthesized tone,
+    /// consulted only for `RingKind::Incoming`; falls back to the synthesized
+    /// cadence if unset or it fails to load/decode (a bad ringtone file
+    /// should never mean a silently-missed call).
+    pub fn start(kind: RingKind, device_name: Option<&str>, ringtone_file: Option<&str>) -> anyhow::Result<Self> {
+        let (stream, handle) = open_stream(device_name)?;
+
         let sink = Sink::try_new(&handle)?;
+        if kind == RingKind::Incoming {
+            if let Some(path) = ringtone_file {
+                match load_wav_looped(path) {
+                    Ok(source) => {
+                        sink.append(source);
+                        sink.play();
+                        return Ok(Self { _stream: stream, sink });
+                    }
+                    Err(e) => tracing::warn!("Custom ringtone {path} failed to load ({e}), using built-in tone"),
+                }
+            }
+        }
         sink.append(RingSource::new(kind));
         sink.play();
         Ok(Self { _stream: stream, sink })
     }
+}
+
+/// Opens the named cpal output device if given and found; otherwise (or on
+/// any failure to match it) falls back to the system default, exactly as
+/// before this device-selection option existed.
+fn open_stream(device_name: Option<&str>) -> anyhow::Result<(OutputStream, OutputStreamHandle)> {
+    if let Some(name) = device_name {
+        let found = cpal::default_host().output_devices().ok()
+            .and_then(|mut devices| devices.find(|d| d.name().is_ok_and(|n| n == name)));
+        if let Some(device) = found {
+            return Ok(OutputStream::try_from_device(&device)?);
+        }
+        tracing::warn!("Ringtone device {name} not found, using system default");
+    }
+    Ok(OutputStream::try_default()?)
+}
+
+/// Decode `path` as WAV and loop it indefinitely for as long as the ringtone
+/// plays -- a single ring cycle in the file repeats until the `Ringtone` (and
+/// therefore its `Sink`) is dropped.
+fn load_wav_looped(path: &str) -> anyhow::Result<impl Source<Item = i16> + Send + 'static> {
+    let file = File::open(path)?;
+    let source = Decoder::new(BufReader::new(file))?;
+    Ok(source.repeat_infinite())
 }
 
 impl Drop for Ringtone {

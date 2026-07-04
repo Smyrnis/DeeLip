@@ -65,6 +65,19 @@ pub fn notify_incoming_call(call_id: &str, from: &str) {
     }
 }
 
+/// Fire a plain "you have a new message" desktop notification — no action
+/// buttons, just informational (unlike `notify_incoming_call`, there's no
+/// call-state decision to make from the notification itself). Best-effort,
+/// same as above.
+pub fn notify_message_received(from: &str, body: &str) {
+    let mut notification = notify_rust::Notification::new();
+    notification.summary(&format!("DeeLip — message from {from}")).body(body);
+    match notification.show() {
+        Ok(_) => tracing::debug!("Message notification shown for {from}"),
+        Err(e) => tracing::warn!("Desktop notification failed: {e}"),
+    }
+}
+
 /// Drain every action received since the last call — call once per frame.
 /// Each entry's `call_id` should be checked against whatever's actually
 /// still pending before acting on it: a notification's action can arrive

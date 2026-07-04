@@ -53,6 +53,13 @@ CREATE TABLE IF NOT EXISTS call_history (
     duration_secs  INTEGER NOT NULL,
     status         TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS messages (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    peer_uri   TEXT NOT NULL,
+    direction  TEXT NOT NULL,
+    body       TEXT NOT NULL,
+    timestamp  INTEGER NOT NULL
+);
 "#;
 
 /// Handle to `~/.config/deelip/deelip.db`.

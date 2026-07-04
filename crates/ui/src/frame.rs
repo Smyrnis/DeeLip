@@ -25,7 +25,9 @@ impl DeelipApp {
             // Rising edge — attempt exactly once per ringing episode. A
             // failure here must NOT leave room for a retry next frame (see
             // `was_ringing` doc comment) — it's still `None` either way.
-            match Ringtone::start(desired.unwrap()) {
+            let device = self.config.audio.ringtone_device.as_deref();
+            let file   = self.config.audio.ringtone_file.as_deref();
+            match Ringtone::start(desired.unwrap(), device, file) {
                 Ok(r) => self.ringtone = Some(r),
                 Err(e) => tracing::warn!("Ringtone failed to start: {e}"),
             }
@@ -167,6 +169,20 @@ impl eframe::App for DeelipApp {
             .sum();
         egui::TopBottomPanel::top("status").show(ctx, |ui| {
             crate::helpers::status_bar(ui, &self.palette, &self.status_line, self.reg_ok, on_hold, new_voicemail);
+            if let Some(idx) = self.selected_account_idx() {
+                let dnd = self.accounts[idx].account.dnd;
+                let (icon, label, color) = if dnd {
+                    (egui_phosphor::regular::BELL_SLASH, "DND on", self.palette.danger)
+                } else {
+                    (egui_phosphor::regular::BELL, "DND off", self.palette.muted)
+                };
+                if ui.small_button(egui::RichText::new(format!("{icon}  {label}")).color(color))
+                    .on_hover_text("Toggle Do Not Disturb for the selected account")
+                    .clicked()
+                {
+                    self.toggle_dnd(idx);
+                }
+            }
         });
 
         // ── Tab bar ──────────────────────────────────────────────────────────
@@ -183,6 +199,12 @@ impl eframe::App for DeelipApp {
                     format!("{}  History", egui_phosphor::regular::CLOCK_COUNTER_CLOCKWISE)
                 };
                 ui.selectable_value(&mut self.tab, crate::app::Tab::History,  history_label);
+                let messages_label = if self.unseen_messages > 0 {
+                    format!("{}  Messages ({})", egui_phosphor::regular::CHAT_CIRCLE_TEXT, self.unseen_messages)
+                } else {
+                    format!("{}  Messages", egui_phosphor::regular::CHAT_CIRCLE_TEXT)
+                };
+                ui.selectable_value(&mut self.tab, crate::app::Tab::Messages, messages_label);
                 ui.selectable_value(&mut self.tab, crate::app::Tab::Contacts, format!("{}  Contacts", egui_phosphor::regular::ADDRESS_BOOK));
                 ui.selectable_value(&mut self.tab, crate::app::Tab::Settings, format!("{}  Settings", egui_phosphor::regular::GEAR));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -199,11 +221,15 @@ impl eframe::App for DeelipApp {
             self.unseen_missed_calls = 0;
             self.sync_tray_badge();
         }
+        if self.tab == crate::app::Tab::Messages && self.unseen_messages > 0 {
+            self.unseen_messages = 0;
+        }
 
         egui::CentralPanel::default().show(ctx, |ui| {
             match self.tab {
                 crate::app::Tab::Dialer   => self.show_dialer(ui),
                 crate::app::Tab::History  => self.show_history(ui, ctx),
+                crate::app::Tab::Messages => self.show_messages(ui),
                 crate::app::Tab::Contacts => self.show_contacts(ui, ctx),
                 crate::app::Tab::Settings => self.show_settings(ui),
             }

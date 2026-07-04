@@ -49,6 +49,10 @@ pub struct SipStack {
     pub(crate) dialogs:       HashMap<String, Dialog>,
     pub(crate) subscriptions: HashMap<String, PresenceSubscription>,
     pub(crate) mwi_subscriptions: HashMap<String, MwiSubscription>,
+    /// Outstanding SIP MESSAGE requests awaiting their response, keyed by
+    /// Call-ID -- MESSAGE (RFC 3428) is a standalone transaction, not part
+    /// of any `Dialog`, so it can't be resolved via `dialogs`.
+    pub(crate) pending_messages: HashMap<String, crate::message_method::PendingMessage>,
     pub(crate) event_tx: mpsc::UnboundedSender<SipEvent>,
     pub(crate) cmd_rx:   mpsc::UnboundedReceiver<SipCommand>,
 }
@@ -90,6 +94,7 @@ impl SipStack {
             dialogs:   HashMap::new(),
             subscriptions: HashMap::new(),
             mwi_subscriptions: HashMap::new(),
+            pending_messages: HashMap::new(),
             event_tx,
             cmd_rx,
         })
@@ -316,6 +321,7 @@ impl SipStack {
                     // exactly what was observed live (three "unhandled
                     // request" log lines for what was really 1-2 messages).
                     SipMethod::Info    => self.send_ok(&msg, from).await,
+                    SipMethod::Message => self.on_message(msg, from).await,
                     _                  => debug!(?method, "Ignoring unhandled request"),
                 }
             }
@@ -343,6 +349,7 @@ impl SipStack {
                 self.attended_transfer(&call_id, &consultation_call_id).await,
             SipCommand::SendDtmfInfo { call_id, digit } => self.send_dtmf_info(&call_id, digit).await,
             SipCommand::SubscribeMwi { target_uri } => self.subscribe_mwi(&target_uri).await,
+            SipCommand::SendMessage { to, body } => self.send_message(&to, &body).await,
         }
     }
 

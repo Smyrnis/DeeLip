@@ -338,8 +338,53 @@ impl DeelipApp {
                                 }
                             });
                         ui.end_row();
-                    });
 
+                        ui.label("Ringing device:");
+                        let selected = self.config.audio.ringtone_device.clone()
+                            .unwrap_or_else(|| "Default".into());
+                        egui::ComboBox::from_id_source("settings_ringtone_device")
+                            .selected_text(selected)
+                            .show_ui(ui, |ui| {
+                                if ui.selectable_label(self.config.audio.ringtone_device.is_none(), "Default").clicked() {
+                                    self.config.audio.ringtone_device = None;
+                                    edited = true;
+                                }
+                                for name in &output_names {
+                                    let is_sel = self.config.audio.ringtone_device.as_deref() == Some(name.as_str());
+                                    if ui.selectable_label(is_sel, name).clicked() {
+                                        self.config.audio.ringtone_device = Some(name.clone());
+                                        edited = true;
+                                    }
+                                }
+                            });
+                        ui.end_row();
+                    });
+                ui.label(RichText::new(
+                    "Independent of the Output device above -- lets the ringtone play on a \
+                     different device than call audio, e.g. ring on speakers, talk on a headset."
+                ).color(palette.muted).small());
+
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.label("Custom ringtone (WAV):");
+                    let name = self.config.audio.ringtone_file.as_deref()
+                        .and_then(|p| std::path::Path::new(p).file_name())
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| "Built-in tone".into());
+                    ui.label(RichText::new(name).color(palette.muted));
+                    if ui.small_button("Choose…").clicked() {
+                        if let Some(path) = rfd::FileDialog::new().add_filter("WAV", &["wav"]).pick_file() {
+                            self.config.audio.ringtone_file = Some(path.to_string_lossy().into_owned());
+                            edited = true;
+                        }
+                    }
+                    if self.config.audio.ringtone_file.is_some() && ui.small_button("Clear").clicked() {
+                        self.config.audio.ringtone_file = None;
+                        edited = true;
+                    }
+                });
+
+                ui.add_space(6.0);
                 edited |= ui.checkbox(&mut self.config.audio.echo_cancellation, "Echo cancellation").changed();
                 edited |= ui.checkbox(&mut self.config.recording_enabled, "Record calls").changed();
                 ui.label(RichText::new(

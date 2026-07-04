@@ -1,4 +1,4 @@
-use deelip_config::{CallDirection, CallRecord, CallStatus};
+use deelip_config::{CallDirection, CallStatus};
 use egui::{RichText, Ui};
 
 use crate::app::{DeelipApp, Tab};
@@ -39,48 +39,78 @@ impl DeelipApp {
         });
         ui.add_space(4.0);
 
-        let query = self.history_search.to_lowercase();
-        let filtered: Vec<&CallRecord> = self.history.records.iter()
-            .filter(|r| self.history_status_filter.as_ref().is_none_or(|s| *s == r.status))
-            .filter(|r| query.is_empty() || r.remote_uri.to_lowercase().contains(&query))
-            .collect();
+        // Recompute the filtered index list only when the search text,
+        // status filter, or the record count itself has actually changed --
+        // this used to re-lowercase every record's URI and rebuild the list
+        // on every single frame regardless (egui repaints continuously, and
+        // much faster than that during a scroll drag), which was the actual
+        // cause of this tab dropping frames while scrolling. Mirrors the
+        // existing `audio_device_cache` idiom.
+        let key = (self.history_search.to_lowercase(), self.history_status_filter.clone(), self.history.records.len());
+        if self.history_filter_key.as_ref() != Some(&key) {
+            let query = &key.0;
+            self.history_filtered = self.history.records.iter().enumerate()
+                .filter(|(_, r)| self.history_status_filter.as_ref().is_none_or(|s| *s == r.status))
+                .filter(|(_, r)| query.is_empty() || r.remote_uri.to_lowercase().contains(query))
+                .map(|(i, _)| i)
+                .collect();
+            self.history_filter_key = Some(key);
+        }
 
         let mut call_target: Option<String> = None;
         let mut block_target: Option<String> = None;
 
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            if filtered.is_empty() {
-                ui.label(RichText::new("No matching calls.").color(self.palette.muted));
-            }
-            for record in filtered {
-                let (dir_icon, dir_color) = match record.direction {
-                    CallDirection::Inbound  => (egui_phosphor::regular::PHONE_INCOMING, self.palette.info),
-                    CallDirection::Outbound => (egui_phosphor::regular::PHONE_OUTGOING, self.palette.accent),
-                };
-                let status_str = match record.status {
-                    CallStatus::Answered => format_duration(record.duration_secs),
-                    CallStatus::Missed   => "Missed".into(),
-                    CallStatus::Rejected => "Rejected".into(),
-                    CallStatus::Failed   => "Failed".into(),
-                };
+        if self.history_filtered.is_empty() {
+            ui.label(RichText::new("No matching calls.").color(self.palette.muted));
+        } else {
+            // `show_rows` only lays out the rows actually scrolled into view
+            // instead of all of them every frame -- with up to 200 records
+            // and this app's continuous ~20fps repaint, the plain `show`
+            // form was doing thousands of unnecessary widget layouts/sec.
+            // `show_rows` needs one precisely-known height per iteration --
+            // each row is deliberately kept to a *single* widget (the
+            // `ui.horizontal` group, divider painted directly onto its own
+            // rect below) rather than two siblings (group + a separate
+            // `ui.separator()`), since two widgets means two auto-inserted
+            // `item_spacing.y` gaps that a single flat height estimate can't
+            // represent -- that mismatch was the actual cause of this tab's
+            // scroll jitter, not raw row count.
+            let row_height = ui.spacing().interact_size.y.max(ui.text_style_height(&egui::TextStyle::Body))
+                + ui.spacing().item_spacing.y;
+            let filtered = &self.history_filtered;
+            let records  = &self.history.records;
+            egui::ScrollArea::vertical().show_rows(ui, row_height, filtered.len(), |ui, row_range| {
+                for idx in row_range {
+                    let record = &records[filtered[idx]];
+                    let (dir_icon, dir_color) = match record.direction {
+                        CallDirection::Inbound  => (egui_phosphor::regular::PHONE_INCOMING, self.palette.info),
+                        CallDirection::Outbound => (egui_phosphor::regular::PHONE_OUTGOING, self.palette.accent),
+                    };
+                    let status_str = match record.status {
+                        CallStatus::Answered => format_duration(record.duration_secs),
+                        CallStatus::Missed   => "Missed".into(),
+                        CallStatus::Rejected => "Rejected".into(),
+                        CallStatus::Failed   => "Failed".into(),
+                    };
 
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new(dir_icon).color(dir_color));
-                    ui.label(short_uri(&record.remote_uri));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.small_button("Call").clicked() {
-                            call_target = Some(record.remote_uri.clone());
-                        }
-                        if ui.small_button("Block").clicked() {
-                            block_target = Some(record.remote_uri.clone());
-                        }
-                        ui.label(RichText::new(&status_str).color(self.palette.muted));
-                        ui.label(RichText::new(format_age(record.timestamp)).color(self.palette.muted));
-                    });
-                });
-                ui.separator();
-            }
-        });
+                    let row = ui.horizontal(|ui| {
+                        ui.label(RichText::new(dir_icon).color(dir_color));
+                        ui.label(short_uri(&record.remote_uri));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.small_button("Call").clicked() {
+                                call_target = Some(record.remote_uri.clone());
+                            }
+                            if ui.small_button("Block").clicked() {
+                                block_target = Some(record.remote_uri.clone());
+                            }
+                            ui.label(RichText::new(&status_str).color(self.palette.muted));
+                            ui.label(RichText::new(format_age(record.timestamp)).color(self.palette.muted));
+                        });
+                    }).response;
+                    ui.painter().hline(row.rect.x_range(), row.rect.bottom(), ui.visuals().widgets.noninteractive.bg_stroke);
+                }
+            });
+        }
 
         if let Some(target) = call_target {
             self.tab         = Tab::Dialer;

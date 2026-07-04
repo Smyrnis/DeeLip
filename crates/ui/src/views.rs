@@ -2,5 +2,6 @@
 
 mod dialer;
 mod history;
+mod messages;
 mod contacts;
 mod settings;

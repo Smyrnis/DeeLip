@@ -16,6 +16,13 @@ pub struct Dialog {
     pub remote_tag:     Option<String>,
     pub remote_uri:     String,
     pub remote_contact: Option<String>,
+    /// The inbound INVITE's verbatim `Via` header -- responses to that
+    /// INVITE (200 OK, 486, etc.) must echo it back unchanged (including its
+    /// `branch`) for the sender to match the response to its transaction;
+    /// synthesizing a fresh Via/branch here gets silently ignored by at
+    /// least Asterisk/pjproject, which just keeps waiting for a real
+    /// response until its own timeout fires.
+    pub remote_via:     String,
     pub local_cseq:     u32,
     pub remote_cseq:    Option<u32>,
     pub state:          DialogState,
@@ -39,6 +46,7 @@ impl Dialog {
             remote_tag:     None,
             remote_uri:     to_uri,
             remote_contact: None,
+            remote_via:     String::new(),
             local_cseq:     1,
             remote_cseq:    None,
             state:          DialogState::Calling,
@@ -57,6 +65,7 @@ impl Dialog {
         from_tag:   String,
         remote_cseq: u32,
         remote_sdp: String,
+        remote_via: String,
     ) -> Self {
         Self {
             call_id,
@@ -64,6 +73,7 @@ impl Dialog {
             remote_tag:     Some(from_tag),
             remote_uri:     from_uri,
             remote_contact: None,
+            remote_via,
             local_cseq:     0,
             remote_cseq:    Some(remote_cseq),
             state:          DialogState::Calling,

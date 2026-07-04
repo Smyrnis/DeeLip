@@ -1,4 +1,4 @@
-use deelip_config::{CallDirection, CallRecord, CallStatus, Contact};
+use deelip_config::{CallDirection, CallRecord, CallStatus, Contact, Message, MessageDirection};
 use deelip_sip::{AudioCodec, PresenceState, SipEvent};
 
 use crate::app::{CallSlot, DeelipApp, PendingCall};
@@ -71,6 +71,7 @@ impl DeelipApp {
                 let forward_on_busy = acc.forward_on_busy.clone().filter(|s| !s.is_empty());
                 let server = acc.server.clone();
                 if dnd {
+                    tracing::debug!(call_id, %from, "DND active, rejecting incoming call");
                     self.accounts[account].handle.reject_call(&call_id);
                     self.record_history(from, CallDirection::Inbound, unix_now(), CallStatus::Rejected);
                     return;
@@ -182,6 +183,24 @@ impl DeelipApp {
             SipEvent::MwiUpdate { state, .. } => {
                 self.accounts[account].mwi = Some(state);
             }
+            SipEvent::MessageReceived { from, body } => {
+                self.messages.push(Message {
+                    peer_uri: from.clone(),
+                    direction: MessageDirection::Inbound,
+                    body: body.clone(),
+                    timestamp: unix_now(),
+                });
+                let _ = self.messages.save(&self.db);
+                self.unseen_messages += 1;
+                if self.config.notifications_enabled {
+                    crate::platform::notify::notify_message_received(&short_uri(&from), &body);
+                }
+            }
+            SipEvent::MessageSendResult { to, ok, reason } => {
+                if !ok {
+                    self.status_line = format!("Message to {} failed: {}", short_uri(&to), reason.unwrap_or_default());
+                }
+            }
         }
     }
 
@@ -194,6 +213,24 @@ impl DeelipApp {
             Some(username) => self.accounts.iter().position(|a| &a.account.username == username),
             None => if self.accounts.is_empty() { None } else { Some(0) },
         }
+    }
+
+    /// Flip DND for the live account at `idx` (into `self.accounts`) --
+    /// takes effect immediately, since incoming-call handling reads DND from
+    /// `self.accounts[i].account.dnd`, not the `self.config.accounts` Settings
+    /// draft. Those two lists aren't the same or in the same order (`config`
+    /// includes disabled accounts too), so the matching config entry is
+    /// found by username -- same cross-referencing idiom as
+    /// `resolve_presence_account` -- and kept in sync so Settings reflects
+    /// the change and it survives a restart.
+    pub(crate) fn toggle_dnd(&mut self, idx: usize) {
+        let new_dnd = !self.accounts[idx].account.dnd;
+        self.accounts[idx].account.dnd = new_dnd;
+        let username = self.accounts[idx].account.username.clone();
+        if let Some(cfg_acc) = self.config.accounts.iter_mut().find(|a| a.username == username) {
+            cfg_acc.dnd = new_dnd;
+        }
+        self.save_config_quietly();
     }
 
     /// Subscribe every `watch_presence` contact resolved to `account`,

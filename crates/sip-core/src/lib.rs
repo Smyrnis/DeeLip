@@ -2,6 +2,7 @@ mod call;
 pub mod client;
 pub mod events;
 mod handle;
+mod message_method;
 mod registration;
 mod subscription;
 pub mod transport;

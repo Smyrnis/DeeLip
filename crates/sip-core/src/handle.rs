@@ -81,4 +81,10 @@ impl SipHandle {
             call_id: call_id.to_string(), digit,
         });
     }
+    /// Send a standalone SIP MESSAGE (RFC 3428) to `to` (a full SIP URI).
+    pub fn send_message(&self, to: &str, body: &str) {
+        let _ = self.cmd_tx.send(SipCommand::SendMessage {
+            to: to.to_string(), body: body.to_string(),
+        });
+    }
 }

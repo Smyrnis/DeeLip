@@ -39,6 +39,11 @@ pub enum SipEvent {
     MwiSubscribeFailed { uri: String, reason: String },
     /// A NOTIFY updated our mailbox's message-waiting state.
     MwiUpdate { uri: String, state: MwiState },
+    /// An incoming SIP MESSAGE (RFC 3428) arrived; already ack'd with 200 OK.
+    MessageReceived { from: String, body: String },
+    /// Delivery result for a `SipCommand::SendMessage` -- `reason` is the
+    /// status line/error text when `ok` is false.
+    MessageSendResult { to: String, ok: bool, reason: Option<String> },
 }
 
 /// Commands sent from the application into the SIP stack.
@@ -68,4 +73,6 @@ pub enum SipCommand {
     SendDtmfInfo { call_id: String, digit: char },
     /// Subscribe to a mailbox's MWI state (`target_uri` is a full SIP URI).
     SubscribeMwi { target_uri: String },
+    /// Send a standalone SIP MESSAGE (RFC 3428) to `to` (a full SIP URI).
+    SendMessage { to: String, body: String },
 }

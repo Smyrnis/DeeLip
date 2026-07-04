@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use deelip_config::{AppConfig, CallDirection, CallHistory, CallStatus, Contact, ContactBook, Db, SipAccount};
+use deelip_config::{AppConfig, CallDirection, CallHistory, CallStatus, Contact, ContactBook, Db, MessageLog, SipAccount};
 use deelip_media::MediaEngine;
 use deelip_sip::{AudioCodec, MwiState, PresenceState, SipHandle, SrtpParams};
 use tokio::runtime::Handle;
@@ -15,7 +15,7 @@ use crate::theme::Palette;
 // ── Tab navigation ────────────────────────────────────────────────────────────
 
 #[derive(PartialEq, Eq, Clone, Copy, Default)]
-pub(crate) enum Tab { #[default] Dialer, History, Contacts, Settings }
+pub(crate) enum Tab { #[default] Dialer, History, Messages, Contacts, Settings }
 
 // ── App state ─────────────────────────────────────────────────────────────────
 
@@ -139,6 +139,25 @@ pub struct DeelipApp {
     pub(crate) history_search: String,
     /// `None` = show every status.
     pub(crate) history_status_filter: Option<CallStatus>,
+    /// Cache of `history_search`/`history_status_filter`/`history.records.len()`
+    /// as last used to compute `history_filtered`, so a search string that
+    /// allocates a lowercased copy of every record's URI isn't redone on
+    /// every single frame (egui repaints continuously, and much faster than
+    /// that during a scroll drag) -- only recomputed when one of the three
+    /// actually changes. Mirrors the existing `audio_device_cache` idiom.
+    pub(crate) history_filter_key: Option<(String, Option<CallStatus>, usize)>,
+    /// Indices into `history.records` matching the current search/status
+    /// filter, most-recent-first (same order as `history.records` itself).
+    pub(crate) history_filtered: Vec<usize>,
+
+    // Messages
+    pub(crate) messages: MessageLog,
+    /// Unseen received messages -- mirrors `unseen_missed_calls`, reset to 0
+    /// on switching to the Messages tab.
+    pub(crate) unseen_messages: u32,
+    /// Compose box state for the Messages tab.
+    pub(crate) message_to:   String,
+    pub(crate) message_body: String,
 
     // Blocklist
     pub(crate) blocklist_input: String,
@@ -250,6 +269,7 @@ impl DeelipApp {
 
         let history = CallHistory::load(&db).unwrap_or_default();
         let contacts = ContactBook::load(&db).unwrap_or_default();
+        let messages = MessageLog::load(&db).unwrap_or_default();
 
         let hotkeys = if config.global_hotkeys_enabled {
             match Hotkeys::spawn(&config.hotkey_answer, &config.hotkey_hangup, &config.hotkey_mute) {
@@ -300,6 +320,12 @@ impl DeelipApp {
             history,
             history_search:         String::new(),
             history_status_filter:  None,
+            history_filter_key:     None,
+            history_filtered:       Vec::new(),
+            messages,
+            unseen_messages: 0,
+            message_to:   String::new(),
+            message_body: String::new(),
             blocklist_input:        String::new(),
             contacts,
             contact_search:   String::new(),

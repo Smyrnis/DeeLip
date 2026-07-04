@@ -188,6 +188,18 @@ pub struct AudioConfig {
     /// own audio playing back out of the speaker.
     #[serde(default)]
     pub echo_cancellation: bool,
+    /// cpal output device name to play the ringtone/ringback through;
+    /// `None` uses the system default. Independent of `output_device` (the
+    /// in-call audio device) so you can e.g. ring on PC speakers while
+    /// talking through a headset -- same idiom, separate setting.
+    #[serde(default)]
+    pub ringtone_device: Option<String>,
+    /// Path to a WAV file to play as the *incoming* ringtone instead of the
+    /// synthesized two-tone cadence. Outgoing ringback is never customized
+    /// this way. `None` (or a file that fails to load) falls back to the
+    /// built-in tone.
+    #[serde(default)]
+    pub ringtone_file: Option<String>,
 }
 
 fn default_sample_rate() -> u32 { 48_000 }
@@ -201,6 +213,8 @@ impl Default for AudioConfig {
             sample_rate:   default_sample_rate(),
             frame_size_ms: default_frame_ms(),
             echo_cancellation: false,
+            ringtone_device: None,
+            ringtone_file: None,
         }
     }
 }
@@ -361,6 +375,8 @@ impl AppConfig {
                 sample_rate: get_u32("audio.sample_rate", default_sample_rate()),
                 frame_size_ms: get_u32("audio.frame_size_ms", default_frame_ms()),
                 echo_cancellation: get_bool("audio.echo_cancellation", false),
+                ringtone_device: get("audio.ringtone_device"),
+                ringtone_file: get("audio.ringtone_file"),
             },
             local_sip_port: get_u32("local_sip_port", default_sip_port() as u32) as u16,
             stun_server: get("stun_server"),
@@ -419,6 +435,8 @@ impl AppConfig {
         db.set_setting("audio.sample_rate", &self.audio.sample_rate.to_string())?;
         db.set_setting("audio.frame_size_ms", &self.audio.frame_size_ms.to_string())?;
         db.set_setting("audio.echo_cancellation", bool_to_sql(self.audio.echo_cancellation))?;
+        db.set_setting_opt("audio.ringtone_device", &self.audio.ringtone_device)?;
+        db.set_setting_opt("audio.ringtone_file", &self.audio.ringtone_file)?;
 
         db.set_setting("local_sip_port", &self.local_sip_port.to_string())?;
         db.set_setting_opt("stun_server", &self.stun_server)?;
