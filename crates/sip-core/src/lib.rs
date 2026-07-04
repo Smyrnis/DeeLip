@@ -1,16 +1,22 @@
 pub mod auth;
+mod calls;
 pub mod client;
 pub mod dialog;
 pub mod events;
 mod framing;
+mod handle;
 pub mod message;
 pub mod mwi;
 pub mod presence;
+mod registration;
 pub mod sdp;
+mod subscribe;
+mod transfer;
 pub mod transport;
 pub mod util;
 
-pub use client::{SipHandle, SipStack};
+pub use client::SipStack;
+pub use handle::SipHandle;
 pub use events::{SipCommand, SipEvent};
 pub use message::{SipMessage, SipMethod, SipStartLine};
 pub use mwi::MwiState;

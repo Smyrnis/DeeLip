@@ -1,0 +1,332 @@
+use deelip_config::Contact;
+use deelip_sip::PresenceState;
+use egui::{RichText, Ui};
+
+use crate::app::{DeelipApp, Tab};
+
+impl DeelipApp {
+    pub(crate) fn show_contacts(&mut self, ui: &mut Ui, _ctx: &egui::Context) {
+        ui.add_space(8.0);
+
+        // Search bar
+        ui.horizontal(|ui| {
+            ui.label("Search:");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.contact_search)
+                    .desired_width(200.0)
+                    .hint_text("name or sip URI"),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button(egui_phosphor::regular::UPLOAD_SIMPLE).on_hover_text("Import contacts (CSV or vCard)").clicked() {
+                    self.import_contacts();
+                }
+                if ui.button(format!("{} vCard", egui_phosphor::regular::DOWNLOAD_SIMPLE)).on_hover_text("Export as vCard").clicked() {
+                    self.export_contacts_vcard();
+                }
+                if ui.button(format!("{} CSV", egui_phosphor::regular::DOWNLOAD_SIMPLE)).on_hover_text("Export as CSV").clicked() {
+                    self.export_contacts_csv();
+                }
+            });
+        });
+        ui.add_space(4.0);
+
+        let mut call_target: Option<String> = None;
+        let mut edit_idx:    Option<usize>   = None;
+        let mut delete_idx:  Option<usize>   = None;
+
+        // Contact list
+        let results: Vec<(usize, String, String, bool)> = self.contacts
+            .search(&self.contact_search)
+            .into_iter()
+            .map(|(i, c)| (i, c.name.clone(), c.sip_uri.clone(), c.watch_presence))
+            .collect();
+
+        egui::ScrollArea::vertical()
+            .max_height(200.0)
+            .show(ui, |ui| {
+                if results.is_empty() {
+                    ui.label(RichText::new("No contacts found.").color(self.palette.muted));
+                }
+                for (idx, name, uri, watch_presence) in &results {
+                    ui.horizontal(|ui| {
+                        ui.label(name);
+                        if *watch_presence {
+                            let color = match self.presence.get(uri) {
+                                Some(PresenceState::Available) => self.palette.accent,
+                                _ => self.palette.muted,
+                            };
+                            ui.label(RichText::new("●").color(color))
+                                .on_hover_text(match self.presence.get(uri) {
+                                    Some(PresenceState::Available) => "Available",
+                                    Some(PresenceState::Offline) => "Offline",
+                                    _ => "Unknown",
+                                });
+                        }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.small_button(egui_phosphor::regular::PHONE).clicked() {
+                                call_target = Some(uri.clone());
+                            }
+                            if ui.small_button(RichText::new(egui_phosphor::regular::TRASH).color(self.palette.danger)).clicked() {
+                                delete_idx = Some(*idx);
+                            }
+                            if ui.small_button(egui_phosphor::regular::PENCIL_SIMPLE).clicked() {
+                                edit_idx = Some(*idx);
+                            }
+                            ui.label(RichText::new(uri).color(self.palette.muted));
+                        });
+                    });
+                    ui.separator();
+                }
+            });
+
+        if let Some(idx) = edit_idx {
+            self.editing_contact_idx = Some(idx);
+            self.new_contact = self.contacts.contacts[idx].clone();
+        }
+        if let Some(idx) = delete_idx {
+            let removed = self.contacts.contacts.remove(idx);
+            self.unsubscribe_contact_presence(&removed);
+            if self.editing_contact_idx == Some(idx) {
+                self.editing_contact_idx = None;
+                self.new_contact = Contact::default();
+            }
+            if let Some(path) = &self.contacts_path {
+                let _ = self.contacts.save(path);
+            }
+        }
+
+        ui.add_space(8.0);
+        ui.separator();
+
+        // Add/Edit contact form
+        let heading = if self.editing_contact_idx.is_some() { "Edit Contact" } else { "Add Contact" };
+        ui.label(RichText::new(heading).strong());
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.label("Name:");
+            ui.add(egui::TextEdit::singleline(&mut self.new_contact.name)
+                .desired_width(120.0));
+            ui.label("URI:");
+            ui.add(egui::TextEdit::singleline(&mut self.new_contact.sip_uri)
+                .hint_text("sip:alice@example.com")
+                .desired_width(f32::INFINITY));
+        });
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.checkbox(&mut self.new_contact.watch_presence, "Watch presence");
+            if self.accounts.len() > 1 {
+                ui.label("via:");
+                let current_label = match &self.new_contact.presence_account {
+                    Some(username) => self.accounts.iter()
+                        .find(|a| &a.account.username == username)
+                        .map(|a| a.label.clone())
+                        .unwrap_or_else(|| username.clone()),
+                    None => self.accounts.first()
+                        .map(|a| format!("{} (default)", a.label))
+                        .unwrap_or_default(),
+                };
+                egui::ComboBox::from_id_source("contact_presence_account_picker")
+                    .selected_text(current_label)
+                    .show_ui(ui, |ui| {
+                        for acc in &self.accounts {
+                            let is_sel = self.new_contact.presence_account.as_deref() == Some(acc.account.username.as_str());
+                            if ui.selectable_label(is_sel, &acc.label).clicked() {
+                                self.new_contact.presence_account = Some(acc.account.username.clone());
+                            }
+                        }
+                    });
+            }
+        });
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            let can_save = !self.new_contact.name.is_empty() && !self.new_contact.sip_uri.is_empty();
+            if ui.add_enabled(can_save, egui::Button::new("Save Contact")).clicked() {
+                let c = std::mem::take(&mut self.new_contact);
+                if let Some(idx) = self.editing_contact_idx.take() {
+                    let old = self.contacts.contacts[idx].clone();
+                    self.contacts.contacts[idx] = c.clone();
+                    self.unsubscribe_contact_presence(&old);
+                    self.subscribe_contact_presence(&c);
+                } else {
+                    self.contacts.contacts.push(c.clone());
+                    self.subscribe_contact_presence(&c);
+                }
+                if let Some(path) = &self.contacts_path {
+                    let _ = self.contacts.save(path);
+                }
+            }
+            if self.editing_contact_idx.is_some() && ui.button("Cancel").clicked() {
+                self.editing_contact_idx = None;
+                self.new_contact = Contact::default();
+            }
+        });
+
+        if let Some(target) = call_target {
+            self.tab         = Tab::Dialer;
+            self.call_target = target.clone();
+            let can_dial = self.calls.is_empty() && self.pending_call.is_none() && self.pending_outbound.is_none();
+            if can_dial && self.reg_ok {
+                self.do_call(Some(target));
+            }
+        }
+    }
+
+    pub(crate) fn subscribe_contact_presence(&mut self, contact: &Contact) {
+        if !contact.watch_presence { return; }
+        if let Some(idx) = self.resolve_presence_account(contact) {
+            self.accounts[idx].handle.subscribe_presence(contact.sip_uri.clone());
+        }
+    }
+
+    pub(crate) fn unsubscribe_contact_presence(&mut self, contact: &Contact) {
+        if contact.watch_presence {
+            if let Some(idx) = self.resolve_presence_account(contact) {
+                self.accounts[idx].handle.unsubscribe_presence(contact.sip_uri.clone());
+            }
+        }
+        self.presence.remove(&contact.sip_uri);
+    }
+
+    pub(crate) fn export_contacts_csv(&self) {
+        let Some(path) = rfd::FileDialog::new()
+            .set_file_name("deelip_contacts.csv")
+            .add_filter("CSV", &["csv"])
+            .save_file()
+        else {
+            return;
+        };
+
+        let mut csv = String::from("name,sip_uri\n");
+        for c in &self.contacts.contacts {
+            csv.push_str(&format!("{},{}\n", crate::helpers::csv_escape(&c.name), crate::helpers::csv_escape(&c.sip_uri)));
+        }
+
+        if let Err(e) = std::fs::write(&path, csv) {
+            tracing::error!("Failed to export contacts to {}: {e}", path.display());
+        }
+    }
+
+    pub(crate) fn export_contacts_vcard(&self) {
+        let Some(path) = rfd::FileDialog::new()
+            .set_file_name("deelip_contacts.vcf")
+            .add_filter("vCard", &["vcf"])
+            .save_file()
+        else {
+            return;
+        };
+
+        let mut vcf = String::new();
+        for c in &self.contacts.contacts {
+            vcf.push_str("BEGIN:VCARD\r\n");
+            vcf.push_str("VERSION:3.0\r\n");
+            vcf.push_str(&format!("FN:{}\r\n", c.name));
+            vcf.push_str(&format!("IMPP:{}\r\n", c.sip_uri));
+            vcf.push_str("END:VCARD\r\n");
+        }
+
+        if let Err(e) = std::fs::write(&path, vcf) {
+            tracing::error!("Failed to export contacts to {}: {e}", path.display());
+        }
+    }
+
+    /// Import contacts from a CSV or vCard file (detected by extension,
+    /// falling back to content sniffing). Appended to the existing contact
+    /// list with no dedup, matching the manual Add-contact flow's behavior.
+    pub(crate) fn import_contacts(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("Contacts", &["csv", "vcf"])
+            .pick_file()
+        else {
+            return;
+        };
+
+        let content = match std::fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(e) => { tracing::error!("Failed to read {}: {e}", path.display()); return; }
+        };
+
+        let is_vcard = path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("vcf"))
+            || content.contains("BEGIN:VCARD");
+
+        let imported = if is_vcard {
+            parse_vcard(&content)
+        } else {
+            parse_contacts_csv(&content)
+        };
+
+        if imported.is_empty() {
+            tracing::warn!("No contacts found in {}", path.display());
+            return;
+        }
+
+        self.contacts.contacts.extend(imported);
+        if let Some(path) = &self.contacts_path {
+            let _ = self.contacts.save(path);
+        }
+    }
+}
+
+/// Parse a CSV contact file with a `name,sip_uri` header, using
+/// `parse_csv_line` for each data row.
+fn parse_contacts_csv(content: &str) -> Vec<Contact> {
+    content.lines().skip(1)
+        .filter(|line| !line.trim().is_empty())
+        .filter_map(|line| {
+            let fields = parse_csv_line(line);
+            let name    = fields.first()?.clone();
+            let sip_uri = fields.get(1)?.clone();
+            Some(Contact { name, sip_uri, ..Default::default() })
+        })
+        .collect()
+}
+
+/// Split one CSV line into fields, honoring double-quoted fields and
+/// doubled-quote escaping -- the inverse of `csv_escape`.
+fn parse_csv_line(line: &str) -> Vec<String> {
+    let mut fields = Vec::new();
+    let mut field = String::new();
+    let mut in_quotes = false;
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' if in_quotes && chars.peek() == Some(&'"') => { field.push('"'); chars.next(); }
+            '"' => in_quotes = !in_quotes,
+            ',' if !in_quotes => { fields.push(std::mem::take(&mut field)); }
+            _ => field.push(c),
+        }
+    }
+    fields.push(field);
+    fields
+}
+
+/// Minimal vCard 2.1/3.0 parser: pulls `FN` for the name and the first
+/// `TEL`/`IMPP` line (any `;PARAM=...` suffix on the property name is
+/// ignored) for the URI, from each `BEGIN:VCARD`/`END:VCARD` block.
+fn parse_vcard(content: &str) -> Vec<Contact> {
+    let mut contacts = Vec::new();
+    let mut name: Option<String> = None;
+    let mut uri: Option<String> = None;
+
+    for line in content.lines() {
+        let line = line.trim_end_matches('\r');
+        if line.eq_ignore_ascii_case("BEGIN:VCARD") {
+            name = None;
+            uri = None;
+            continue;
+        }
+        if line.eq_ignore_ascii_case("END:VCARD") {
+            if let (Some(n), Some(u)) = (name.take(), uri.take()) {
+                contacts.push(Contact { name: n, sip_uri: u, ..Default::default() });
+            }
+            continue;
+        }
+        let Some((prop, value)) = line.split_once(':') else { continue };
+        let prop_name = prop.split(';').next().unwrap_or(prop);
+        if name.is_none() && prop_name.eq_ignore_ascii_case("FN") {
+            name = Some(value.to_string());
+        } else if uri.is_none() && (prop_name.eq_ignore_ascii_case("TEL") || prop_name.eq_ignore_ascii_case("IMPP")) {
+            uri = Some(value.to_string());
+        }
+    }
+    contacts
+}
