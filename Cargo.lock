@@ -1393,7 +1393,10 @@ dependencies = [
  "deelip-config",
  "deelip-sip",
  "fdaf-aec",
+ "gsm-sys",
  "hound",
+ "oxideav-core",
+ "oxideav-ilbc",
  "thiserror 1.0.69",
  "tokio",
  "tracing",
@@ -1445,6 +1448,7 @@ dependencies = [
  "eframe",
  "egui",
  "egui-phosphor",
+ "global-hotkey",
  "gtk",
  "image",
  "notify-rust",
@@ -2322,6 +2326,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
 
 [[package]]
+name = "global-hotkey"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8c386b0a4a70cb2d39fffd74480f985b6f0bfbcb934b6a6b6b7e630e448f242e"
+dependencies = [
+ "crossbeam-channel",
+ "keyboard-types",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "once_cell",
+ "thiserror 2.0.18",
+ "windows-sys 0.59.0",
+ "x11rb",
+ "xkeysym",
+]
+
+[[package]]
 name = "glow"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2459,6 +2480,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fdf242682df893b86f33a73828fb09ca4b2d3bb6cc95249707fc684d27484b91"
 dependencies = [
  "bitflags 2.13.0",
+]
+
+[[package]]
+name = "gsm-sys"
+version = "0.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c1563848f92f081879d3d4b9d18f01d45b9d207fcd64774d5687a8e8df9148d4"
+dependencies = [
+ "cc",
+ "libc",
 ]
 
 [[package]]
@@ -3846,6 +3877,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "36820e9051aca1014ddc75770aab4d68bc1e9e632f0f5627c4086bc216fb583b"
 dependencies = [
  "ttf-parser",
+]
+
+[[package]]
+name = "oxideav-core"
+version = "0.1.29"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "90f122ec5ab9940f06ac87f34ffd165412aaf42017bcaf8e61f592d9cca838ce"
+dependencies = [
+ "bytemuck",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "oxideav-ilbc"
+version = "0.0.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7e3d7be482be62d35b8d207870d6f3f5fc75ed30864855a44d1db7b29eebdbfe"
+dependencies = [
+ "oxideav-core",
 ]
 
 [[package]]

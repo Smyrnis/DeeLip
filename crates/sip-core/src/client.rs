@@ -15,6 +15,7 @@ use crate::{
     dialog::{Dialog, DialogState},
     events::{SipCommand, SipEvent},
     message::{SipMessage, SipMethod, SipStartLine},
+    mwi::{parse_mwi_summary, MwiSubscription},
     presence::{parse_pidf_basic, parse_subscription_state, PresenceSubscription},
     transport::SipTransport,
     util::{local_ip_for, new_branch, new_call_id, new_tag},
@@ -26,6 +27,10 @@ const REG_RECV_TIMEOUT:   Duration = Duration::from_secs(10);
 const MAX_RETRY:          Duration = Duration::from_secs(300);
 const SUBSCRIBE_EXPIRES:  u32      = 3600;
 const PRESENCE_TICK:      Duration = Duration::from_secs(30);
+const PRESENCE_EVENT:  &str = "presence";
+const PRESENCE_ACCEPT: &str = "application/pidf+xml";
+const MWI_EVENT:  &str = "message-summary";
+const MWI_ACCEPT: &str = "application/simple-message-summary";
 
 // ── Public handle ─────────────────────────────────────────────────────────────
 
@@ -87,11 +92,22 @@ impl SipHandle {
     pub fn unsubscribe_presence(&self, target_uri: String) {
         let _ = self.cmd_tx.send(SipCommand::UnsubscribePresence { target_uri });
     }
+    /// Subscribe to a mailbox's voicemail MWI state. `target_uri` must
+    /// already be a fully-qualified SIP URI.
+    pub fn subscribe_mwi(&self, target_uri: String) {
+        let _ = self.cmd_tx.send(SipCommand::SubscribeMwi { target_uri });
+    }
     /// Attended-transfer `call_id` via REFER with a `Replaces` parameter
     /// referencing `consultation_call_id`'s dialog.
     pub fn attended_transfer(&self, call_id: &str, consultation_call_id: &str) {
         let _ = self.cmd_tx.send(SipCommand::AttendedTransfer {
             call_id: call_id.to_string(), consultation_call_id: consultation_call_id.to_string(),
+        });
+    }
+    /// Send one DTMF digit via SIP INFO instead of RFC 2833 RTP events.
+    pub fn send_dtmf_info(&self, call_id: &str, digit: char) {
+        let _ = self.cmd_tx.send(SipCommand::SendDtmfInfo {
+            call_id: call_id.to_string(), digit,
         });
     }
 }
@@ -112,6 +128,7 @@ pub struct SipStack {
 
     dialogs:       HashMap<String, Dialog>,
     subscriptions: HashMap<String, PresenceSubscription>,
+    mwi_subscriptions: HashMap<String, MwiSubscription>,
     event_tx: mpsc::UnboundedSender<SipEvent>,
     cmd_rx:   mpsc::UnboundedReceiver<SipCommand>,
 }
@@ -168,6 +185,7 @@ impl SipStack {
             reg_cseq:  Arc::new(AtomicU32::new(1)),
             dialogs:   HashMap::new(),
             subscriptions: HashMap::new(),
+            mwi_subscriptions: HashMap::new(),
             event_tx,
             cmd_rx,
         })
@@ -203,6 +221,7 @@ impl SipStack {
             tokio::select! {
                 _ = presence_tick.tick() => {
                     self.refresh_presence_subscriptions().await;
+                    self.refresh_mwi_subscriptions().await;
                 }
                 _ = sleep_until(reregister_at) => {
                     match self.register_once().await {
@@ -403,6 +422,8 @@ impl SipStack {
             SipCommand::UnsubscribePresence { target_uri } => self.unsubscribe_presence(&target_uri).await,
             SipCommand::AttendedTransfer { call_id, consultation_call_id } =>
                 self.attended_transfer(&call_id, &consultation_call_id).await,
+            SipCommand::SendDtmfInfo { call_id, digit } => self.send_dtmf_info(&call_id, digit).await,
+            SipCommand::SubscribeMwi { target_uri } => self.subscribe_mwi(&target_uri).await,
         }
     }
 
@@ -562,6 +583,56 @@ impl SipStack {
         let _ = self.transport.send(refer.as_bytes(), contact).await;
     }
 
+    /// Send one DTMF digit via SIP INFO (`application/dtmf-relay`, the
+    /// long-standing de facto format most PBXes/gateways that support this
+    /// scheme at all expect) instead of an RFC 2833 RTP telephone-event
+    /// burst. Mirrors `blind_transfer`'s header shape exactly.
+    async fn send_dtmf_info(&mut self, call_id: &str, digit: char) {
+        let dialog = match self.dialogs.get_mut(call_id) {
+            Some(d) if d.state == DialogState::Confirmed => d,
+            _ => return,
+        };
+
+        let cseq   = dialog.next_local_cseq();
+        let branch = new_branch();
+
+        let server     = self.account.server.clone();
+        let username   = self.account.username.clone();
+        let display    = self.account.display_name.clone().unwrap_or_else(|| username.clone());
+        let adv_ip     = self.advertised_ip.clone();
+        let local_ip   = self.local_ip.clone();
+        let local_port = self.local_port;
+        let call_id_s  = dialog.call_id.clone();
+        let from_tag   = dialog.local_tag.clone();
+        let to_uri     = dialog.remote_uri.clone();
+        let to_tag     = dialog.remote_tag.as_deref()
+            .map(|t| format!(";tag={t}")).unwrap_or_default();
+        let contact: SocketAddr = dialog.remote_contact
+            .as_deref()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(self.server_addr);
+        let via_proto = self.via_proto();
+        let contact_transport = self.contact_transport_param();
+
+        let body = format!("Signal={digit}\r\nDuration=250\r\n");
+        let info = format!(
+            "INFO {to_uri} SIP/2.0\r\n\
+             Via: SIP/2.0/{via_proto} {local_ip}:{local_port};branch={branch};rport\r\n\
+             Max-Forwards: 70\r\n\
+             To: <{to_uri}>{to_tag}\r\n\
+             From: \"{display}\" <sip:{username}@{server}>;tag={from_tag}\r\n\
+             Call-ID: {call_id_s}\r\n\
+             CSeq: {cseq} INFO\r\n\
+             Contact: <sip:{username}@{adv_ip}:{local_port}{contact_transport}>\r\n\
+             Content-Type: application/dtmf-relay\r\n\
+             User-Agent: DeeLip/0.1.0\r\n\
+             Content-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        debug!("→ INFO {to_uri} (DTMF digit={digit})");
+        let _ = self.transport.send(info.as_bytes(), contact).await;
+    }
+
     /// Attended transfer: sends REFER on the ORIGINAL call's dialog with a
     /// `Replaces` parameter (RFC 3891) referencing the CONSULTATION call's
     /// dialog identity, so the transferee re-INVITEs the consultation
@@ -667,7 +738,7 @@ impl SipStack {
         let from_tag = new_tag();
         let sub = PresenceSubscription::new(call_id.clone(), from_tag.clone(), target_uri.to_string());
 
-        let msg = self.build_subscribe(&call_id, &from_tag, 1, target_uri, SUBSCRIBE_EXPIRES, None);
+        let msg = self.build_subscribe(&call_id, &from_tag, 1, target_uri, SUBSCRIBE_EXPIRES, None, PRESENCE_EVENT, PRESENCE_ACCEPT);
         debug!("→ SUBSCRIBE {target_uri} (Event: presence)");
         if let Err(e) = self.transport.send(msg.as_bytes(), self.server_addr).await {
             error!("Failed to send SUBSCRIBE: {e}");
@@ -691,7 +762,7 @@ impl SipStack {
             if let Some(sub) = self.subscriptions.get_mut(&call_id) {
                 let cseq     = sub.next_local_cseq();
                 let from_tag = sub.local_tag.clone();
-                let msg = self.build_subscribe(&call_id, &from_tag, cseq, target_uri, 0, None);
+                let msg = self.build_subscribe(&call_id, &from_tag, cseq, target_uri, 0, None, PRESENCE_EVENT, PRESENCE_ACCEPT);
                 debug!("→ SUBSCRIBE {target_uri} (Expires: 0, unsubscribe)");
                 let _ = self.transport.send(msg.as_bytes(), self.server_addr).await;
             }
@@ -716,20 +787,27 @@ impl SipStack {
             let cseq       = sub.next_local_cseq();
             let from_tag   = sub.local_tag.clone();
             let target_uri = sub.target_uri.clone();
-            let msg = self.build_subscribe(&call_id, &from_tag, cseq, &target_uri, SUBSCRIBE_EXPIRES, None);
+            let msg = self.build_subscribe(&call_id, &from_tag, cseq, &target_uri, SUBSCRIBE_EXPIRES, None, PRESENCE_EVENT, PRESENCE_ACCEPT);
             debug!("→ SUBSCRIBE {target_uri} (refresh)");
             let _ = self.transport.send(msg.as_bytes(), self.server_addr).await;
         }
     }
 
+    /// `event_package`/`accept` parameterize this over the presence
+    /// (`presence`/`application/pidf+xml`) and MWI
+    /// (`message-summary`/`application/simple-message-summary`) use sites --
+    /// everything else about the SUBSCRIBE (dialog identity, auth retry,
+    /// refresh) is identical regardless of which event package it's for.
     fn build_subscribe(
         &self,
-        call_id:    &str,
-        from_tag:   &str,
-        cseq:       u32,
-        target_uri: &str,
-        expires:    u32,
-        auth:       Option<&str>,
+        call_id:       &str,
+        from_tag:      &str,
+        cseq:          u32,
+        target_uri:    &str,
+        expires:       u32,
+        auth:          Option<&str>,
+        event_package: &str,
+        accept:        &str,
     ) -> String {
         let branch     = new_branch();
         let server     = &self.account.server;
@@ -750,8 +828,8 @@ impl SipStack {
              Call-ID: {call_id}\r\n\
              CSeq: {cseq} SUBSCRIBE\r\n\
              Contact: <sip:{username}@{adv_ip}:{local_port}{contact_transport}>\r\n\
-             Event: presence\r\n\
-             Accept: application/pidf+xml\r\n\
+             Event: {event_package}\r\n\
+             Accept: {accept}\r\n\
              Expires: {expires}\r\n\
              User-Agent: DeeLip/0.1.0\r\n"
         );
@@ -760,7 +838,7 @@ impl SipStack {
         msg
     }
 
-    async fn on_subscribe_response(&mut self, msg: SipMessage, status: u16, call_id: String) {
+    async fn on_presence_subscribe_response(&mut self, msg: SipMessage, status: u16, call_id: String) {
         match status {
             200 => {
                 let expires = extract_expires(&msg).unwrap_or(SUBSCRIBE_EXPIRES);
@@ -807,7 +885,7 @@ impl SipStack {
                 sub.auth_retried = true;
                 let cseq     = sub.next_local_cseq();
                 let from_tag = sub.local_tag.clone();
-                let retry = self.build_subscribe(&call_id, &from_tag, cseq, &target_uri, SUBSCRIBE_EXPIRES, Some(&auth));
+                let retry = self.build_subscribe(&call_id, &from_tag, cseq, &target_uri, SUBSCRIBE_EXPIRES, Some(&auth), PRESENCE_EVENT, PRESENCE_ACCEPT);
                 let _ = self.transport.send(retry.as_bytes(), self.server_addr).await;
             }
             c if c >= 300 => {
@@ -818,12 +896,111 @@ impl SipStack {
         }
     }
 
+    // ── MWI (SUBSCRIBE/NOTIFY, Event: message-summary) ───────────────────────
+
+    async fn subscribe_mwi(&mut self, target_uri: &str) {
+        let call_id  = new_call_id(&self.local_ip);
+        let from_tag = new_tag();
+        let sub = MwiSubscription::new(call_id.clone(), from_tag.clone(), target_uri.to_string());
+
+        let msg = self.build_subscribe(&call_id, &from_tag, 1, target_uri, SUBSCRIBE_EXPIRES, None, MWI_EVENT, MWI_ACCEPT);
+        debug!("→ SUBSCRIBE {target_uri} (Event: message-summary)");
+        if let Err(e) = self.transport.send(msg.as_bytes(), self.server_addr).await {
+            error!("Failed to send SUBSCRIBE: {e}");
+            let _ = self.event_tx.send(SipEvent::MwiSubscribeFailed {
+                uri: target_uri.to_string(), reason: e.to_string(),
+            });
+            return;
+        }
+        self.mwi_subscriptions.insert(call_id, sub);
+    }
+
+    /// Re-SUBSCRIBE any MWI subscription whose `refresh_after` has passed --
+    /// mirrors `refresh_presence_subscriptions` exactly.
+    async fn refresh_mwi_subscriptions(&mut self) {
+        let now = Instant::now();
+        let due: Vec<String> = self.mwi_subscriptions.iter()
+            .filter(|(_, s)| s.refresh_after <= now)
+            .map(|(id, _)| id.clone())
+            .collect();
+
+        for call_id in due {
+            let Some(sub) = self.mwi_subscriptions.get_mut(&call_id) else { continue };
+            sub.auth_retried = false;
+            let cseq       = sub.next_local_cseq();
+            let from_tag   = sub.local_tag.clone();
+            let target_uri = sub.target_uri.clone();
+            let msg = self.build_subscribe(&call_id, &from_tag, cseq, &target_uri, SUBSCRIBE_EXPIRES, None, MWI_EVENT, MWI_ACCEPT);
+            debug!("→ SUBSCRIBE {target_uri} (MWI refresh)");
+            let _ = self.transport.send(msg.as_bytes(), self.server_addr).await;
+        }
+    }
+
+    async fn on_mwi_subscribe_response(&mut self, msg: SipMessage, status: u16, call_id: String) {
+        match status {
+            200 => {
+                let expires = extract_expires(&msg).unwrap_or(SUBSCRIBE_EXPIRES);
+                let uri = if let Some(sub) = self.mwi_subscriptions.get_mut(&call_id) {
+                    if sub.remote_tag.is_none() {
+                        sub.remote_tag = parse_tag(msg.header("To").unwrap_or(""));
+                    }
+                    sub.refresh_after = Instant::now() + Duration::from_secs((expires as u64 * 9) / 10);
+                    sub.auth_retried  = false;
+                    sub.target_uri.clone()
+                } else {
+                    return;
+                };
+                let _ = self.event_tx.send(SipEvent::MwiSubscribed { uri, expires });
+            }
+            401 | 407 => {
+                let Some(sub) = self.mwi_subscriptions.get(&call_id) else { return };
+                if sub.auth_retried {
+                    let uri = self.mwi_subscriptions.remove(&call_id).map(|s| s.target_uri).unwrap_or_default();
+                    let _ = self.event_tx.send(SipEvent::MwiSubscribeFailed {
+                        uri, reason: format!("{status}"),
+                    });
+                    return;
+                }
+                let target_uri = sub.target_uri.clone();
+                let hdr_name = if status == 407 { "Proxy-Authenticate" } else { "WWW-Authenticate" };
+                let Some(challenge_raw) = msg.header(hdr_name) else {
+                    let uri = self.mwi_subscriptions.remove(&call_id).map(|s| s.target_uri).unwrap_or_default();
+                    let _ = self.event_tx.send(SipEvent::MwiSubscribeFailed {
+                        uri, reason: "Missing auth challenge".into(),
+                    });
+                    return;
+                };
+                let Some(auth) = build_challenge_response(
+                    &self.account.username, &self.account.password, "SUBSCRIBE", &target_uri, challenge_raw,
+                ) else {
+                    let uri = self.mwi_subscriptions.remove(&call_id).map(|s| s.target_uri).unwrap_or_default();
+                    let _ = self.event_tx.send(SipEvent::MwiSubscribeFailed {
+                        uri, reason: "Bad auth challenge".into(),
+                    });
+                    return;
+                };
+                let Some(sub) = self.mwi_subscriptions.get_mut(&call_id) else { return };
+                sub.auth_retried = true;
+                let cseq     = sub.next_local_cseq();
+                let from_tag = sub.local_tag.clone();
+                let retry = self.build_subscribe(&call_id, &from_tag, cseq, &target_uri, SUBSCRIBE_EXPIRES, Some(&auth), MWI_EVENT, MWI_ACCEPT);
+                let _ = self.transport.send(retry.as_bytes(), self.server_addr).await;
+            }
+            c if c >= 300 => {
+                let uri = self.mwi_subscriptions.remove(&call_id).map(|s| s.target_uri).unwrap_or_default();
+                let _ = self.event_tx.send(SipEvent::MwiSubscribeFailed { uri, reason: format!("{c}") });
+            }
+            _ => {}
+        }
+    }
+
     async fn on_notify(&mut self, msg: SipMessage, from: SocketAddr) {
         let call_id = msg.call_id().map(str::to_string);
         let is_presence = call_id.as_deref().is_some_and(|id| self.subscriptions.contains_key(id));
+        let is_mwi = call_id.as_deref().is_some_and(|id| self.mwi_subscriptions.contains_key(id));
 
         if is_presence {
-            let call_id = call_id.unwrap();
+            let call_id = call_id.clone().unwrap();
             let body = String::from_utf8_lossy(&msg.body).into_owned();
 
             if let Some(state) = parse_pidf_basic(&body) {
@@ -844,10 +1021,32 @@ impl SipStack {
                     self.subscriptions.remove(&call_id);
                 }
             }
+        } else if is_mwi {
+            let call_id = call_id.unwrap();
+            let body = String::from_utf8_lossy(&msg.body).into_owned();
+
+            if let Some(state) = parse_mwi_summary(&body) {
+                if let Some(sub) = self.mwi_subscriptions.get_mut(&call_id) {
+                    sub.state = state;
+                    if sub.remote_tag.is_none() {
+                        sub.remote_tag = parse_tag(msg.header("From").unwrap_or(""));
+                    }
+                    let uri = sub.target_uri.clone();
+                    let _ = self.event_tx.send(SipEvent::MwiUpdate { uri, state });
+                }
+            }
+
+            if let Some(sub_state) = msg.header("Subscription-State") {
+                let (state_token, _) = parse_subscription_state(sub_state);
+                if state_token.eq_ignore_ascii_case("terminated") {
+                    self.mwi_subscriptions.remove(&call_id);
+                }
+            }
         }
 
-        // Non-presence NOTIFY (e.g. blind-transfer's sipfrag) falls through to
-        // an unconditional blind-ack, unchanged from before this feature.
+        // Non-presence/MWI NOTIFY (e.g. blind-transfer's sipfrag) falls
+        // through to an unconditional blind-ack, unchanged from before
+        // either of these subscription features existed.
         self.send_ok(&msg, from).await;
     }
 
@@ -875,9 +1074,14 @@ impl SipStack {
 
         // SUBSCRIBE responses don't follow the INVITE/BYE convention either
         // (success is 200 OK but with Expires semantics, no ACK) and aren't
-        // call dialogs at all -- handled entirely against `self.subscriptions`.
+        // call dialogs at all -- handled entirely against `self.subscriptions`
+        // / `self.mwi_subscriptions`, whichever map this call-id belongs to.
         if matches!(msg.cseq(), Some((_, SipMethod::Subscribe))) {
-            self.on_subscribe_response(msg, status, call_id).await;
+            if self.subscriptions.contains_key(&call_id) {
+                self.on_presence_subscribe_response(msg, status, call_id).await;
+            } else if self.mwi_subscriptions.contains_key(&call_id) {
+                self.on_mwi_subscribe_response(msg, status, call_id).await;
+            }
             return;
         }
 

@@ -14,6 +14,28 @@ pub enum TransportProtocol {
     Tls,
 }
 
+// ── DTMF mode ─────────────────────────────────────────────────────────────────
+
+/// How this account sends DTMF digits during a call — some PBXes/gateways
+/// only reliably support one of these, so it's configurable per account
+/// rather than a single hardcoded scheme.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum DtmfMode {
+    /// RFC 2833/4733 out-of-band RTP telephone-event packets (what DeeLip
+    /// has always done) — the most broadly interoperable default.
+    #[default]
+    Rfc2833,
+    /// SIP INFO requests with an `application/dtmf-relay` body — an older,
+    /// still-common scheme some PBXes/gateways prefer over RTP events.
+    SipInfo,
+    /// A real dual-tone audio signal mixed into the outgoing RTP audio
+    /// itself, exactly as if the digit were dialed on a physical phone —
+    /// for gateways/PBXes that don't reliably support either out-of-band
+    /// scheme above.
+    Inband,
+}
+
 // ── SIP account ───────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,11 +82,31 @@ pub struct SipAccount {
     /// since `deelip-sip` depends on `deelip-config`, not the reverse.
     #[serde(default = "default_codec_order")]
     pub codec_order: Vec<String>,
+    /// How this account sends DTMF digits (see `DtmfMode`).
+    #[serde(default)]
+    pub dtmf_mode: DtmfMode,
+    /// If true, an incoming call on this account is automatically answered
+    /// after `auto_answer_secs` of ringing (intercom-style) instead of
+    /// waiting for the user. Off by default. Takes priority over DND/
+    /// forwarding is NOT implied — those are checked first in the
+    /// `IncomingCall` handler, same precedence as before this existed.
+    #[serde(default)]
+    pub auto_answer_enabled: bool,
+    #[serde(default = "default_auto_answer_secs")]
+    pub auto_answer_secs: u32,
+    /// Mailbox to subscribe to for voicemail message-waiting indication
+    /// (RFC 3842 `Event: message-summary`). Unset disables MWI entirely
+    /// for this account — there's no separate on/off flag, presence of a
+    /// mailbox value *is* the toggle (same `Option<String>` idiom as
+    /// `no_answer_forward`/`forward_always` above).
+    #[serde(default)]
+    pub mailbox: Option<String>,
 }
 
 fn default_sip_port() -> u16 { 5060 }
 fn default_true() -> bool { true }
 fn default_no_answer_timeout() -> u32 { 20 }
+fn default_auto_answer_secs() -> u32 { 3 }
 fn default_codec_order() -> Vec<String> {
     ["opus", "g722", "pcmu", "pcma"].map(String::from).to_vec()
 }
@@ -86,6 +128,10 @@ impl Default for SipAccount {
             forward_always: None,
             forward_on_busy: None,
             codec_order: default_codec_order(),
+            dtmf_mode: DtmfMode::default(),
+            auto_answer_enabled: false,
+            auto_answer_secs: default_auto_answer_secs(),
+            mailbox: None,
         }
     }
 }
@@ -189,7 +235,25 @@ pub struct AppConfig {
     /// effect on the next call placed/answered, not any call in progress.
     #[serde(default)]
     pub ice_enabled: bool,
+
+    /// Enable system-wide Answer/Hangup/Mute hotkeys that work even when
+    /// DeeLip isn't focused (Linux support is X11-only, same constraint as
+    /// the main window itself being forced onto X11/XWayland). Off by
+    /// default; registration happens once at startup, so changing this or
+    /// any binding below requires a restart to take effect.
+    #[serde(default)]
+    pub global_hotkeys_enabled: bool,
+    #[serde(default = "default_hotkey_answer")]
+    pub hotkey_answer: String,
+    #[serde(default = "default_hotkey_hangup")]
+    pub hotkey_hangup: String,
+    #[serde(default = "default_hotkey_mute")]
+    pub hotkey_mute: String,
 }
+
+fn default_hotkey_answer() -> String { "Ctrl+Alt+A".into() }
+fn default_hotkey_hangup() -> String { "Ctrl+Alt+H".into() }
+fn default_hotkey_mute()   -> String { "Ctrl+Alt+M".into() }
 
 impl Default for AppConfig {
     fn default() -> Self {
@@ -208,6 +272,10 @@ impl Default for AppConfig {
             start_minimized:       false,
             blocklist:             Vec::new(),
             ice_enabled:           false,
+            global_hotkeys_enabled: false,
+            hotkey_answer: default_hotkey_answer(),
+            hotkey_hangup: default_hotkey_hangup(),
+            hotkey_mute:   default_hotkey_mute(),
         }
     }
 }

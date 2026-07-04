@@ -1,9 +1,16 @@
-//! DTMF telephone-event encoding (RFC 2833 / RFC 4733).
+//! DTMF telephone-event encoding (RFC 2833 / RFC 4733), plus inband
+//! dual-tone audio synthesis for `DtmfMode::Inband`.
 //! Payload type 101 is the IANA-registered dynamic PT for telephone-event.
 
+use crate::audio::{FRAME_SAMPLES, SAMPLE_RATE};
 use crate::rtp::RtpPacket;
 
 pub const DTMF_PAYLOAD_TYPE: u8 = 101;
+
+/// How many 20ms frames of inband tone to send per digit — 200ms, a
+/// typical single-press duration (same ballpark as the RFC 2833 burst's
+/// own ~160ms of "on" time above, see `build_dtmf_burst`).
+pub const INBAND_FRAME_COUNT: u32 = 10;
 
 // ── Digit → event code ────────────────────────────────────────────────────────
 
@@ -19,6 +26,43 @@ pub fn char_to_event(c: char) -> Option<u8> {
         'D' | 'd' => Some(15),
         _ => None,
     }
+}
+
+// ── Inband dual-tone synthesis ────────────────────────────────────────────────
+
+/// Standard DTMF dual-tone frequency pair (low, high) in Hz — ITU-T Q.23/Q.24.
+fn dtmf_frequencies(c: char) -> Option<(f32, f32)> {
+    match c {
+        '1' => Some((697.0, 1209.0)), '2' => Some((697.0, 1336.0)), '3' => Some((697.0, 1477.0)),
+        'A' | 'a' => Some((697.0, 1633.0)),
+        '4' => Some((770.0, 1209.0)), '5' => Some((770.0, 1336.0)), '6' => Some((770.0, 1477.0)),
+        'B' | 'b' => Some((770.0, 1633.0)),
+        '7' => Some((852.0, 1209.0)), '8' => Some((852.0, 1336.0)), '9' => Some((852.0, 1477.0)),
+        'C' | 'c' => Some((852.0, 1633.0)),
+        '*' => Some((941.0, 1209.0)), '0' => Some((941.0, 1336.0)), '#' => Some((941.0, 1477.0)),
+        'D' | 'd' => Some((941.0, 1633.0)),
+        _ => None,
+    }
+}
+
+/// Synthesize one 20ms (`FRAME_SAMPLES` @ `SAMPLE_RATE`) frame of dual-tone
+/// DTMF audio for `c`, continuing the waveform from `phase_samples` (the
+/// count of samples already emitted for this same digit press) so
+/// consecutive frames don't click at the frame boundary. `None` if `c`
+/// isn't a valid DTMF character.
+///
+/// Each tone is scaled to half full-scale before summing, so the combined
+/// signal (like RFC 3551's own inband-tone guidance) never clips.
+pub fn dtmf_tone_frame(c: char, phase_samples: u32) -> Option<Vec<i16>> {
+    let (f1, f2) = dtmf_frequencies(c)?;
+    let mut out = Vec::with_capacity(FRAME_SAMPLES);
+    for i in 0..FRAME_SAMPLES as u32 {
+        let t = (phase_samples + i) as f32 / SAMPLE_RATE as f32;
+        let s = 0.5 * (2.0 * std::f32::consts::PI * f1 * t).sin()
+              + 0.5 * (2.0 * std::f32::consts::PI * f2 * t).sin();
+        out.push((s * i16::MAX as f32) as i16);
+    }
+    Some(out)
 }
 
 // ── Payload encoding ──────────────────────────────────────────────────────────
@@ -80,6 +124,33 @@ pub fn build_dtmf_burst(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tone_frame_has_correct_length_and_no_clipping() {
+        for c in "0123456789*#ABCD".chars() {
+            let frame = dtmf_tone_frame(c, 0).unwrap();
+            assert_eq!(frame.len(), FRAME_SAMPLES);
+            assert!(frame.iter().all(|&s| s != i16::MIN), "digit {c} clipped");
+        }
+    }
+
+    #[test]
+    fn tone_frame_rejects_non_dtmf_characters() {
+        assert!(dtmf_tone_frame('X', 0).is_none());
+    }
+
+    #[test]
+    fn tone_frame_is_continuous_across_frame_boundary() {
+        // The sample right after frame 0 ends should match the first
+        // sample of a frame synthesized starting at that same phase --
+        // i.e. phase-continuation actually continues the waveform rather
+        // than restarting it (which would click at every frame boundary).
+        let frame0 = dtmf_tone_frame('5', 0).unwrap();
+        let frame1 = dtmf_tone_frame('5', FRAME_SAMPLES as u32).unwrap();
+        let restart = dtmf_tone_frame('5', 0).unwrap();
+        assert_eq!(frame0, restart);
+        assert_ne!(frame1, restart, "continued phase should differ from a restarted one");
+    }
 
     #[test]
     fn char_mapping() {

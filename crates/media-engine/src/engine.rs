@@ -21,10 +21,10 @@ use deelip_sip::{AudioCodec, SrtpSession};
 use crate::aec::EchoCanceller;
 use crate::audio::{open_streams, AudioStreams, PlaybackTx, FRAME_SAMPLES, SAMPLE_RATE};
 use crate::codec::{
-    decode_pcma, decode_pcmu, encode_pcma, encode_pcmu, G722Decoder, G722Encoder, OpusDecoder,
-    OpusEncoder,
+    decode_pcma, decode_pcmu, encode_pcma, encode_pcmu, G722Decoder, G722Encoder, GsmDecoder,
+    GsmEncoder, IlbcDecoder, IlbcEncoder, OpusDecoder, OpusEncoder,
 };
-use crate::dtmf::{build_dtmf_burst, char_to_event, DTMF_PAYLOAD_TYPE};
+use crate::dtmf::{build_dtmf_burst, char_to_event, dtmf_tone_frame, DTMF_PAYLOAD_TYPE, INBAND_FRAME_COUNT};
 use crate::rtp::{RtpPacket, RtpSender};
 
 type WavWriter = hound::WavWriter<BufWriter<File>>;
@@ -63,7 +63,8 @@ fn open_recorder(call_id: &str) -> anyhow::Result<WavWriter> {
 fn ts_increment_for(codec: AudioCodec) -> u32 {
     match codec {
         AudioCodec::Opus => 960,
-        AudioCodec::Pcmu | AudioCodec::Pcma | AudioCodec::G722 => 160,
+        AudioCodec::Pcmu | AudioCodec::Pcma | AudioCodec::G722
+            | AudioCodec::Gsm | AudioCodec::Ilbc => 160,
     }
 }
 
@@ -177,7 +178,8 @@ impl JitterTracker {
 fn clock_hz_for(codec: AudioCodec) -> f64 {
     match codec {
         AudioCodec::Opus => 48000.0,
-        AudioCodec::Pcmu | AudioCodec::Pcma | AudioCodec::G722 => 8000.0,
+        AudioCodec::Pcmu | AudioCodec::Pcma | AudioCodec::G722
+            | AudioCodec::Gsm | AudioCodec::Ilbc => 8000.0,
     }
 }
 
@@ -193,6 +195,7 @@ pub struct MediaEngine {
     recv_task2: Option<tokio::task::JoinHandle<()>>,
     stop_tx:    watch::Sender<bool>,
     dtmf_tx:    mpsc::UnboundedSender<char>,
+    inband_dtmf_tx: mpsc::UnboundedSender<char>,
     muted:      Arc<AtomicBool>,
     /// Owned by `MediaEngine` itself (not just captured by the send task's
     /// closure) so `stop()` can finalize it deterministically from the
@@ -313,6 +316,7 @@ impl MediaEngine {
         let mut stop_recv = stop_rx;
 
         let (dtmf_tx, mut dtmf_rx) = mpsc::unbounded_channel::<char>();
+        let (inband_dtmf_tx, mut inband_dtmf_rx) = mpsc::unbounded_channel::<char>();
 
         let recorder: Arc<Mutex<Option<WavWriter>>> = Arc::new(Mutex::new(
             if recording_enabled {
@@ -337,12 +341,26 @@ impl MediaEngine {
             None
         };
         let mut g722_enc = if codec == AudioCodec::G722 { Some(G722Encoder::new()) } else { None };
+        let mut gsm_enc  = if codec == AudioCodec::Gsm  { Some(GsmEncoder::new()) } else { None };
+        let mut ilbc_enc = if codec == AudioCodec::Ilbc {
+            Some(IlbcEncoder::new().context("Creating iLBC encoder")?)
+        } else {
+            None
+        };
         let mut opus_enc2 = match leg2_codec {
             Some(AudioCodec::Opus) => Some(OpusEncoder::new().context("Creating Opus encoder (leg2)")?),
             _ => None,
         };
         let mut g722_enc2 = match leg2_codec {
             Some(AudioCodec::G722) => Some(G722Encoder::new()),
+            _ => None,
+        };
+        let mut gsm_enc2 = match leg2_codec {
+            Some(AudioCodec::Gsm) => Some(GsmEncoder::new()),
+            _ => None,
+        };
+        let mut ilbc_enc2 = match leg2_codec {
+            Some(AudioCodec::Ilbc) => Some(IlbcEncoder::new().context("Creating iLBC encoder (leg2)")?),
             _ => None,
         };
         let mut rtp_send2 = leg2_codec.map(|c| RtpSender::new(c.payload_type(), ts_increment_for(c)));
@@ -357,24 +375,42 @@ impl MediaEngine {
         let send_leg2_buf = leg2_buf.clone();
         let send_stats = stats.clone();
 
+        // Inband-DTMF state: `Some((digit, frames_remaining))` while a tone
+        // is actively overriding captured mic audio; `inband_phase` tracks
+        // samples-so-far for this press so consecutive tone frames don't
+        // click at the frame boundary (reset to 0 on each new digit press,
+        // not carried across presses -- keeps it small/safe over a long call).
+        let mut inband_active: Option<(char, u32)> = None;
+        let mut inband_phase: u32 = 0;
+
         let send_task = tokio::spawn(async move {
             loop {
                 tokio::select! {
                     Some(pcm) = cap_rx.recv() => {
-                        let pcm = if send_muted.load(Ordering::Relaxed) {
-                            vec![0i16; pcm.len()]
+                        let pcm = if let Some((digit, remaining)) = inband_active {
+                            let tone = dtmf_tone_frame(digit, inband_phase)
+                                .expect("inband_active only ever holds a valid DTMF character");
+                            inband_phase = inband_phase.wrapping_add(FRAME_SAMPLES as u32);
+                            inband_active = if remaining <= 1 { None } else { Some((digit, remaining - 1)) };
+                            tone
                         } else {
-                            pcm
-                        };
-                        let pcm = match (echo_canceller.as_mut(), echo_ref.as_ref()) {
-                            (Some(canceller), Some(echo_ref)) => canceller.process(&pcm, echo_ref),
-                            _ => pcm,
+                            let pcm = if send_muted.load(Ordering::Relaxed) {
+                                vec![0i16; pcm.len()]
+                            } else {
+                                pcm
+                            };
+                            match (echo_canceller.as_mut(), echo_ref.as_ref()) {
+                                (Some(canceller), Some(echo_ref)) => canceller.process(&pcm, echo_ref),
+                                _ => pcm,
+                            }
                         };
 
                         // Leg 1: encode + send.
                         let encoded = match codec {
                             AudioCodec::Opus => opus_enc.as_mut().unwrap().encode(&pcm),
                             AudioCodec::G722 => g722_enc.as_mut().unwrap().encode(&pcm),
+                            AudioCodec::Gsm  => gsm_enc.as_mut().unwrap().encode(&pcm),
+                            AudioCodec::Ilbc => ilbc_enc.as_mut().unwrap().encode(&pcm),
                             AudioCodec::Pcma => encode_pcma(&pcm),
                             AudioCodec::Pcmu => encode_pcmu(&pcm),
                         };
@@ -404,6 +440,8 @@ impl MediaEngine {
                             let encoded2 = match c2 {
                                 AudioCodec::Opus => opus_enc2.as_mut().unwrap().encode(&pcm),
                                 AudioCodec::G722 => g722_enc2.as_mut().unwrap().encode(&pcm),
+                                AudioCodec::Gsm  => gsm_enc2.as_mut().unwrap().encode(&pcm),
+                                AudioCodec::Ilbc => ilbc_enc2.as_mut().unwrap().encode(&pcm),
                                 AudioCodec::Pcma => encode_pcma(&pcm),
                                 AudioCodec::Pcmu => encode_pcmu(&pcm),
                             };
@@ -484,6 +522,12 @@ impl MediaEngine {
                             }
                         }
                     }
+                    Some(ch) = inband_dtmf_rx.recv() => {
+                        if char_to_event(ch).is_some() {
+                            inband_active = Some((ch, INBAND_FRAME_COUNT));
+                            inband_phase = 0;
+                        }
+                    }
                     Ok(()) = stop_send.changed() => {
                         if *stop_send.borrow() { break; }
                     }
@@ -500,6 +544,12 @@ impl MediaEngine {
             None
         };
         let mut g722_dec = if codec == AudioCodec::G722 { Some(G722Decoder::new()) } else { None };
+        let mut gsm_dec  = if codec == AudioCodec::Gsm  { Some(GsmDecoder::new()) } else { None };
+        let mut ilbc_dec = if codec == AudioCodec::Ilbc {
+            Some(IlbcDecoder::new().context("Creating iLBC decoder")?)
+        } else {
+            None
+        };
         let recv_stats = stats.clone();
         let recv_clock_hz = clock_hz_for(codec);
 
@@ -534,6 +584,8 @@ impl MediaEngine {
                             let pcm = match codec {
                                 AudioCodec::Opus => opus_dec.as_mut().unwrap().decode(&pkt.payload),
                                 AudioCodec::G722 => g722_dec.as_mut().unwrap().decode(&pkt.payload),
+                                AudioCodec::Gsm  => gsm_dec.as_mut().unwrap().decode(&pkt.payload),
+                                AudioCodec::Ilbc => ilbc_dec.as_mut().unwrap().decode(&pkt.payload),
                                 AudioCodec::Pcma => decode_pcma(&pkt.payload),
                                 AudioCodec::Pcmu => decode_pcmu(&pkt.payload),
                             };
@@ -557,6 +609,12 @@ impl MediaEngine {
                 None
             };
             let mut g722_dec2 = if leg.codec == AudioCodec::G722 { Some(G722Decoder::new()) } else { None };
+            let mut gsm_dec2  = if leg.codec == AudioCodec::Gsm  { Some(GsmDecoder::new()) } else { None };
+            let mut ilbc_dec2 = if leg.codec == AudioCodec::Ilbc {
+                Some(IlbcDecoder::new().context("Creating iLBC decoder (leg2)")?)
+            } else {
+                None
+            };
             let codec2   = leg.codec;
             let pt2      = leg2_dtmf_pt.unwrap();
             let mut decrypt_ctx2 = leg2_decrypt_ctx;
@@ -595,6 +653,8 @@ impl MediaEngine {
                                 let pcm = match codec2 {
                                     AudioCodec::Opus => opus_dec2.as_mut().unwrap().decode(&pkt.payload),
                                     AudioCodec::G722 => g722_dec2.as_mut().unwrap().decode(&pkt.payload),
+                                    AudioCodec::Gsm  => gsm_dec2.as_mut().unwrap().decode(&pkt.payload),
+                                    AudioCodec::Ilbc => ilbc_dec2.as_mut().unwrap().decode(&pkt.payload),
                                     AudioCodec::Pcma => decode_pcma(&pkt.payload),
                                     AudioCodec::Pcmu => decode_pcmu(&pkt.payload),
                                 };
@@ -612,12 +672,22 @@ impl MediaEngine {
             None
         };
 
-        Ok(Self { _audio: audio_streams, send_task, recv_task, recv_task2, stop_tx, dtmf_tx, muted, recorder, stats })
+        Ok(Self {
+            _audio: audio_streams, send_task, recv_task, recv_task2, stop_tx,
+            dtmf_tx, inband_dtmf_tx, muted, recorder, stats,
+        })
     }
 
     /// Queue a DTMF digit for immediate out-of-band RTP transmission.
     pub fn send_dtmf(&self, digit: char) {
         let _ = self.dtmf_tx.send(digit);
+    }
+
+    /// Queue a DTMF digit to be sent as real inband dual-tone audio, mixed
+    /// into the outgoing RTP stream in place of captured mic audio for the
+    /// next `INBAND_FRAME_COUNT` frames.
+    pub fn send_dtmf_inband(&self, digit: char) {
+        let _ = self.inband_dtmf_tx.send(digit);
     }
 
     /// Snapshot of this call's current RTP stats (packets/bytes sent and

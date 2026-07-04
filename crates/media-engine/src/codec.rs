@@ -215,6 +215,177 @@ impl G722Decoder {
     }
 }
 
+// ── GSM 06.10 ─────────────────────────────────────────────────────────────────
+//
+// No usable pure-Rust crate exists for this (the only one published,
+// `oxideav-gsm`, has every version yanked) -- `gsm-sys` instead vendors and
+// compiles the classic reference implementation (Jutta Degener/Carsten
+// Bormann, TU Berlin, 1992-2009 -- the same code Asterisk/FFmpeg/SoX have
+// used for decades) from C source via the `cc` crate at build time, no
+// system package needed. It's a raw `extern "C"` binding; these wrappers
+// give it the same safe encode/decode-per-frame shape as every codec above.
+// 160 samples (20ms @ 8kHz) <-> one 33-byte GSM full-rate frame.
+
+pub struct GsmEncoder(gsm_sys::Gsm);
+
+// Safety: `gsm_sys::Gsm` (`*mut GsmState`) is a raw pointer, so it isn't
+// `Send` by default -- but this struct is its exclusive owner (created in
+// `new()`, freed in `Drop`, never shared with or accessed from another
+// thread concurrently), and libgsm's per-instance state is entirely
+// self-contained (no thread-local or global state), so moving it to
+// another thread (e.g. into `tokio::spawn`'s task) is sound.
+unsafe impl Send for GsmEncoder {}
+
+impl Default for GsmEncoder {
+    fn default() -> Self { Self::new() }
+}
+
+impl GsmEncoder {
+    pub fn new() -> Self {
+        // Safety: `gsm_create` just allocates and zero-initializes the
+        // codec's internal state struct; the returned pointer is non-null
+        // on any real allocator (libgsm has no other failure mode here).
+        Self(unsafe { gsm_sys::gsm_create() })
+    }
+
+    pub fn encode(&mut self, pcm: &[i16]) -> Vec<u8> {
+        let mut frame: gsm_sys::GsmFrame = [0u8; 33];
+        // Safety: `gsm_encode` reads exactly 160 `GsmSignal` (i16) samples
+        // from `arg2` and writes exactly 33 bytes to `arg3` -- both
+        // buffers are sized to match, and `self.0` was built by
+        // `gsm_create` above.
+        unsafe {
+            gsm_sys::gsm_encode(self.0, pcm.as_ptr() as *mut _, frame.as_mut_ptr());
+        }
+        frame.to_vec()
+    }
+}
+
+impl Drop for GsmEncoder {
+    fn drop(&mut self) {
+        // Safety: `self.0` was created by `gsm_create` in `new()` and is
+        // never shared or freed elsewhere.
+        unsafe { gsm_sys::gsm_destroy(self.0) };
+    }
+}
+
+pub struct GsmDecoder(gsm_sys::Gsm);
+
+// Safety: same reasoning as `GsmEncoder`'s `Send` impl above.
+unsafe impl Send for GsmDecoder {}
+
+impl Default for GsmDecoder {
+    fn default() -> Self { Self::new() }
+}
+
+impl GsmDecoder {
+    pub fn new() -> Self {
+        Self(unsafe { gsm_sys::gsm_create() })
+    }
+
+    pub fn decode(&mut self, payload: &[u8]) -> Vec<i16> {
+        if payload.len() != 33 {
+            tracing::error!("GSM decode: expected a 33-byte frame, got {}", payload.len());
+            return Vec::new();
+        }
+        let mut out = [0i16; crate::audio::FRAME_SAMPLES];
+        // Safety: `gsm_decode` reads exactly 33 bytes from `arg2` (checked
+        // above) and writes exactly 160 `GsmSignal` samples to `arg3`,
+        // which `out` is sized to hold.
+        let rc = unsafe {
+            gsm_sys::gsm_decode(self.0, payload.as_ptr() as *mut _, out.as_mut_ptr())
+        };
+        if rc != 0 {
+            tracing::error!("GSM decode failed (rc={rc})");
+            return Vec::new();
+        }
+        out.to_vec()
+    }
+}
+
+impl Drop for GsmDecoder {
+    fn drop(&mut self) {
+        unsafe { gsm_sys::gsm_destroy(self.0) };
+    }
+}
+
+// ── iLBC ──────────────────────────────────────────────────────────────────────
+//
+// 20ms mode (304 bits/38 bytes per frame) matches DeeLip's fixed 20ms RTP
+// framing directly -- no resampling needed, unlike G.722. `oxideav-ilbc`
+// exposes a generic streaming `Encoder`/`Decoder` trait pair (built for a
+// broader multi-codec framework, with `Frame`/`Packet` wrapper types); these
+// wrappers hide that machinery behind the same simple encode/decode-per-
+// frame shape as every codec above.
+
+use oxideav_core::{AudioFrame, CodecId, CodecParameters, Frame, Packet, SampleFormat, TimeBase};
+use oxideav_core::{Decoder as OxDecoder, Encoder as OxEncoder};
+
+fn ilbc_params() -> CodecParameters {
+    let mut params = CodecParameters::audio(CodecId::new(oxideav_ilbc::CODEC_ID_STR));
+    params.sample_rate = Some(crate::audio::SAMPLE_RATE);
+    params.channels = Some(1);
+    params.sample_format = Some(SampleFormat::S16);
+    // Default mode is 20ms (see `oxideav_ilbc`'s own encoder factory) --
+    // matches DeeLip's fixed 20ms framing, so no `frame_ms` option needed.
+    params
+}
+
+fn pcm_to_audio_frame(pcm: &[i16]) -> Frame {
+    let mut bytes = Vec::with_capacity(pcm.len() * 2);
+    for &s in pcm {
+        bytes.extend_from_slice(&s.to_le_bytes());
+    }
+    Frame::Audio(AudioFrame { samples: pcm.len() as u32, pts: Some(0), data: vec![bytes] })
+}
+
+pub struct IlbcEncoder(Box<dyn OxEncoder>);
+
+impl IlbcEncoder {
+    pub fn new() -> anyhow::Result<Self> {
+        let enc = oxideav_ilbc::encoder::make_encoder(&ilbc_params())
+            .map_err(|e| anyhow::anyhow!("Creating iLBC encoder: {e}"))?;
+        Ok(Self(enc))
+    }
+
+    pub fn encode(&mut self, pcm: &[i16]) -> Vec<u8> {
+        if let Err(e) = self.0.send_frame(&pcm_to_audio_frame(pcm)) {
+            tracing::error!("iLBC encode (send_frame) failed: {e}");
+            return Vec::new();
+        }
+        // `receive_packet` returns `Error::NeedMore` if 160 samples haven't
+        // accumulated into a full frame yet -- can't happen when called
+        // with exactly one 160-sample frame at a time, as `engine.rs` does,
+        // but treated as "nothing to send yet" rather than a hard error.
+        self.0.receive_packet().map(|pkt| pkt.data).unwrap_or_default()
+    }
+}
+
+pub struct IlbcDecoder(Box<dyn OxDecoder>);
+
+impl IlbcDecoder {
+    pub fn new() -> anyhow::Result<Self> {
+        let dec = oxideav_ilbc::decoder::make_decoder(&ilbc_params())
+            .map_err(|e| anyhow::anyhow!("Creating iLBC decoder: {e}"))?;
+        Ok(Self(dec))
+    }
+
+    pub fn decode(&mut self, payload: &[u8]) -> Vec<i16> {
+        let pkt = Packet::new(0, TimeBase::new(1, crate::audio::SAMPLE_RATE as i64), payload.to_vec());
+        if let Err(e) = self.0.send_packet(&pkt) {
+            tracing::error!("iLBC decode (send_packet) failed: {e}");
+            return Vec::new();
+        }
+        match self.0.receive_frame() {
+            Ok(Frame::Audio(af)) => af.data.first()
+                .map(|bytes| bytes.chunks_exact(2).map(|c| i16::from_le_bytes([c[0], c[1]])).collect())
+                .unwrap_or_default(),
+            Ok(_) => Vec::new(),
+            Err(e) => { tracing::error!("iLBC decode (receive_frame) failed: {e}"); Vec::new() }
+        }
+    }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -297,5 +468,41 @@ mod tests {
             decoded.len() > expected / 2 && decoded.len() < expected * 2,
             "decoded length {} far from expected ~{expected}", decoded.len(),
         );
+    }
+
+    fn test_tone() -> Vec<i16> {
+        (0..crate::audio::FRAME_SAMPLES)
+            .map(|i| ((i as f32 * 0.2).sin() * 10000.0) as i16)
+            .collect()
+    }
+
+    #[test]
+    fn gsm_roundtrip() {
+        let mut encoder = GsmEncoder::new();
+        let mut decoder = GsmDecoder::new();
+
+        let encoded = encoder.encode(&test_tone());
+        assert_eq!(encoded.len(), 33, "GSM full-rate frames are always 33 bytes");
+
+        let decoded = decoder.decode(&encoded);
+        assert_eq!(decoded.len(), crate::audio::FRAME_SAMPLES);
+    }
+
+    #[test]
+    fn gsm_decode_rejects_wrong_length() {
+        let mut decoder = GsmDecoder::new();
+        assert!(decoder.decode(&[0u8; 10]).is_empty());
+    }
+
+    #[test]
+    fn ilbc_roundtrip() {
+        let mut encoder = IlbcEncoder::new().unwrap();
+        let mut decoder = IlbcDecoder::new().unwrap();
+
+        let encoded = encoder.encode(&test_tone());
+        assert_eq!(encoded.len(), 38, "iLBC 20ms frames are always 38 bytes");
+
+        let decoded = decoder.decode(&encoded);
+        assert_eq!(decoded.len(), crate::audio::FRAME_SAMPLES);
     }
 }

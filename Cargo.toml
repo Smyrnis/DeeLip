@@ -47,6 +47,10 @@ gtk                 = "0.18"
 hound               = "3"
 egui-phosphor       = "0.6"
 audio-codec         = "0.3"
+gsm-sys             = "0.0.2"
+oxideav-ilbc        = "0.0.7"
+oxideav-core        = "0.1"
+global-hotkey       = "0.8"
 
 deelip-config = { path = "crates/config" }
 deelip-sip    = { path = "crates/sip-core" }

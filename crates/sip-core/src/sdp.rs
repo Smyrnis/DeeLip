@@ -3,6 +3,9 @@ use std::net::SocketAddr;
 // ── Codec identity ────────────────────────────────────────────────────────────
 
 pub const OPUS_PAYLOAD_TYPE: u8 = 111;
+/// Dynamic PT for iLBC (RFC 3952 has no static assignment) — picked clear
+/// of every other PT already in use here (0/3/8/9 static, 101/111 dynamic).
+pub const ILBC_PAYLOAD_TYPE: u8 = 98;
 
 /// Negotiated voice codec. The numeric RTP payload type for the wire is
 /// derived from this (see `AudioCodec::payload_type`); it's shared by both
@@ -20,22 +23,32 @@ pub enum AudioCodec {
     /// captured voice objectively clearer; it buys interop with phones/
     /// PBXes that prefer or require G.722 over Opus/G.711.
     G722,
+    /// GSM 06.10 full-rate — legacy narrowband codec, RFC 3551 static PT 3.
+    Gsm,
+    /// iLBC (RFC 3951/3952), 20ms mode (304 bits/38 bytes per frame) to
+    /// match DeeLip's fixed 20ms RTP framing throughout — the alternative
+    /// 30ms mode is deliberately not offered.
+    Ilbc,
 }
 
 /// Every codec this codebase knows how to negotiate, in the historical
 /// default preference order — used as the fallback when an account's
 /// configured codec list is empty (shouldn't normally happen; the Settings
 /// UI itself refuses to let the last enabled codec be disabled).
-pub const ALL_CODECS: [AudioCodec; 4] =
-    [AudioCodec::Opus, AudioCodec::G722, AudioCodec::Pcmu, AudioCodec::Pcma];
+pub const ALL_CODECS: [AudioCodec; 6] = [
+    AudioCodec::Opus, AudioCodec::G722, AudioCodec::Pcmu, AudioCodec::Pcma,
+    AudioCodec::Gsm, AudioCodec::Ilbc,
+];
 
 impl AudioCodec {
     pub fn payload_type(self) -> u8 {
         match self {
             AudioCodec::Pcmu => 0,
+            AudioCodec::Gsm  => 3,
             AudioCodec::Pcma => 8,
-            AudioCodec::Opus => OPUS_PAYLOAD_TYPE,
             AudioCodec::G722 => 9,
+            AudioCodec::Opus => OPUS_PAYLOAD_TYPE,
+            AudioCodec::Ilbc => ILBC_PAYLOAD_TYPE,
         }
     }
 
@@ -49,6 +62,8 @@ impl AudioCodec {
             AudioCodec::Pcma => "PCMA/8000",
             AudioCodec::Opus => "opus/48000/2",
             AudioCodec::G722 => "G722/8000",
+            AudioCodec::Gsm  => "GSM/8000",
+            AudioCodec::Ilbc => "iLBC/8000",
         }
     }
 
@@ -56,6 +71,9 @@ impl AudioCodec {
     fn fmtp(self) -> Option<String> {
         match self {
             AudioCodec::Opus => Some(format!("a=fmtp:{} useinbandfec=1\r\n", self.payload_type())),
+            // RFC 3952 §4.2 -- without this, a receiver defaults to the
+            // 30ms/50-byte mode, which doesn't match what we actually send.
+            AudioCodec::Ilbc => Some(format!("a=fmtp:{} mode=20\r\n", self.payload_type())),
             _ => None,
         }
     }
@@ -361,10 +379,13 @@ pub fn parse_sdp(sdp: &str, allowed: &[AudioCodec]) -> Option<ParsedSdp> {
             else if name.starts_with("pcmu") { Some(AudioCodec::Pcmu) }
             else if name.starts_with("pcma") { Some(AudioCodec::Pcma) }
             else if name.starts_with("g722") { Some(AudioCodec::G722) }
+            else if name.starts_with("gsm") { Some(AudioCodec::Gsm) }
+            else if name.starts_with("ilbc") { Some(AudioCodec::Ilbc) }
             else { None }
         } else {
             match pt {
                 0 => Some(AudioCodec::Pcmu),
+                3 => Some(AudioCodec::Gsm),
                 8 => Some(AudioCodec::Pcma),
                 9 => Some(AudioCodec::G722),
                 _ => None,

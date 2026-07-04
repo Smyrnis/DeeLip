@@ -1,3 +1,4 @@
+use crate::mwi::MwiState;
 use crate::presence::PresenceState;
 
 /// Events emitted by the SIP stack to the application.
@@ -32,6 +33,12 @@ pub enum SipEvent {
     PresenceSubscribeFailed { uri: String, reason: String },
     /// A NOTIFY updated a watched contact's presence state.
     PresenceUpdate { uri: String, state: PresenceState },
+    /// MWI SUBSCRIBE accepted (200 OK); `expires` is the server-granted value.
+    MwiSubscribed { uri: String, expires: u32 },
+    /// MWI SUBSCRIBE rejected.
+    MwiSubscribeFailed { uri: String, reason: String },
+    /// A NOTIFY updated our mailbox's message-waiting state.
+    MwiUpdate { uri: String, state: MwiState },
 }
 
 /// Commands sent from the application into the SIP stack.
@@ -56,4 +63,9 @@ pub enum SipCommand {
     /// Attended-transfer `call_id` (the original call) via REFER with a
     /// `Replaces` parameter referencing `consultation_call_id`'s dialog.
     AttendedTransfer { call_id: String, consultation_call_id: String },
+    /// Send one DTMF digit via SIP INFO (`application/dtmf-relay` body)
+    /// instead of RFC 2833 RTP telephone-events.
+    SendDtmfInfo { call_id: String, digit: char },
+    /// Subscribe to a mailbox's MWI state (`target_uri` is a full SIP URI).
+    SubscribeMwi { target_uri: String },
 }

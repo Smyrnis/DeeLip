@@ -5,12 +5,12 @@ use std::time::Duration;
 
 use deelip_config::{
     AppConfig, CallDirection, CallHistory, CallRecord, CallStatus,
-    Contact, ContactBook, SipAccount, TransportProtocol,
+    Contact, ContactBook, DtmfMode, SipAccount, TransportProtocol,
 };
 use deelip_media::{alloc_rtp_port, ConferenceLeg, MediaEngine};
 use deelip_sip::{
     build_answer, build_hold_offer, build_offer, build_resume_offer,
-    parse_sdp, sdp, AudioCodec, IceAttrs, ParsedSdp, PresenceState, SipEvent, SipHandle, SrtpParams, SrtpSession,
+    parse_sdp, sdp, AudioCodec, IceAttrs, MwiState, ParsedSdp, PresenceState, SipEvent, SipHandle, SrtpParams, SrtpSession,
 };
 use egui::{FontId, RichText, Ui};
 use tokio::runtime::Handle;
@@ -19,6 +19,9 @@ use deelip_nat::{IceConnection, IceGathered, TurnRelay};
 
 pub mod tray;
 use tray::{CtxSlot, QuitState};
+
+mod hotkeys;
+use hotkeys::{Hotkeys, HotkeyAction};
 
 mod notify;
 mod ringtone;
@@ -166,6 +169,11 @@ pub struct DeelipApp {
     /// behavior if the tray icon failed to start.
     tray: Option<(CtxSlot, QuitState)>,
 
+    /// System-wide Answer/Hangup/Mute hotkeys (see `hotkeys` module docs) --
+    /// `None` if disabled in config, or if registration failed (logged, not
+    /// fatal — the app works fine without global hotkeys).
+    hotkeys: Option<Hotkeys>,
+
     // History
     history:      CallHistory,
     history_path: Option<PathBuf>,
@@ -200,6 +208,10 @@ struct PendingCall {
     /// (redirect deadline as a unix timestamp, forward-to URI) if the
     /// owning account has `no_answer_forward` configured.
     forward: Option<(u64, String)>,
+    /// Unix timestamp at which to auto-answer, if the owning account has
+    /// `auto_answer_enabled`. Independent of `forward` — whichever
+    /// deadline is reached first wins (checked in the same per-frame poll).
+    auto_answer_at: Option<u64>,
 }
 
 /// A not-yet-answered outgoing call — at most one at a time (placing a 2nd
@@ -256,6 +268,9 @@ struct AccountState {
     label:  String,
     reg_ok: bool,
     status: String,
+    /// Last-known voicemail MWI state, if this account has `mailbox` set
+    /// and a NOTIFY has arrived yet — `None` until then, or if unconfigured.
+    mwi: Option<MwiState>,
 }
 
 impl DeelipApp {
@@ -272,6 +287,7 @@ impl DeelipApp {
             handle,
             reg_ok: false,
             status: "Registering…".into(),
+            mwi: None,
         }).collect();
 
         let history_path = CallHistory::default_path().ok();
@@ -283,6 +299,18 @@ impl DeelipApp {
         let contacts = contacts_path.as_deref()
             .and_then(|p| ContactBook::load(p).ok())
             .unwrap_or_default();
+
+        let hotkeys = if config.global_hotkeys_enabled {
+            match Hotkeys::spawn(&config.hotkey_answer, &config.hotkey_hangup, &config.hotkey_mute) {
+                Ok(h) => Some(h),
+                Err(e) => {
+                    tracing::warn!("Global hotkeys failed to register ({e}), continuing without them");
+                    None
+                }
+            }
+        } else {
+            None
+        };
 
         Self {
             accounts,
@@ -316,6 +344,7 @@ impl DeelipApp {
             first_frame: true,
             palette: Palette::dark(),
             tray,
+            hotkeys,
             history,
             history_path,
             history_search:         String::new(),
@@ -355,6 +384,7 @@ impl DeelipApp {
                 self.accounts[account].status = format!("Registered (expires {expires}s)");
                 self.refresh_idle_status();
                 self.subscribe_account_contacts(account);
+                self.subscribe_account_mwi(account);
             }
             SipEvent::RegistrationFailed { reason } => {
                 self.accounts[account].reg_ok = false;
@@ -431,8 +461,10 @@ impl DeelipApp {
                         let target = normalize_target(&target, &acc.server);
                         (unix_now() + acc.no_answer_timeout_secs as u64, target)
                     });
+                let auto_answer_at = acc.auto_answer_enabled
+                    .then(|| unix_now() + acc.auto_answer_secs as u64);
                 self.pending_call = Some(PendingCall {
-                    account, call_id, from, remote_sdp, start_time: unix_now(), forward,
+                    account, call_id, from, remote_sdp, start_time: unix_now(), forward, auto_answer_at,
                 });
             }
             SipEvent::CallEnded { call_id } => {
@@ -495,6 +527,15 @@ impl DeelipApp {
             SipEvent::PresenceUpdate { uri, state } => {
                 self.presence.insert(uri, state);
             }
+            SipEvent::MwiSubscribed { uri, expires } => {
+                tracing::debug!(uri, expires, "MWI subscribed");
+            }
+            SipEvent::MwiSubscribeFailed { uri, reason } => {
+                tracing::warn!(uri, reason, "MWI subscribe failed");
+            }
+            SipEvent::MwiUpdate { state, .. } => {
+                self.accounts[account].mwi = Some(state);
+            }
         }
     }
 
@@ -520,6 +561,16 @@ impl DeelipApp {
         for uri in targets {
             self.accounts[account].handle.subscribe_presence(uri);
         }
+    }
+
+    /// Subscribe to `account`'s own mailbox MWI state, if `mailbox` is
+    /// configured — called once that account has actually registered, same
+    /// reasoning as `subscribe_account_contacts`.
+    fn subscribe_account_mwi(&mut self, account: usize) {
+        let acc = &self.accounts[account].account;
+        let Some(mailbox) = acc.mailbox.clone().filter(|s| !s.is_empty()) else { return };
+        let uri = normalize_target(&mailbox, &acc.server);
+        self.accounts[account].handle.subscribe_mwi(uri);
     }
 
     /// A call in `calls` ended or an outstanding attempt failed — figure out
@@ -1126,8 +1177,19 @@ impl DeelipApp {
     }
 
     fn do_dtmf(&self, digit: char) {
-        if let Some(engine) = &self.media {
-            engine.send_dtmf(digit);
+        let Some(idx) = self.focused_call else { return };
+        let call = &self.calls[idx];
+        let mode = self.accounts[call.account].account.dtmf_mode;
+        match mode {
+            DtmfMode::Rfc2833 => {
+                if let Some(engine) = &self.media { engine.send_dtmf(digit); }
+            }
+            DtmfMode::Inband => {
+                if let Some(engine) = &self.media { engine.send_dtmf_inband(digit); }
+            }
+            DtmfMode::SipInfo => {
+                self.accounts[call.account].handle.send_dtmf_info(&call.call_id, digit);
+            }
         }
     }
 
@@ -1161,8 +1223,15 @@ impl DeelipApp {
     /// Called once per frame from `update()`.
     fn check_pending_call_timeout(&mut self) {
         let Some(pending) = &self.pending_call else { return };
+        let now = unix_now();
+        if let Some(at) = pending.auto_answer_at {
+            if now >= at {
+                self.do_accept();
+                return;
+            }
+        }
         let Some((deadline, target)) = &pending.forward else { return };
-        if unix_now() < *deadline { return; }
+        if now < *deadline { return; }
         let target = target.clone();
         let pending = self.pending_call.take().unwrap();
         self.accounts[pending.account].handle.redirect_call(&pending.call_id, target);
@@ -1255,6 +1324,32 @@ impl DeelipApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
         }
     }
+
+    /// Dispatch any global-hotkey presses since the last frame. No-op if
+    /// global hotkeys are disabled or failed to register (`self.hotkeys`
+    /// is `None`).
+    fn process_hotkey_events(&mut self) {
+        let Some(hotkeys) = &self.hotkeys else { return };
+        for action in hotkeys.poll() {
+            match action {
+                HotkeyAction::Answer => {
+                    if self.pending_call.is_some() { self.do_accept(); }
+                }
+                HotkeyAction::Hangup => {
+                    if let Some(idx) = self.focused_call {
+                        self.do_hangup(idx);
+                    } else if self.pending_call.is_some() {
+                        self.do_reject();
+                    } else if !self.calls.is_empty() {
+                        self.do_hangup(0);
+                    }
+                }
+                HotkeyAction::Mute => {
+                    if self.media.is_some() { self.do_mute_toggle(); }
+                }
+            }
+        }
+    }
 }
 
 impl eframe::App for DeelipApp {
@@ -1273,6 +1368,7 @@ impl eframe::App for DeelipApp {
         self.sync_ringtone();
         self.sync_notifications();
         self.process_tray_events(ctx);
+        self.process_hotkey_events();
 
         self.palette = Palette::for_theme(self.config.dark_mode);
         let mut visuals = if self.config.dark_mode { egui::Visuals::dark() } else { egui::Visuals::light() };
@@ -1281,8 +1377,13 @@ impl eframe::App for DeelipApp {
 
         // ── Status bar ───────────────────────────────────────────────────────
         let on_hold = self.focused_call.is_none() && !self.calls.is_empty();
+        let new_voicemail: u32 = self.accounts.iter()
+            .filter_map(|a| a.mwi.as_ref())
+            .filter(|m| m.waiting)
+            .map(|m| m.new_messages)
+            .sum();
         egui::TopBottomPanel::top("status").show(ctx, |ui| {
-            status_bar(ui, &self.palette, &self.status_line, self.reg_ok, on_hold);
+            status_bar(ui, &self.palette, &self.status_line, self.reg_ok, on_hold, new_voicemail);
         });
 
         // ── Tab bar ──────────────────────────────────────────────────────────
@@ -1618,6 +1719,8 @@ fn show_leg_stats(ui: &mut Ui, label: &str, codec: AudioCodec, stats: &deelip_me
         AudioCodec::G722 => "G.722",
         AudioCodec::Pcmu => "PCMU",
         AudioCodec::Pcma => "PCMA",
+        AudioCodec::Gsm  => "GSM",
+        AudioCodec::Ilbc => "iLBC",
     };
     ui.label(RichText::new(format!("{label} — {codec_name}")).strong());
     ui.label(RichText::new(format!(
@@ -2310,7 +2413,7 @@ impl DeelipApp {
                 if let Some(i) = move_up { account.codec_order.swap(i, i - 1); edited = true; }
                 if let Some(i) = move_down { account.codec_order.swap(i, i + 1); edited = true; }
                 if let Some(i) = to_disable { account.codec_order.remove(i); edited = true; }
-                for name in ["opus", "g722", "pcmu", "pcma"] {
+                for name in ["opus", "g722", "pcmu", "pcma", "gsm", "ilbc"] {
                     if !account.codec_order.iter().any(|c| c == name) {
                         ui.horizontal(|ui| {
                             ui.label(RichText::new(codec_label(name)).color(palette.muted));
@@ -2321,6 +2424,22 @@ impl DeelipApp {
                         });
                     }
                 }
+
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.label("DTMF mode:");
+                    egui::ComboBox::from_id_source("settings_dtmf_mode")
+                        .selected_text(match account.dtmf_mode {
+                            DtmfMode::Rfc2833 => "RFC 2833 (RTP telephone-event)",
+                            DtmfMode::SipInfo => "SIP INFO",
+                            DtmfMode::Inband  => "Inband (audio tone)",
+                        })
+                        .show_ui(ui, |ui| {
+                            edited |= ui.selectable_value(&mut account.dtmf_mode, DtmfMode::Rfc2833, "RFC 2833 (RTP telephone-event)").changed();
+                            edited |= ui.selectable_value(&mut account.dtmf_mode, DtmfMode::SipInfo, "SIP INFO").changed();
+                            edited |= ui.selectable_value(&mut account.dtmf_mode, DtmfMode::Inband, "Inband (audio tone)").changed();
+                        });
+                });
 
                 ui.add_space(6.0);
                 ui.label("Forward always (optional):");
@@ -2342,6 +2461,21 @@ impl DeelipApp {
                 ui.horizontal(|ui| {
                     ui.label("after (seconds):");
                     edited |= ui.add(egui::DragValue::new(&mut account.no_answer_timeout_secs).range(1..=300)).changed();
+                });
+
+                ui.add_space(6.0);
+                edited |= ui.checkbox(&mut account.auto_answer_enabled, "Auto-answer incoming calls (intercom mode)").changed();
+                if account.auto_answer_enabled {
+                    ui.horizontal(|ui| {
+                        ui.label("after (seconds):");
+                        edited |= ui.add(egui::DragValue::new(&mut account.auto_answer_secs).range(0..=60)).changed();
+                    });
+                }
+
+                ui.add_space(6.0);
+                ui.label("Voicemail mailbox for MWI (optional):");
+                ui.horizontal(|ui| {
+                    edited |= optional_text_field(ui, &mut account.mailbox, "1000");
                 });
             });
 
@@ -2459,6 +2593,31 @@ impl DeelipApp {
             });
 
             ui.add_space(10.0);
+            ui.group(|ui| {
+                ui.set_width(ui.available_width());
+                ui.label("Global Hotkeys");
+                edited |= ui.checkbox(&mut self.config.global_hotkeys_enabled,
+                    "Enable system-wide Answer/Hangup/Mute hotkeys (Linux: X11 only)"
+                ).changed();
+                if self.config.global_hotkeys_enabled {
+                    egui::Grid::new("hotkeys_grid").num_columns(2).show(ui, |ui| {
+                        ui.label("Answer:");
+                        edited |= ui.text_edit_singleline(&mut self.config.hotkey_answer).changed();
+                        ui.end_row();
+                        ui.label("Hangup:");
+                        edited |= ui.text_edit_singleline(&mut self.config.hotkey_hangup).changed();
+                        ui.end_row();
+                        ui.label("Mute:");
+                        edited |= ui.text_edit_singleline(&mut self.config.hotkey_mute).changed();
+                        ui.end_row();
+                    });
+                    ui.label(RichText::new(
+                        "Format: \"Ctrl+Alt+A\" style. Restart required to apply."
+                    ).color(palette.muted).small());
+                }
+            });
+
+            ui.add_space(10.0);
 
             if ui.button("Save").clicked() {
                 match self.config.save(&self.config_path) {
@@ -2522,7 +2681,7 @@ fn optional_password_field(ui: &mut Ui, value: &mut Option<String>) -> bool {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-fn status_bar(ui: &mut Ui, palette: &Palette, text: &str, ok: bool, held: bool) {
+fn status_bar(ui: &mut Ui, palette: &Palette, text: &str, ok: bool, held: bool, new_voicemail: u32) {
     let color = if held {
         palette.warn
     } else if ok {
@@ -2533,6 +2692,12 @@ fn status_bar(ui: &mut Ui, palette: &Palette, text: &str, ok: bool, held: bool) 
     ui.horizontal(|ui| {
         ui.label(RichText::new("●").color(color));
         ui.label(text);
+        if new_voicemail > 0 {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(RichText::new(format!("{} {new_voicemail}", egui_phosphor::regular::VOICEMAIL))
+                    .color(palette.accent));
+            });
+        }
     });
 }
 
@@ -2638,6 +2803,8 @@ fn codec_from_str(s: &str) -> Option<AudioCodec> {
         "g722" => Some(AudioCodec::G722),
         "pcmu" => Some(AudioCodec::Pcmu),
         "pcma" => Some(AudioCodec::Pcma),
+        "gsm"  => Some(AudioCodec::Gsm),
+        "ilbc" => Some(AudioCodec::Ilbc),
         _ => None,
     }
 }
@@ -2649,6 +2816,8 @@ fn codec_label(s: &str) -> &'static str {
         "g722" => "G.722",
         "pcmu" => "PCMU (G.711 μ-law)",
         "pcma" => "PCMA (G.711 A-law)",
+        "gsm"  => "GSM 06.10",
+        "ilbc" => "iLBC",
         _ => "Unknown",
     }
 }
@@ -2708,7 +2877,7 @@ fn ctx_key_enter(ui: &Ui) -> bool {
 mod tests {
     use super::{account_codecs, extract_user_part, normalize_target};
     use deelip_config::SipAccount;
-    use deelip_sip::AudioCodec;
+    use deelip_sip::{sdp, AudioCodec};
 
     #[test]
     fn bare_number_gets_domain_appended() {
@@ -2761,7 +2930,7 @@ mod tests {
     fn account_codecs_falls_back_when_list_is_empty() {
         let mut acc = SipAccount::default();
         acc.codec_order = vec![];
-        assert_eq!(account_codecs(&acc).len(), 4);
+        assert_eq!(account_codecs(&acc).len(), sdp::ALL_CODECS.len());
     }
 
     #[test]
