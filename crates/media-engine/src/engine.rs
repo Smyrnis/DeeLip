@@ -4,6 +4,7 @@ use std::io::BufWriter;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use anyhow::Context;
 use tokio::net::UdpSocket;
@@ -19,7 +20,10 @@ use deelip_sip::{AudioCodec, SrtpSession};
 
 use crate::aec::EchoCanceller;
 use crate::audio::{open_streams, AudioStreams, PlaybackTx, FRAME_SAMPLES, SAMPLE_RATE};
-use crate::codec::{decode_pcma, decode_pcmu, encode_pcma, encode_pcmu, OpusDecoder, OpusEncoder};
+use crate::codec::{
+    decode_pcma, decode_pcmu, encode_pcma, encode_pcmu, G722Decoder, G722Encoder, OpusDecoder,
+    OpusEncoder,
+};
 use crate::dtmf::{build_dtmf_burst, char_to_event, DTMF_PAYLOAD_TYPE};
 use crate::rtp::{RtpPacket, RtpSender};
 
@@ -59,7 +63,7 @@ fn open_recorder(call_id: &str) -> anyhow::Result<WavWriter> {
 fn ts_increment_for(codec: AudioCodec) -> u32 {
     match codec {
         AudioCodec::Opus => 960,
-        AudioCodec::Pcmu | AudioCodec::Pcma => 160,
+        AudioCodec::Pcmu | AudioCodec::Pcma | AudioCodec::G722 => 160,
     }
 }
 
@@ -102,6 +106,81 @@ pub struct ConferenceLeg {
     pub relay:          Option<Arc<dyn Conn + Send + Sync>>,
 }
 
+// ── Call statistics ───────────────────────────────────────────────────────────
+
+/// Local-only RTP stats for one leg — there's no RTCP in this codebase, so
+/// loss/jitter reflect what *we* observe receiving, not what the remote
+/// reports observing from us (the usual "local stats panel" scope, same as
+/// what most softphones show without a full RTCP implementation).
+#[derive(Debug, Clone, Default)]
+pub struct LegStats {
+    pub packets_sent:     u64,
+    pub bytes_sent:       u64,
+    pub packets_received: u64,
+    pub bytes_received:   u64,
+    /// Best-effort count of missing RTP sequence numbers on the receive
+    /// side (gaps > 1000 are treated as reordering/restart noise, not loss).
+    pub packets_lost:     u64,
+    /// RFC 3550 §6.4.1 interarrival jitter estimate, in milliseconds.
+    pub jitter_ms:        f64,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct CallStatsSnapshot {
+    pub leg1: LegStats,
+    /// Only `Some` in conference mode (mirrors `MediaEngine::recv_task2`).
+    pub leg2: Option<LegStats>,
+}
+
+type SharedStats = Arc<Mutex<CallStatsSnapshot>>;
+
+/// Per-recv-task running state for loss/jitter calculation — deliberately
+/// not part of the shared/lockable `LegStats` since only the owning recv
+/// task ever touches it.
+#[derive(Default)]
+struct JitterTracker {
+    last_seq:     Option<u16>,
+    last_arrival: Option<Instant>,
+    last_rtp_ts:  Option<u32>,
+}
+
+impl JitterTracker {
+    /// Update loss/jitter running state from a newly-received voice packet
+    /// and fold the results into `stats`.
+    fn observe(&mut self, stats: &mut LegStats, pkt: &RtpPacket, clock_hz: f64) {
+        if let Some(prev) = self.last_seq {
+            let expected = prev.wrapping_add(1);
+            if pkt.sequence != expected {
+                let gap = pkt.sequence.wrapping_sub(expected);
+                if gap < 1000 {
+                    stats.packets_lost += gap as u64;
+                }
+            }
+        }
+        self.last_seq = Some(pkt.sequence);
+
+        let now = Instant::now();
+        if let (Some(prev_arrival), Some(prev_ts)) = (self.last_arrival, self.last_rtp_ts) {
+            let arrival_diff_ms = now.duration_since(prev_arrival).as_secs_f64() * 1000.0;
+            let rtp_diff_ms = (pkt.timestamp as i64 - prev_ts as i64).unsigned_abs() as f64 / clock_hz * 1000.0;
+            let d = (arrival_diff_ms - rtp_diff_ms).abs();
+            stats.jitter_ms += (d - stats.jitter_ms) / 16.0;
+        }
+        self.last_arrival = Some(now);
+        self.last_rtp_ts = Some(pkt.timestamp);
+    }
+}
+
+/// RTP clock rate for jitter math (RFC 7587: Opus's RTP clock is always
+/// 48000 regardless of the audio's actual sample rate; everything else
+/// here is 8000 — see `ts_increment_for`'s own doc comment).
+fn clock_hz_for(codec: AudioCodec) -> f64 {
+    match codec {
+        AudioCodec::Opus => 48000.0,
+        AudioCodec::Pcmu | AudioCodec::Pcma | AudioCodec::G722 => 8000.0,
+    }
+}
+
 // ── MediaEngine ───────────────────────────────────────────────────────────────
 
 /// Manages the audio ↔ RTP pipeline for a single active call, optionally
@@ -121,6 +200,7 @@ pub struct MediaEngine {
     /// them, so anything only reachable from inside a task would be subject
     /// to a cancellation race and might never run its cleanup.
     recorder: Arc<Mutex<Option<WavWriter>>>,
+    stats:    SharedStats,
 }
 
 impl MediaEngine {
@@ -161,6 +241,11 @@ impl MediaEngine {
         let (audio_streams, mut cap_rx, hw_playback_tx, echo_ref) =
             open_streams(input_device, output_device, echo_cancellation)
                 .context("Opening audio streams")?;
+
+        let stats: SharedStats = Arc::new(Mutex::new(CallStatsSnapshot {
+            leg1: LegStats::default(),
+            leg2: second_leg.as_ref().map(|_| LegStats::default()),
+        }));
 
         // ── Leg 1 ─────────────────────────────────────────────────────────────
         let socket = Arc::new(match relay {
@@ -251,8 +336,13 @@ impl MediaEngine {
         } else {
             None
         };
+        let mut g722_enc = if codec == AudioCodec::G722 { Some(G722Encoder::new()) } else { None };
         let mut opus_enc2 = match leg2_codec {
             Some(AudioCodec::Opus) => Some(OpusEncoder::new().context("Creating Opus encoder (leg2)")?),
+            _ => None,
+        };
+        let mut g722_enc2 = match leg2_codec {
+            Some(AudioCodec::G722) => Some(G722Encoder::new()),
             _ => None,
         };
         let mut rtp_send2 = leg2_codec.map(|c| RtpSender::new(c.payload_type(), ts_increment_for(c)));
@@ -265,6 +355,7 @@ impl MediaEngine {
         let send_recorder = recorder.clone();
         let send_leg1_buf = leg1_buf.clone();
         let send_leg2_buf = leg2_buf.clone();
+        let send_stats = stats.clone();
 
         let send_task = tokio::spawn(async move {
             loop {
@@ -283,6 +374,7 @@ impl MediaEngine {
                         // Leg 1: encode + send.
                         let encoded = match codec {
                             AudioCodec::Opus => opus_enc.as_mut().unwrap().encode(&pcm),
+                            AudioCodec::G722 => g722_enc.as_mut().unwrap().encode(&pcm),
                             AudioCodec::Pcma => encode_pcma(&pcm),
                             AudioCodec::Pcmu => encode_pcmu(&pcm),
                         };
@@ -294,8 +386,13 @@ impl MediaEngine {
                             },
                             None => bytes,
                         };
-                        if let Err(e) = send_sock.send_to(&out, remote_rtp).await {
-                            error!("RTP send: {e}");
+                        match send_sock.send_to(&out, remote_rtp).await {
+                            Ok(()) => {
+                                let mut s = send_stats.lock().unwrap();
+                                s.leg1.packets_sent += 1;
+                                s.leg1.bytes_sent   += out.len() as u64;
+                            }
+                            Err(e) => error!("RTP send: {e}"),
                         }
 
                         // Leg 2 (conference): encode independently (may differ
@@ -306,6 +403,7 @@ impl MediaEngine {
                         {
                             let encoded2 = match c2 {
                                 AudioCodec::Opus => opus_enc2.as_mut().unwrap().encode(&pcm),
+                                AudioCodec::G722 => g722_enc2.as_mut().unwrap().encode(&pcm),
                                 AudioCodec::Pcma => encode_pcma(&pcm),
                                 AudioCodec::Pcmu => encode_pcmu(&pcm),
                             };
@@ -318,8 +416,15 @@ impl MediaEngine {
                                 None => Some(bytes2),
                             };
                             if let Some(out2) = out2 {
-                                if let Err(e) = sock2.send_to(&out2, remote2).await {
-                                    error!("RTP send (leg2): {e}");
+                                match sock2.send_to(&out2, remote2).await {
+                                    Ok(()) => {
+                                        let mut s = send_stats.lock().unwrap();
+                                        if let Some(leg2) = s.leg2.as_mut() {
+                                            leg2.packets_sent += 1;
+                                            leg2.bytes_sent   += out2.len() as u64;
+                                        }
+                                    }
+                                    Err(e) => error!("RTP send (leg2): {e}"),
                                 }
                             }
                         }
@@ -394,8 +499,12 @@ impl MediaEngine {
         } else {
             None
         };
+        let mut g722_dec = if codec == AudioCodec::G722 { Some(G722Decoder::new()) } else { None };
+        let recv_stats = stats.clone();
+        let recv_clock_hz = clock_hz_for(codec);
 
         let recv_task = tokio::spawn(async move {
+            let mut jitter = JitterTracker::default();
             let mut buf = vec![0u8; 2048];
             loop {
                 tokio::select! {
@@ -416,8 +525,15 @@ impl MediaEngine {
                             {
                                 continue;
                             }
+                            {
+                                let mut s = recv_stats.lock().unwrap();
+                                s.leg1.packets_received += 1;
+                                s.leg1.bytes_received   += len as u64;
+                                jitter.observe(&mut s.leg1, &pkt, recv_clock_hz);
+                            }
                             let pcm = match codec {
                                 AudioCodec::Opus => opus_dec.as_mut().unwrap().decode(&pkt.payload),
+                                AudioCodec::G722 => g722_dec.as_mut().unwrap().decode(&pkt.payload),
                                 AudioCodec::Pcma => decode_pcma(&pkt.payload),
                                 AudioCodec::Pcmu => decode_pcmu(&pkt.payload),
                             };
@@ -440,13 +556,17 @@ impl MediaEngine {
             } else {
                 None
             };
+            let mut g722_dec2 = if leg.codec == AudioCodec::G722 { Some(G722Decoder::new()) } else { None };
             let codec2   = leg.codec;
             let pt2      = leg2_dtmf_pt.unwrap();
             let mut decrypt_ctx2 = leg2_decrypt_ctx;
             let leg2_buf_recv = leg2_buf.clone().unwrap();
             let mut stop_recv2 = stop_tx.subscribe();
+            let recv_stats2 = stats.clone();
+            let recv_clock_hz2 = clock_hz_for(codec2);
 
             Some(tokio::spawn(async move {
+                let mut jitter2 = JitterTracker::default();
                 let mut buf = vec![0u8; 2048];
                 loop {
                     tokio::select! {
@@ -464,8 +584,17 @@ impl MediaEngine {
                                 if pkt.payload_type == DTMF_PAYLOAD_TYPE || pkt.payload_type == pt2 {
                                     continue;
                                 }
+                                {
+                                    let mut s = recv_stats2.lock().unwrap();
+                                    if let Some(leg2) = s.leg2.as_mut() {
+                                        leg2.packets_received += 1;
+                                        leg2.bytes_received   += len as u64;
+                                        jitter2.observe(leg2, &pkt, recv_clock_hz2);
+                                    }
+                                }
                                 let pcm = match codec2 {
                                     AudioCodec::Opus => opus_dec2.as_mut().unwrap().decode(&pkt.payload),
+                                    AudioCodec::G722 => g722_dec2.as_mut().unwrap().decode(&pkt.payload),
                                     AudioCodec::Pcma => decode_pcma(&pkt.payload),
                                     AudioCodec::Pcmu => decode_pcmu(&pkt.payload),
                                 };
@@ -483,12 +612,19 @@ impl MediaEngine {
             None
         };
 
-        Ok(Self { _audio: audio_streams, send_task, recv_task, recv_task2, stop_tx, dtmf_tx, muted, recorder })
+        Ok(Self { _audio: audio_streams, send_task, recv_task, recv_task2, stop_tx, dtmf_tx, muted, recorder, stats })
     }
 
     /// Queue a DTMF digit for immediate out-of-band RTP transmission.
     pub fn send_dtmf(&self, digit: char) {
         let _ = self.dtmf_tx.send(digit);
+    }
+
+    /// Snapshot of this call's current RTP stats (packets/bytes sent and
+    /// received, best-effort loss count, jitter estimate) — cheap to call
+    /// every UI frame, since it's just a mutex-guarded struct clone.
+    pub fn stats(&self) -> CallStatsSnapshot {
+        self.stats.lock().unwrap().clone()
     }
 
     /// Mute/unmute the local microphone — captured audio is replaced with
@@ -581,6 +717,41 @@ fn write_recording(recorder: &Mutex<Option<WavWriter>>, near: &[i16], far: &[i16
 mod tests {
     use super::*;
     use deelip_sip::SrtpParams;
+
+    #[test]
+    fn jitter_tracker_counts_missing_sequence_numbers_as_loss() {
+        let mut tracker = JitterTracker::default();
+        let mut stats = LegStats::default();
+        let pkt0 = RtpPacket::new(0, 100, 1600, 1, vec![]);
+        let pkt1 = RtpPacket::new(0, 103, 1760, 1, vec![]); // 101, 102 missing
+        tracker.observe(&mut stats, &pkt0, 8000.0);
+        tracker.observe(&mut stats, &pkt1, 8000.0);
+        assert_eq!(stats.packets_lost, 2);
+    }
+
+    #[test]
+    fn jitter_tracker_ignores_huge_gaps_as_reordering_noise() {
+        let mut tracker = JitterTracker::default();
+        let mut stats = LegStats::default();
+        let pkt0 = RtpPacket::new(0, 100, 1600, 1, vec![]);
+        let pkt1 = RtpPacket::new(0, 50_000, 1760, 1, vec![]);
+        tracker.observe(&mut stats, &pkt0, 8000.0);
+        tracker.observe(&mut stats, &pkt1, 8000.0);
+        assert_eq!(stats.packets_lost, 0);
+    }
+
+    #[test]
+    fn jitter_tracker_reports_zero_jitter_for_perfectly_paced_packets() {
+        let mut tracker = JitterTracker::default();
+        let mut stats = LegStats::default();
+        // Three packets 20ms apart in both RTP-timestamp and (as far as this
+        // synchronous test can approximate) wall-clock terms.
+        for (seq, ts) in [(1u16, 1600u32), (2, 1760), (3, 1920)] {
+            let pkt = RtpPacket::new(0, seq, ts, 1, vec![]);
+            tracker.observe(&mut stats, &pkt, 8000.0);
+        }
+        assert!(stats.jitter_ms < 5.0, "jitter should stay small for evenly-paced packets, got {}", stats.jitter_ms);
+    }
 
     #[test]
     fn srtp_roundtrip_preserves_rtp_payload() {

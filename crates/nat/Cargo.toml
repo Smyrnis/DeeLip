@@ -9,4 +9,6 @@ anyhow      = { workspace = true }
 thiserror   = { workspace = true }
 tracing     = { workspace = true }
 turn        = { workspace = true }
+webrtc-ice  = { workspace = true }
 webrtc-util = { workspace = true }
+async-trait = { workspace = true }

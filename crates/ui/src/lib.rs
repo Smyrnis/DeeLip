@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -9,12 +10,12 @@ use deelip_config::{
 use deelip_media::{alloc_rtp_port, ConferenceLeg, MediaEngine};
 use deelip_sip::{
     build_answer, build_hold_offer, build_offer, build_resume_offer,
-    parse_sdp, AudioCodec, PresenceState, SipEvent, SipHandle, SrtpParams, SrtpSession,
+    parse_sdp, sdp, AudioCodec, IceAttrs, ParsedSdp, PresenceState, SipEvent, SipHandle, SrtpParams, SrtpSession,
 };
 use egui::{FontId, RichText, Ui};
 use tokio::runtime::Handle;
 
-use deelip_nat::TurnRelay;
+use deelip_nat::{IceConnection, IceGathered, TurnRelay};
 
 pub mod tray;
 use tray::{CtxSlot, QuitState};
@@ -25,6 +26,12 @@ use ringtone::{RingKind, Ringtone};
 
 mod theme;
 use theme::Palette;
+
+/// Bounded wait for ICE candidate gathering (host candidates are instant;
+/// server-reflexive/relay each cost one STUN/TURN round trip) -- generous
+/// enough for a live network's worst case without stalling call setup for
+/// long if a configured STUN/TURN server is simply unreachable.
+const ICE_GATHER_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Embedded Cantarell (GNOME's own default UI font, SIL OFL 1.1 -- see
 /// `assets/OFL.txt`) as the app's proportional font, replacing egui's
@@ -166,6 +173,9 @@ pub struct DeelipApp {
     /// `None` = show every status.
     history_status_filter: Option<CallStatus>,
 
+    // Blocklist
+    blocklist_input: String,
+
     // Contacts
     contacts:       ContactBook,
     contacts_path:  Option<PathBuf>,
@@ -202,6 +212,11 @@ struct PendingOutbound {
     local_rtp:  u16,
     local_srtp: Option<SrtpParams>,
     relay:      Option<TurnRelay>,
+    /// Locally-gathered ICE candidates, if ICE was attempted for this call --
+    /// connectivity checks against the remote's candidates only happen once
+    /// their answer SDP arrives (see `SipEvent::CallConnected`), since that's
+    /// the first point we know their ICE parameters.
+    ice_gathered: Option<IceGathered>,
 }
 
 /// A confirmed (connected) call — held or focused. Only the focused call has
@@ -218,6 +233,12 @@ struct CallSlot {
     dtmf_type:  Option<u8>,
     local_srtp: Option<SrtpParams>,
     relay:      Option<TurnRelay>,
+    /// The winning ICE connection, if ICE was used for this call — `None`
+    /// for a plain direct/TURN-relayed call, same as `relay`. Deliberately
+    /// not carried across into conference mode (`start_conference` keeps
+    /// using `relay` only) or attended-transfer's consultation call, per
+    /// this feature's scoped-to-basic-calls design.
+    ice:        Option<IceConnection>,
     local_rtp:  u16,
     /// Last known remote SDP — reused to restart media on resume (the
     /// negotiated RTP endpoint doesn't change between hold and resume).
@@ -299,6 +320,7 @@ impl DeelipApp {
             history_path,
             history_search:         String::new(),
             history_status_filter:  None,
+            blocklist_input:        String::new(),
             contacts,
             contacts_path,
             contact_search:   String::new(),
@@ -347,11 +369,12 @@ impl DeelipApp {
                     tracing::warn!(call_id, "CallConnected with no pending outbound call — ignoring");
                     return;
                 };
+                let ice = self.finish_ice_connect(out.ice_gathered, true, &remote_sdp);
                 let slot = CallSlot {
                     account, call_id, remote_uri: out.remote_uri.clone(),
                     direction: CallDirection::Outbound, start_time: out.start_time, is_held: false,
                     codec: AudioCodec::Pcmu, dtmf_type: None,
-                    local_srtp: out.local_srtp, relay: out.relay, local_rtp: out.local_rtp,
+                    local_srtp: out.local_srtp, relay: out.relay, ice, local_rtp: out.local_rtp,
                     remote_sdp: remote_sdp.clone(),
                 };
                 self.calls.push(slot);
@@ -360,12 +383,42 @@ impl DeelipApp {
                 self.start_media(idx, &remote_sdp);
             }
             SipEvent::IncomingCall { call_id, from, remote_sdp } => {
+                let caller = extract_user_part(&from);
+                if self.config.blocklist.iter().any(|entry| extract_user_part(entry) == caller) {
+                    self.accounts[account].handle.reject_call(&call_id);
+                    self.record_history(from, CallDirection::Inbound, unix_now(), CallStatus::Rejected);
+                    return;
+                }
+                let acc = &self.accounts[account].account;
+                let dnd = acc.dnd;
+                let forward_always = acc.forward_always.clone().filter(|s| !s.is_empty());
+                let forward_on_busy = acc.forward_on_busy.clone().filter(|s| !s.is_empty());
+                let server = acc.server.clone();
+                if dnd {
+                    self.accounts[account].handle.reject_call(&call_id);
+                    self.record_history(from, CallDirection::Inbound, unix_now(), CallStatus::Rejected);
+                    return;
+                }
+                if let Some(target) = forward_always {
+                    let target = normalize_target(&target, &server);
+                    self.accounts[account].handle.redirect_call(&call_id, target);
+                    self.record_history(from, CallDirection::Inbound, unix_now(), CallStatus::Missed);
+                    return;
+                }
+                let waiting = !self.calls.is_empty();
+                if waiting {
+                    if let Some(target) = forward_on_busy {
+                        let target = normalize_target(&target, &server);
+                        self.accounts[account].handle.redirect_call(&call_id, target);
+                        self.record_history(from, CallDirection::Inbound, unix_now(), CallStatus::Missed);
+                        return;
+                    }
+                }
                 if self.calls.len() >= 2 || self.pending_call.is_some() {
                     // Already at capacity (2 concurrent + at most 1 ringing) — decline immediately.
                     self.accounts[account].handle.reject_call(&call_id);
                     return;
                 }
-                let waiting = !self.calls.is_empty();
                 self.status_line = if waiting {
                     format!("Call waiting: {}", short_uri(&from))
                 } else {
@@ -579,10 +632,80 @@ impl DeelipApp {
         ))
     }
 
+    /// Attempt to gather local ICE candidates for a new call, bounded by
+    /// `ICE_GATHER_TIMEOUT` -- returns `None` (never an error the caller must
+    /// handle) if ICE is disabled, no STUN/TURN server is configured, or
+    /// gathering fails/times out, so every call site can fall back to the
+    /// existing `resolve_rtp_endpoint` path exactly as if ICE didn't exist.
+    fn try_gather_ice(&self, is_controlling: bool) -> Option<IceGathered> {
+        if !self.config.ice_enabled { return None; }
+        let stun = self.config.stun_server.clone();
+        let turn = self.turn_config();
+        if stun.is_none() && turn.is_none() { return None; }
+        let turn_ref = turn.as_ref().map(|(s, u, p)| (s.as_str(), u.as_str(), p.as_str()));
+        match self.rt.block_on(deelip_nat::ice::gather(stun.as_deref(), turn_ref, is_controlling, ICE_GATHER_TIMEOUT)) {
+            Ok(gathered) => Some(gathered),
+            Err(e) => { tracing::warn!("ICE candidate gathering failed/timed out, falling back: {e}"); None }
+        }
+    }
+
+    /// Finish an in-progress ICE negotiation once the remote's SDP (offer or
+    /// answer, whichever direction) is known, running connectivity checks
+    /// and returning the winning connection. Only used for the *first* SDP
+    /// exchange of a new call -- `None` if `gathered` is `None` (ICE wasn't
+    /// attempted) or the remote's SDP didn't itself signal ICE support.
+    ///
+    /// Note this is a *different* failure mode than `try_gather_ice`
+    /// returning `None`: by the time this runs, our own offer/answer has
+    /// already been sent committing the far end to our gathered default
+    /// candidate's address (that's the whole point of RFC 8445's mandated
+    /// default-candidate-in-c=/m= backwards-compatibility rule). If
+    /// connectivity checks then fail here, there's no clean way back to the
+    /// plain `resolve_rtp_endpoint` path post-commitment (it would bind a
+    /// different socket than the address already promised in the sent SDP)
+    /// -- this is an inherent structural limit of ICE's gather-then-commit
+    /// shape, not a bug, and the call is simply left without working media
+    /// in that case, same as any other NAT-traversal failure this codebase
+    /// never protected against pre-ICE either.
+    fn finish_ice_connect(&self, gathered: Option<IceGathered>, is_controlling: bool, remote_sdp: &str) -> Option<IceConnection> {
+        let gathered = gathered?;
+        let parsed = parse_sdp(remote_sdp, &sdp::ALL_CODECS)?;
+        let ufrag = parsed.ice_ufrag?;
+        let pwd = parsed.ice_pwd?;
+        if parsed.ice_candidates.is_empty() { return None; }
+        match self.rt.block_on(deelip_nat::ice::connect(gathered, is_controlling, &ufrag, &pwd, &parsed.ice_candidates)) {
+            Ok(conn) => Some(conn),
+            Err(e) => { tracing::warn!("ICE connectivity checks failed, falling back: {e}"); None }
+        }
+    }
+
+    /// For the answerer side: if the incoming `offer` signaled ICE support
+    /// (has ufrag/pwd/candidates) and ICE is enabled locally, gather our own
+    /// candidates and run connectivity checks immediately -- unlike the
+    /// offerer side (`finish_ice_connect`), the answerer already knows the
+    /// remote's ICE parameters up front, straight from the offer, so there's
+    /// no need to wait for a later event. Returns our own `IceAttrs` for the
+    /// answer SDP, our default candidate's address for the plain c=/m= line,
+    /// and the winning connection -- all three or nothing.
+    fn try_answer_with_ice(&self, offer: &ParsedSdp) -> Option<(IceAttrs, SocketAddr, IceConnection)> {
+        if !self.config.ice_enabled { return None; }
+        let ufrag = offer.ice_ufrag.as_deref()?;
+        let pwd = offer.ice_pwd.as_deref()?;
+        if offer.ice_candidates.is_empty() { return None; }
+        let gathered = self.try_gather_ice(false)?;
+        let attrs = IceAttrs { ufrag: gathered.local_ufrag.clone(), pwd: gathered.local_pwd.clone(), candidates: gathered.candidates.clone() };
+        let default_addr = gathered.default_addr;
+        match self.rt.block_on(deelip_nat::ice::connect(gathered, false, ufrag, pwd, &offer.ice_candidates)) {
+            Ok(conn) => Some((attrs, default_addr, conn)),
+            Err(e) => { tracing::warn!("ICE connectivity checks failed, falling back: {e}"); None }
+        }
+    }
+
     /// Start (or restart, on resume) media for `calls[idx]`, using its own
     /// stored codec/srtp/relay/local_rtp — marks it `focused_call` on success.
     fn start_media(&mut self, idx: usize, remote_sdp: &str) {
-        let Some(parsed) = parse_sdp(remote_sdp) else {
+        let acc_codecs = account_codecs(&self.accounts[self.calls[idx].account].account);
+        let Some(parsed) = parse_sdp(remote_sdp, &acc_codecs) else {
             tracing::error!("Cannot parse remote SDP");
             return;
         };
@@ -601,7 +724,8 @@ impl DeelipApp {
         };
 
         let port    = self.calls[idx].local_rtp;
-        let relay   = self.calls[idx].relay.as_ref().map(|r| r.conn.clone());
+        let relay   = self.calls[idx].ice.as_ref().map(|i| i.conn.clone())
+            .or_else(|| self.calls[idx].relay.as_ref().map(|r| r.conn.clone()));
         let rt      = self.rt.clone();
         let input_device  = self.config.audio.input_device.clone();
         let output_device = self.config.audio.output_device.clone();
@@ -627,11 +751,13 @@ impl DeelipApp {
     fn start_conference(&mut self) {
         if self.calls.len() != 2 { return; }
 
-        let Some(parsed0) = parse_sdp(&self.calls[0].remote_sdp) else {
+        let codecs0 = account_codecs(&self.accounts[self.calls[0].account].account);
+        let Some(parsed0) = parse_sdp(&self.calls[0].remote_sdp, &codecs0) else {
             tracing::error!("Cannot parse call 0's remote SDP for conference");
             return;
         };
-        let Some(parsed1) = parse_sdp(&self.calls[1].remote_sdp) else {
+        let codecs1 = account_codecs(&self.accounts[self.calls[1].account].account);
+        let Some(parsed1) = parse_sdp(&self.calls[1].remote_sdp, &codecs1) else {
             tracing::error!("Cannot parse call 1's remote SDP for conference");
             return;
         };
@@ -768,8 +894,11 @@ impl DeelipApp {
     /// centralizing it. Takes an explicit account so the consultation call
     /// can be placed from the *same* account as the call being
     /// transferred, rather than whichever account the Dialer tab happens
-    /// to have selected.
-    fn place_call(&mut self, acc: usize, target: &str) {
+    /// to have selected. `attempt_ice` is false for the attended-transfer
+    /// consultation call -- ICE is scoped to ordinary calls for now (see
+    /// `try_gather_ice`'s doc comment), conference/transfer legs keep the
+    /// plain STUN/TURN-fallback path unchanged.
+    fn place_call(&mut self, acc: usize, target: &str, attempt_ice: bool) {
         let domain = self.accounts[acc].handle.domain.clone();
         let secure = self.accounts[acc].handle.secure;
         let advertised_ip = self.accounts[acc].handle.advertised_ip.clone();
@@ -778,14 +907,27 @@ impl DeelipApp {
         let mut relay: Option<TurnRelay> = None;
         let rt = self.rt.clone();
         let turn_config = self.turn_config();
-        let (rtp_ip, rtp_port) = Self::resolve_rtp_endpoint(&rt, turn_config, &advertised_ip, local_rtp, &mut relay);
+
+        let ice_gathered = if attempt_ice { self.try_gather_ice(true) } else { None };
+        let (rtp_ip, rtp_port, ice_attrs) = match &ice_gathered {
+            Some(g) => (
+                g.default_addr.ip().to_string(), g.default_addr.port(),
+                Some(IceAttrs { ufrag: g.local_ufrag.clone(), pwd: g.local_pwd.clone(), candidates: g.candidates.clone() }),
+            ),
+            None => {
+                let (ip, port) = Self::resolve_rtp_endpoint(&rt, turn_config, &advertised_ip, local_rtp, &mut relay);
+                (ip, port, None)
+            }
+        };
+
         let srtp = if secure { Some(SrtpParams::generate()) } else { None };
-        let sdp = build_offer(&rtp_ip, rtp_port, srtp.as_ref());
+        let codecs = account_codecs(&self.accounts[acc].account);
+        let sdp = build_offer(&rtp_ip, rtp_port, srtp.as_ref(), &codecs, ice_attrs.as_ref());
         self.accounts[acc].handle.make_call(&t, sdp);
         self.last_dialed = Some(t.clone());
         self.pending_outbound = Some(PendingOutbound {
             remote_uri: t.clone(), start_time: unix_now(),
-            local_rtp, local_srtp: srtp, relay,
+            local_rtp, local_srtp: srtp, relay, ice_gathered,
         });
         self.status_line = format!("Calling {}…", short_uri(&t));
     }
@@ -794,7 +936,7 @@ impl DeelipApp {
         let raw = target.unwrap_or_else(|| self.call_target.trim().to_string());
         if raw.is_empty() { return; }
         let Some(acc) = self.selected_account_idx() else { return };
-        self.place_call(acc, &raw);
+        self.place_call(acc, &raw, true);
     }
 
     fn do_redial(&mut self) {
@@ -821,7 +963,7 @@ impl DeelipApp {
         self.attended_transfer_original = Some(idx);
         self.attended_target.clear();
         self.showing_attended = false;
-        self.place_call(acc, &raw);
+        self.place_call(acc, &raw, false);
     }
 
     /// Complete a pending attended transfer: send REFER-with-Replaces on
@@ -842,27 +984,45 @@ impl DeelipApp {
     fn do_accept(&mut self) {
         let Some(pending) = self.pending_call.take() else { return };
         let acc = pending.account;
+        let acc_codecs = account_codecs(&self.accounts[acc].account);
+        let Some(parsed) = parse_sdp(&pending.remote_sdp, &acc_codecs) else {
+            // No codec in common with this account's enabled list -- decline
+            // rather than guess, before touching any already-focused call's media.
+            tracing::warn!(from = %pending.from, "No mutually-acceptable codec -- declining");
+            self.accounts[acc].handle.reject_call(&pending.call_id);
+            self.record_history(pending.from, CallDirection::Inbound, pending.start_time, CallStatus::Rejected);
+            return;
+        };
+        let codec = parsed.codec;
         // Free the audio device for the new call if another one is focused.
         if let Some(cur) = self.focused_call {
             self.send_hold(cur);
             if let Some(engine) = self.media.take() { self.rt.block_on(engine.stop()); }
             self.focused_call = None;
         }
-        let codec = parse_sdp(&pending.remote_sdp).map(|p| p.codec).unwrap_or(AudioCodec::Pcmu);
         let local_rtp = alloc_rtp_port();
         let mut relay: Option<TurnRelay> = None;
         let advertised_ip = self.accounts[acc].handle.advertised_ip.clone();
         let rt = self.rt.clone();
         let turn_config = self.turn_config();
-        let (rtp_ip, rtp_port) = Self::resolve_rtp_endpoint(&rt, turn_config, &advertised_ip, local_rtp, &mut relay);
+
+        let ice_result = self.try_answer_with_ice(&parsed);
+        let (rtp_ip, rtp_port, ice_attrs, ice) = match ice_result {
+            Some((attrs, addr, conn)) => (addr.ip().to_string(), addr.port(), Some(attrs), Some(conn)),
+            None => {
+                let (ip, port) = Self::resolve_rtp_endpoint(&rt, turn_config, &advertised_ip, local_rtp, &mut relay);
+                (ip, port, None, None)
+            }
+        };
+
         let secure = self.accounts[acc].handle.secure;
         let srtp   = if secure { Some(SrtpParams::generate()) } else { None };
-        let sdp    = build_answer(&rtp_ip, rtp_port, codec, srtp.as_ref());
+        let sdp    = build_answer(&rtp_ip, rtp_port, codec, srtp.as_ref(), ice_attrs.as_ref());
         self.accounts[acc].handle.accept_call(&pending.call_id, sdp);
         let slot = CallSlot {
             account: acc, call_id: pending.call_id.clone(), remote_uri: pending.from.clone(),
             direction: CallDirection::Inbound, start_time: pending.start_time, is_held: false,
-            codec, dtmf_type: None, local_srtp: srtp, relay, local_rtp,
+            codec, dtmf_type: None, local_srtp: srtp, relay, ice, local_rtp,
             remote_sdp: pending.remote_sdp.clone(),
         };
         self.calls.push(slot);
@@ -1416,8 +1576,55 @@ impl DeelipApp {
                 ui.add_space(4.0);
                 phone_keypad(ui, palette, |digit| self.do_dtmf(digit));
             });
+
+            if let Some(engine) = self.media.as_ref() {
+                ui.add_space(8.0);
+                let stats = engine.stats();
+                let muted_color = self.palette.muted;
+                egui::CollapsingHeader::new("Call statistics").show(ui, |ui| {
+                    if self.in_conference && self.calls.len() == 2 {
+                        show_leg_stats(ui, &short_uri(&self.calls[0].remote_uri), self.calls[0].codec, &stats.leg1, muted_color);
+                        if let Some(leg2) = stats.leg2.as_ref() {
+                            ui.add_space(4.0);
+                            show_leg_stats(ui, &short_uri(&self.calls[1].remote_uri), self.calls[1].codec, leg2, muted_color);
+                        }
+                    } else if let Some(idx) = self.focused_call {
+                        show_leg_stats(ui, "This call", self.calls[idx].codec, &stats.leg1, muted_color);
+                    }
+                });
+            }
         }
     }
+}
+
+/// Render one leg's RTP stats as a small label grid inside a "Call
+/// statistics" collapsing section.
+fn show_leg_stats(ui: &mut Ui, label: &str, codec: AudioCodec, stats: &deelip_media::LegStats, muted: egui::Color32) {
+    let codec_name = match codec {
+        AudioCodec::Opus => "Opus",
+        AudioCodec::G722 => "G.722",
+        AudioCodec::Pcmu => "PCMU",
+        AudioCodec::Pcma => "PCMA",
+    };
+    ui.label(RichText::new(format!("{label} — {codec_name}")).strong());
+    ui.label(RichText::new(format!(
+        "Sent: {} pkts / {}    Received: {} pkts / {}",
+        stats.packets_sent, format_bytes(stats.bytes_sent),
+        stats.packets_received, format_bytes(stats.bytes_received),
+    )).color(muted).small());
+    let loss_pct = if stats.packets_received + stats.packets_lost > 0 {
+        100.0 * stats.packets_lost as f64 / (stats.packets_received + stats.packets_lost) as f64
+    } else {
+        0.0
+    };
+    ui.label(RichText::new(format!(
+        "Loss: {} ({:.1}%)    Jitter: {:.1} ms",
+        stats.packets_lost, loss_pct, stats.jitter_ms,
+    )).color(muted).small());
+}
+
+fn format_bytes(bytes: u64) -> String {
+    if bytes < 1024 { format!("{bytes} B") } else { format!("{:.1} KB", bytes as f64 / 1024.0) }
 }
 
 // ── Tab: History ──────────────────────────────────────────────────────────────
@@ -1464,6 +1671,7 @@ impl DeelipApp {
             .collect();
 
         let mut call_target: Option<String> = None;
+        let mut block_target: Option<String> = None;
 
         egui::ScrollArea::vertical().show(ui, |ui| {
             if filtered.is_empty() {
@@ -1488,6 +1696,9 @@ impl DeelipApp {
                         if ui.small_button("Call").clicked() {
                             call_target = Some(record.remote_uri.clone());
                         }
+                        if ui.small_button("Block").clicked() {
+                            block_target = Some(record.remote_uri.clone());
+                        }
                         ui.label(RichText::new(&status_str).color(self.palette.muted));
                         ui.label(RichText::new(format_age(record.timestamp)).color(self.palette.muted));
                     });
@@ -1502,6 +1713,13 @@ impl DeelipApp {
             let can_dial = self.calls.is_empty() && self.pending_call.is_none() && self.pending_outbound.is_none();
             if can_dial && self.reg_ok {
                 self.do_call(Some(target));
+            }
+        }
+        if let Some(target) = block_target {
+            let entry = extract_user_part(&target);
+            if !self.config.blocklist.iter().any(|e| extract_user_part(e) == entry) {
+                self.config.blocklist.push(target);
+                self.save_config_quietly();
             }
         }
     }
@@ -1901,6 +2119,45 @@ impl DeelipApp {
             });
             ui.add_space(10.0);
 
+            // ── Blocklist ────────────────────────────────────────────────────
+            ui.label(RichText::new("Blocklist").strong());
+            ui.group(|ui| {
+                ui.horizontal(|ui| {
+                    ui.add(egui::TextEdit::singleline(&mut self.blocklist_input)
+                        .hint_text("number or sip:user@host")
+                        .desired_width(200.0));
+                    if ui.button("Block").clicked() {
+                        let entry = self.blocklist_input.trim().to_string();
+                        if !entry.is_empty() && !self.config.blocklist.iter().any(|e| e.eq_ignore_ascii_case(&entry)) {
+                            self.config.blocklist.push(entry);
+                            self.save_config_quietly();
+                        }
+                        self.blocklist_input.clear();
+                    }
+                });
+                if self.config.blocklist.is_empty() {
+                    ui.label(RichText::new("No blocked numbers.").color(palette.muted).small());
+                } else {
+                    let mut remove_idx = None;
+                    for (i, entry) in self.config.blocklist.iter().enumerate() {
+                        ui.horizontal(|ui| {
+                            ui.label(entry);
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ui.small_button("Remove").clicked() {
+                                    remove_idx = Some(i);
+                                }
+                            });
+                        });
+                    }
+                    if let Some(i) = remove_idx {
+                        self.config.blocklist.remove(i);
+                        self.save_config_quietly();
+                    }
+                }
+                ui.label(RichText::new("Applies immediately — no restart needed.").color(palette.muted).small());
+            });
+            ui.add_space(10.0);
+
             // ── Startup ───────────────────────────────────────────────────
             ui.label(RichText::new("Startup").strong());
             ui.group(|ui| {
@@ -1953,6 +2210,7 @@ impl DeelipApp {
                 let account = &mut self.config.accounts[self.edit_account_idx];
 
                 edited |= ui.checkbox(&mut account.enabled, "Enabled (register this account on next restart)").changed();
+                edited |= ui.checkbox(&mut account.dnd, "Do Not Disturb (reject all incoming calls)").changed();
                 ui.add_space(4.0);
 
                 egui::Grid::new("settings_account_grid")
@@ -2015,6 +2273,53 @@ impl DeelipApp {
                         ).color(palette.warn));
                     }
                 }
+
+                ui.add_space(6.0);
+                ui.label("Codecs (order = preference):");
+                let mut move_up: Option<usize> = None;
+                let mut move_down: Option<usize> = None;
+                let mut to_disable: Option<usize> = None;
+                for (i, name) in account.codec_order.iter().enumerate() {
+                    ui.horizontal(|ui| {
+                        ui.label(codec_label(name));
+                        if ui.add_enabled(i > 0, egui::Button::new("↑")).clicked() {
+                            move_up = Some(i);
+                        }
+                        if ui.add_enabled(i + 1 < account.codec_order.len(), egui::Button::new("↓")).clicked() {
+                            move_down = Some(i);
+                        }
+                        let can_disable = account.codec_order.len() > 1;
+                        if ui.add_enabled(can_disable, egui::Button::new("Disable")).clicked() {
+                            to_disable = Some(i);
+                        }
+                    });
+                }
+                if let Some(i) = move_up { account.codec_order.swap(i, i - 1); edited = true; }
+                if let Some(i) = move_down { account.codec_order.swap(i, i + 1); edited = true; }
+                if let Some(i) = to_disable { account.codec_order.remove(i); edited = true; }
+                for name in ["opus", "g722", "pcmu", "pcma"] {
+                    if !account.codec_order.iter().any(|c| c == name) {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(codec_label(name)).color(palette.muted));
+                            if ui.small_button("Enable").clicked() {
+                                account.codec_order.push(name.to_string());
+                                edited = true;
+                            }
+                        });
+                    }
+                }
+
+                ui.add_space(6.0);
+                ui.label("Forward always (optional):");
+                ui.horizontal(|ui| {
+                    edited |= optional_text_field(ui, &mut account.forward_always, "sip:reception@example.com");
+                });
+
+                ui.add_space(6.0);
+                ui.label("Forward when busy (optional):");
+                ui.horizontal(|ui| {
+                    edited |= optional_text_field(ui, &mut account.forward_on_busy, "sip:voicemail@example.com");
+                });
 
                 ui.add_space(6.0);
                 ui.label("Forward if unanswered (optional):");
@@ -2131,6 +2436,13 @@ impl DeelipApp {
                         edited |= optional_password_field(ui, &mut self.config.turn_password);
                         ui.end_row();
                     });
+                ui.add_space(6.0);
+                edited |= ui.checkbox(&mut self.config.ice_enabled,
+                    "Use ICE (RFC 8445) for NAT traversal, falling back to the above if it fails"
+                ).changed();
+                ui.label(RichText::new(
+                    "Takes effect on the next call placed or answered, not calls already in progress."
+                ).color(palette.muted).small());
             });
 
             ui.add_space(10.0);
@@ -2293,6 +2605,51 @@ fn short_uri(uri: &str) -> String {
         .to_string()
 }
 
+/// Extract the user/number portion of a SIP URI for blocklist comparison,
+/// e.g. `sip:5551234@host;user=phone` -> `"5551234"`. Bare entries (no
+/// scheme/`@`) pass through unchanged (lowercased), so a blocklist entry can
+/// be typed as either a plain number or a full SIP URI.
+fn extract_user_part(uri: &str) -> String {
+    let lower = uri.trim().to_ascii_lowercase();
+    let stripped = lower.strip_prefix("sip:").or_else(|| lower.strip_prefix("sips:")).unwrap_or(&lower);
+    let before_at = stripped.split('@').next().unwrap_or(stripped);
+    before_at.split(';').next().unwrap_or(before_at).to_string()
+}
+
+/// Convert a `SipAccount::codec_order` entry to its `AudioCodec`. Unknown
+/// entries (e.g. a stale name from a future version) are simply skipped by
+/// callers via `filter_map`, not treated as an error.
+fn codec_from_str(s: &str) -> Option<AudioCodec> {
+    match s {
+        "opus" => Some(AudioCodec::Opus),
+        "g722" => Some(AudioCodec::G722),
+        "pcmu" => Some(AudioCodec::Pcmu),
+        "pcma" => Some(AudioCodec::Pcma),
+        _ => None,
+    }
+}
+
+/// Display label for a `SipAccount::codec_order` entry in Settings.
+fn codec_label(s: &str) -> &'static str {
+    match s {
+        "opus" => "Opus",
+        "g722" => "G.722",
+        "pcmu" => "PCMU (G.711 μ-law)",
+        "pcma" => "PCMA (G.711 A-law)",
+        _ => "Unknown",
+    }
+}
+
+/// This account's enabled codecs in preference order, ready to hand to
+/// `build_offer`/`parse_sdp`. Falls back to every known codec if the
+/// configured list is empty or entirely unrecognized — the Settings UI
+/// itself refuses to let the last enabled codec be disabled, so this should
+/// be unreachable in practice.
+fn account_codecs(acc: &SipAccount) -> Vec<AudioCodec> {
+    let codecs: Vec<AudioCodec> = acc.codec_order.iter().filter_map(|s| codec_from_str(s)).collect();
+    if codecs.is_empty() { sdp::ALL_CODECS.to_vec() } else { codecs }
+}
+
 /// Normalize a dial-box entry into a full SIP URI. Bare numbers/usernames
 /// (no scheme, no "@") are dialed against the account's own domain, matching
 /// how MicroSIP and other softphones resolve local extensions.
@@ -2336,7 +2693,9 @@ fn ctx_key_enter(ui: &Ui) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_target;
+    use super::{account_codecs, extract_user_part, normalize_target};
+    use deelip_config::SipAccount;
+    use deelip_sip::AudioCodec;
 
     #[test]
     fn bare_number_gets_domain_appended() {
@@ -2361,5 +2720,41 @@ mod tests {
     #[test]
     fn trims_whitespace() {
         assert_eq!(normalize_target("  600  ", "127.0.0.1"), "sip:600@127.0.0.1");
+    }
+
+    #[test]
+    fn extracts_user_from_bare_number() {
+        assert_eq!(extract_user_part("5551234"), "5551234");
+    }
+
+    #[test]
+    fn extracts_user_from_full_uri_with_params() {
+        assert_eq!(extract_user_part("sip:5551234@host.example;user=phone"), "5551234");
+    }
+
+    #[test]
+    fn extract_user_part_is_case_insensitive() {
+        assert_eq!(extract_user_part("SIP:Bob@Example.com"), extract_user_part("sip:bob@example.com"));
+    }
+
+    #[test]
+    fn account_codecs_honors_configured_order() {
+        let mut acc = SipAccount::default();
+        acc.codec_order = vec!["pcma".into(), "pcmu".into()];
+        assert_eq!(account_codecs(&acc), vec![AudioCodec::Pcma, AudioCodec::Pcmu]);
+    }
+
+    #[test]
+    fn account_codecs_falls_back_when_list_is_empty() {
+        let mut acc = SipAccount::default();
+        acc.codec_order = vec![];
+        assert_eq!(account_codecs(&acc).len(), 4);
+    }
+
+    #[test]
+    fn account_codecs_skips_unrecognized_entries() {
+        let mut acc = SipAccount::default();
+        acc.codec_order = vec!["opus".into(), "carrier-pigeon".into()];
+        assert_eq!(account_codecs(&acc), vec![AudioCodec::Opus]);
     }
 }

@@ -146,6 +146,75 @@ impl OpusDecoder {
     }
 }
 
+// ── G.722 (interop-only) ────────────────────────────────────────────────────
+//
+// G.722 operates natively at 16kHz, but this pipeline is fixed at 8kHz
+// throughout (mic/speaker/jitter buffer/AEC/mixing/recording), same
+// constraint that keeps Opus running narrowband above. Rather than thread a
+// second sample rate through the whole engine, these wrappers resample at
+// the codec boundary using the `audio-codec` crate's own polyphase
+// resampler (kept stateful across calls, not reconstructed per-frame, so
+// there's no discontinuity at each 20ms frame boundary). This buys SDP/RTP
+// interop with phones or PBXes that prefer or require G.722 -- it does not
+// make DeeLip's own captured voice objectively clearer, since the source
+// audio is 8kHz either way.
+
+use audio_codec::g722::{G722Decoder as RawG722Decoder, G722Encoder as RawG722Encoder};
+use audio_codec::{Decoder as _, Encoder as _, Resampler};
+
+const G722_NARROWBAND_HZ: usize = crate::audio::SAMPLE_RATE as usize;
+const G722_WIDEBAND_HZ:   usize = 16_000;
+
+pub struct G722Encoder {
+    codec:     RawG722Encoder,
+    resampler: Resampler,
+}
+
+impl Default for G722Encoder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl G722Encoder {
+    pub fn new() -> Self {
+        Self {
+            codec:     RawG722Encoder::new(),
+            resampler: Resampler::new(G722_NARROWBAND_HZ, G722_WIDEBAND_HZ),
+        }
+    }
+
+    pub fn encode(&mut self, pcm: &[i16]) -> Vec<u8> {
+        let wideband = self.resampler.resample(pcm);
+        self.codec.encode(&wideband)
+    }
+}
+
+pub struct G722Decoder {
+    codec:     RawG722Decoder,
+    resampler: Resampler,
+}
+
+impl Default for G722Decoder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl G722Decoder {
+    pub fn new() -> Self {
+        Self {
+            codec:     RawG722Decoder::new(),
+            resampler: Resampler::new(G722_WIDEBAND_HZ, G722_NARROWBAND_HZ),
+        }
+    }
+
+    pub fn decode(&mut self, payload: &[u8]) -> Vec<i16> {
+        let wideband = self.codec.decode(payload);
+        self.resampler.resample(&wideband)
+    }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -203,5 +272,30 @@ mod tests {
 
         let decoded = decoder.decode(&encoded);
         assert_eq!(decoded.len(), crate::audio::FRAME_SAMPLES);
+    }
+
+    #[test]
+    fn g722_roundtrip() {
+        let mut encoder = G722Encoder::new();
+        let mut decoder = G722Decoder::new();
+
+        // One 20ms frame (160 samples @ 8kHz) of a synthetic tone.
+        let frame: Vec<i16> = (0..crate::audio::FRAME_SAMPLES)
+            .map(|i| ((i as f32 * 0.2).sin() * 10000.0) as i16)
+            .collect();
+
+        let encoded = encoder.encode(&frame);
+        assert!(!encoded.is_empty(), "G722 should produce a non-empty packet");
+
+        let decoded = decoder.decode(&encoded);
+        assert!(!decoded.is_empty(), "G722 should decode back to a non-empty PCM frame");
+        // The 8k->16k->8k resample round trip isn't guaranteed to preserve
+        // the exact sample count frame-for-frame (polyphase filter delay) --
+        // just stay in the right ballpark of the original frame size.
+        let expected = crate::audio::FRAME_SAMPLES;
+        assert!(
+            decoded.len() > expected / 2 && decoded.len() < expected * 2,
+            "decoded length {} far from expected ~{expected}", decoded.len(),
+        );
     }
 }

@@ -38,11 +38,36 @@ pub struct SipAccount {
     pub no_answer_forward: Option<String>,
     #[serde(default = "default_no_answer_timeout")]
     pub no_answer_timeout_secs: u32,
+    /// If true, every incoming call on this account is immediately rejected
+    /// with 486 Busy Here — no ringing, no forwarding (DND takes priority
+    /// over forward_always/forward_on_busy if both are set).
+    #[serde(default)]
+    pub dnd: bool,
+    /// If set, every incoming call on this account is immediately redirected
+    /// here (302 Moved Temporarily) instead of ringing. Ignored while `dnd` is on.
+    #[serde(default)]
+    pub forward_always: Option<String>,
+    /// If set, an incoming call that arrives while this account already has
+    /// at least one active call is redirected here instead of ringing as a
+    /// second (call-waiting) call. Unset: call-waiting behaves as it does today.
+    #[serde(default)]
+    pub forward_on_busy: Option<String>,
+    /// Enabled codecs in preference order (canonical lowercase names:
+    /// "opus", "g722", "pcmu", "pcma"). Controls both what we offer when
+    /// calling out and what we're willing to answer with on an incoming
+    /// call — a codec absent from this list is never used in either
+    /// direction. Kept as plain strings rather than `deelip_sip::AudioCodec`
+    /// since `deelip-sip` depends on `deelip-config`, not the reverse.
+    #[serde(default = "default_codec_order")]
+    pub codec_order: Vec<String>,
 }
 
 fn default_sip_port() -> u16 { 5060 }
 fn default_true() -> bool { true }
 fn default_no_answer_timeout() -> u32 { 20 }
+fn default_codec_order() -> Vec<String> {
+    ["opus", "g722", "pcmu", "pcma"].map(String::from).to_vec()
+}
 
 impl Default for SipAccount {
     fn default() -> Self {
@@ -57,6 +82,10 @@ impl Default for SipAccount {
             tls_insecure_skip_verify: false,
             no_answer_forward: None,
             no_answer_timeout_secs: default_no_answer_timeout(),
+            dnd: false,
+            forward_always: None,
+            forward_on_busy: None,
+            codec_order: default_codec_order(),
         }
     }
 }
@@ -141,6 +170,25 @@ pub struct AppConfig {
     /// Start the main window hidden (only the tray icon visible) — restart-required.
     #[serde(default)]
     pub start_minimized: bool,
+
+    /// Callers to auto-reject with 486 Busy Here before ringing, regardless of
+    /// which account they call in on. Entries are matched against an incoming
+    /// call's From URI by user-part (see `extract_user_part` in `deelip-ui`) —
+    /// a bare number or a full `sip:`/`sips:` URI both work as entries.
+    /// Applies immediately (no restart needed): read straight from config at
+    /// decision time, not baked into any spawned SipStack/MediaEngine state.
+    #[serde(default)]
+    pub blocklist: Vec<String>,
+
+    /// Attempt full ICE (RFC 8445) candidate gathering/connectivity checks
+    /// for outgoing/incoming calls, falling back to the plain STUN-reflexive-
+    /// or-TURN-unconditional path (see `stun_server`/`turn_server` above) if
+    /// gathering fails or times out. Off by default (opt-in, like echo
+    /// cancellation/recording) — read fresh per call, not restart-required,
+    /// but not "instant" in the dark-mode sense either since it only takes
+    /// effect on the next call placed/answered, not any call in progress.
+    #[serde(default)]
+    pub ice_enabled: bool,
 }
 
 impl Default for AppConfig {
@@ -158,6 +206,8 @@ impl Default for AppConfig {
             ringtone_enabled:      true,
             recording_enabled:     false,
             start_minimized:       false,
+            blocklist:             Vec::new(),
+            ice_enabled:           false,
         }
     }
 }

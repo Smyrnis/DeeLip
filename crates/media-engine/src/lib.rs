@@ -5,7 +5,7 @@ pub mod dtmf;
 pub mod engine;
 pub mod rtp;
 
-pub use engine::{ConferenceLeg, MediaEngine};
+pub use engine::{CallStatsSnapshot, ConferenceLeg, LegStats, MediaEngine};
 
 /// Allocate an ephemeral local RTP port (even port, per SIP convention).
 pub fn alloc_rtp_port() -> u16 {
