@@ -93,7 +93,7 @@ fn main() -> anyhow::Result<()> {
 
     // ── eframe (main thread) ──────────────────────────────────────────────────
     let tray = match deelip_ui::tray::spawn_tray_icon() {
-        Ok(tray_ids) => {
+        Ok((tray_ids, badge_tx)) => {
             let ctx_slot: deelip_ui::tray::CtxSlot = std::sync::Arc::new(std::sync::Mutex::new(None));
             let quit_state = deelip_ui::tray::QuitState {
                 calls: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
@@ -101,7 +101,7 @@ fn main() -> anyhow::Result<()> {
                 rt: rt.handle().clone(),
             };
             deelip_ui::tray::spawn_tray_event_handlers(tray_ids, ctx_slot.clone(), quit_state.clone());
-            Some((ctx_slot, quit_state))
+            Some((ctx_slot, quit_state, badge_tx))
         }
         Err(e) => {
             warn!("Tray icon failed to start ({e}), continuing without it");

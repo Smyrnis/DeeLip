@@ -25,6 +25,8 @@
 //! state (`_NET_WM_STATE_HIDDEN`) for an XWayland-forced client is unreliable
 //! and could leave "Show DeeLip" doing nothing at all.
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use anyhow::Context;
@@ -34,6 +36,15 @@ use tray_icon::menu::{Menu, MenuId, MenuItem};
 use tray_icon::{Icon, TrayIconBuilder};
 
 const ICON_BYTES: &[u8] = include_bytes!("../../../assets/icon.png");
+
+/// Sends an updated missed-call/unread count to the tray icon's badge —
+/// `u32::MAX` is never sent; `0` clears the badge. Safe to call from any
+/// thread (it's a `glib::MainContext` channel, the officially-supported
+/// way to hand work to a GTK main loop running on a different thread from
+/// the sender — the same category of problem `MenuItem`/`Menu` needing to
+/// be *constructed* on the GTK thread already solved for menu setup, just
+/// for an ongoing update instead of a one-time handoff).
+pub type BadgeSender = gtk::glib::Sender<u32>;
 
 /// IDs of the tray menu's "Show" and "Quit" items.
 #[derive(Clone)]
@@ -131,8 +142,20 @@ fn restore_window(ctx_slot: &CtxSlot) {
 /// past that point are logged rather than propagated, matching this
 /// codebase's existing pattern for non-fatal background failures (e.g. STUN
 /// discovery in `main.rs`).
-pub fn spawn_tray_icon() -> anyhow::Result<TrayMenuIds> {
+///
+/// Also returns a `BadgeSender` for updating the missed-call/unread count
+/// overlay — `TrayIcon::set_icon` (like `MenuItem`/`Menu` construction) must
+/// run on this same GTK thread, so a `glib::MainContext` channel is set up
+/// and attached *before* `gtk::main()` starts, and the returned sender is the
+/// only thread-safe way in from the outside.
+#[allow(deprecated)] // `MainContext::channel` -- the suggested async-channel + spawn_future_local
+                     // replacement doesn't fit this thread's plain `gtk::main()` loop; this is
+                     // still the documented way to feed a synchronous cross-thread channel into
+                     // a classic (non-async) GLib main loop.
+pub fn spawn_tray_icon() -> anyhow::Result<(TrayMenuIds, BadgeSender)> {
     let (ids_tx, ids_rx) = std::sync::mpsc::channel::<TrayMenuIds>();
+    let (badge_tx, badge_rx) = gtk::glib::MainContext::channel::<u32>(gtk::glib::Priority::default());
+    let badge_tx_ret = badge_tx.clone();
 
     std::thread::spawn(move || {
         if let Err(e) = gtk::init() {
@@ -140,7 +163,7 @@ pub fn spawn_tray_icon() -> anyhow::Result<TrayMenuIds> {
             return;
         }
 
-        let icon = match load_icon() {
+        let icon = match load_icon(0) {
             Ok(icon) => icon,
             Err(e) => {
                 tracing::error!("Tray icon: failed to load icon: {e}");
@@ -158,7 +181,7 @@ pub fn spawn_tray_icon() -> anyhow::Result<TrayMenuIds> {
             return;
         }
 
-        let _tray = match TrayIconBuilder::new()
+        let tray = match TrayIconBuilder::new()
             .with_icon(icon)
             .with_menu(Box::new(menu))
             .with_tooltip("DeeLip")
@@ -171,14 +194,136 @@ pub fn spawn_tray_icon() -> anyhow::Result<TrayMenuIds> {
             }
         };
 
+        // `Rc`, not `Arc` -- never leaves this thread; `badge_rx`'s closure
+        // below runs on this same GTK main loop, not a separate thread.
+        let tray = Rc::new(RefCell::new(tray));
+        badge_rx.attach(None, move |count| {
+            match load_icon(count) {
+                Ok(icon) => {
+                    if let Err(e) = tray.borrow_mut().set_icon(Some(icon)) {
+                        tracing::warn!("Tray: failed to update badge icon: {e}");
+                    }
+                    let tooltip = if count > 0 {
+                        format!("DeeLip — {count} missed call{}", if count == 1 { "" } else { "s" })
+                    } else {
+                        "DeeLip".to_string()
+                    };
+                    if let Err(e) = tray.borrow().set_tooltip(Some(&tooltip)) {
+                        tracing::warn!("Tray: failed to update tooltip: {e}");
+                    }
+                }
+                Err(e) => tracing::warn!("Tray: failed to render badge icon: {e}"),
+            }
+            gtk::glib::ControlFlow::Continue
+        });
+
         gtk::main();
     });
 
-    ids_rx.recv().context("Tray thread failed before creating menu items")
+    let ids = ids_rx.recv().context("Tray thread failed before creating menu items")?;
+    Ok((ids, badge_tx_ret))
 }
 
-fn load_icon() -> anyhow::Result<Icon> {
-    let img = image::load_from_memory(ICON_BYTES)?.into_rgba8();
+/// Load the base tray icon, compositing a small red badge with `count`
+/// (capped at a single digit, "9" for anything ≥9 -- a badge this size has
+/// no room for two digits) in the bottom-right corner if `count > 0`.
+fn load_icon(count: u32) -> anyhow::Result<Icon> {
+    let mut img = image::load_from_memory(ICON_BYTES)?.into_rgba8();
+    if count > 0 {
+        draw_badge(&mut img, count.min(9) as u8);
+    }
     let (width, height) = img.dimensions();
     Ok(Icon::from_rgba(img.into_raw(), width, height)?)
+}
+
+/// Minimal 5x7 bitmap font for digits 0-9 (each row a 5-bit pattern, MSB =
+/// leftmost pixel) -- hand-rolled rather than pulling in a font-rendering
+/// dependency for this one small fixed glyph set, matching this codebase's
+/// existing preference for hand-rolled parsing/rendering over new deps for
+/// simple, fixed-shape needs (see `sdp.rs`/`message.rs`/`auth.rs`).
+const DIGIT_FONT: [[u8; 7]; 10] = [
+    [0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110], // 0
+    [0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110], // 1
+    [0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b01000, 0b11111], // 2
+    [0b11110, 0b00001, 0b00001, 0b00110, 0b00001, 0b00001, 0b11110], // 3
+    [0b00010, 0b00110, 0b01010, 0b10010, 0b11111, 0b00010, 0b00010], // 4
+    [0b11111, 0b10000, 0b11110, 0b00001, 0b00001, 0b10001, 0b01110], // 5
+    [0b00110, 0b01000, 0b10000, 0b11110, 0b10001, 0b10001, 0b01110], // 6
+    [0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b01000, 0b01000], // 7
+    [0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110], // 8
+    [0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00010, 0b01100], // 9
+];
+
+/// Draw a filled red circle with a white digit in the bottom-right corner
+/// of a 64x64-ish RGBA icon. `digit` must be 0-9.
+fn draw_badge(img: &mut image::RgbaImage, digit: u8) {
+    let (w, h) = img.dimensions();
+    let radius: i32 = (w.min(h) as i32) * 15 / 64; // scales with icon size, tuned for the 64x64 asset
+    let cx = w as i32 - radius - 2;
+    let cy = h as i32 - radius - 2;
+    let red = image::Rgba([220u8, 40, 40, 255]);
+    let white = image::Rgba([255u8, 255, 255, 255]);
+
+    for dy in -radius..=radius {
+        for dx in -radius..=radius {
+            if dx * dx + dy * dy > radius * radius { continue; }
+            let (x, y) = (cx + dx, cy + dy);
+            if x < 0 || y < 0 || x as u32 >= w || y as u32 >= h { continue; }
+            img.put_pixel(x as u32, y as u32, red);
+        }
+    }
+
+    let glyph = &DIGIT_FONT[digit as usize];
+    let scale = (radius * 2 / 7).max(1); // font is 5x7, fit within the circle's diameter
+    let glyph_w = 5 * scale;
+    let glyph_h = 7 * scale;
+    let ox = cx - glyph_w / 2;
+    let oy = cy - glyph_h / 2;
+    for (row, bits) in glyph.iter().enumerate() {
+        for col in 0..5 {
+            if bits & (1 << (4 - col)) == 0 { continue; }
+            for py in 0..scale {
+                for px in 0..scale {
+                    let (x, y) = (ox + col * scale + px, oy + row as i32 * scale + py);
+                    if x < 0 || y < 0 || x as u32 >= w || y as u32 >= h { continue; }
+                    img.put_pixel(x as u32, y as u32, white);
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression guard for `DIGIT_FONT` typos (digit "3" originally had a
+    /// garbled diagonal-squiggle shape instead of the standard two-bar
+    /// glyph, only caught by rendering it and looking -- checked here by a
+    /// hand-verified reference table instead, matching the plain ASCII-art
+    /// each glyph draws when printed row-by-row column-by-column).
+    #[test]
+    fn digit_font_matches_reference_glyphs() {
+        const REFERENCE: [[&str; 7]; 10] = [
+            ["01110", "10001", "10011", "10101", "11001", "10001", "01110"], // 0
+            ["00100", "01100", "00100", "00100", "00100", "00100", "01110"], // 1
+            ["01110", "10001", "00001", "00010", "00100", "01000", "11111"], // 2
+            ["11110", "00001", "00001", "00110", "00001", "00001", "11110"], // 3
+            ["00010", "00110", "01010", "10010", "11111", "00010", "00010"], // 4
+            ["11111", "10000", "11110", "00001", "00001", "10001", "01110"], // 5
+            ["00110", "01000", "10000", "11110", "10001", "10001", "01110"], // 6
+            ["11111", "00001", "00010", "00100", "01000", "01000", "01000"], // 7
+            ["01110", "10001", "10001", "01110", "10001", "10001", "01110"], // 8
+            ["01110", "10001", "10001", "01111", "00001", "00010", "01100"], // 9
+        ];
+        for (digit, rows) in REFERENCE.iter().enumerate() {
+            for (row, expected) in rows.iter().enumerate() {
+                let expected = u8::from_str_radix(expected, 2).unwrap();
+                assert_eq!(
+                    DIGIT_FONT[digit][row], expected,
+                    "digit {digit} row {row}: expected {expected:05b}, got {:05b}", DIGIT_FONT[digit][row],
+                );
+            }
+        }
+    }
 }

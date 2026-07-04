@@ -73,7 +73,7 @@ pub fn parse_mwi_summary(body: &str) -> Option<MwiState> {
             state.waiting = v.trim().eq_ignore_ascii_case("yes");
         } else if let Some(v) = line.strip_prefix("Voice-Message:") {
             // "N/M (N2/M2)" -- only the first (non-urgent) N/M pair is used.
-            let counts = v.trim().split_whitespace().next().unwrap_or("");
+            let counts = v.split_whitespace().next().unwrap_or("");
             let mut parts = counts.splitn(2, '/');
             if let (Some(n), Some(m)) = (parts.next(), parts.next()) {
                 state.new_messages = n.parse().unwrap_or(0);

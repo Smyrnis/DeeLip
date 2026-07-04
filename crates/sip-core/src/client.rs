@@ -133,16 +133,60 @@ pub struct SipStack {
     cmd_rx:   mpsc::UnboundedReceiver<SipCommand>,
 }
 
+/// The command-receiving half survives across a reconnect (it's tied to the
+/// `cmd_tx` held externally by `SipHandle`, which must transparently keep
+/// working across a transport failure) -- both `SipStack::new` and `run`
+/// hand it back on failure, via this alias, so `spawn`'s reconnect loop can
+/// feed it into the next attempt instead of losing it.
+type CmdRx = mpsc::UnboundedReceiver<SipCommand>;
+
 impl SipStack {
     pub async fn new(
         account:      SipAccount,
         local_port:   u16,
         external_ip:  Option<String>,
         event_tx:     mpsc::UnboundedSender<SipEvent>,
-        cmd_rx:       mpsc::UnboundedReceiver<SipCommand>,
-    ) -> anyhow::Result<Self> {
+        cmd_rx:       CmdRx,
+    ) -> Result<Self, (anyhow::Error, CmdRx)> {
+        let (transport, local_ip, advertised_ip, server_addr) =
+            match Self::connect_transport(&account, local_port, &external_ip).await {
+                Ok(c) => c,
+                Err(e) => return Err((e, cmd_rx)),
+            };
+
+        let reg_call_id  = new_call_id(&local_ip);
+        let reg_from_tag = new_tag();
+
+        Ok(Self {
+            transport,
+            account,
+            local_ip,
+            advertised_ip,
+            local_port,
+            server_addr,
+            reg_call_id,
+            reg_from_tag,
+            reg_cseq:  Arc::new(AtomicU32::new(1)),
+            dialogs:   HashMap::new(),
+            subscriptions: HashMap::new(),
+            mwi_subscriptions: HashMap::new(),
+            event_tx,
+            cmd_rx,
+        })
+    }
+
+    /// Just the connection-establishing steps (DNS resolution, socket bind,
+    /// transport connect) -- deliberately takes no ownership of `cmd_rx`/
+    /// `event_tx` so a failure here (used both for the first connection and
+    /// every later reconnect attempt) never loses the command-channel
+    /// receiver `spawn`'s reconnect loop needs to keep retrying with.
+    async fn connect_transport(
+        account:     &SipAccount,
+        local_port:  u16,
+        external_ip: &Option<String>,
+    ) -> anyhow::Result<(Arc<SipTransport>, String, String, SocketAddr)> {
         let local_ip = local_ip_for(&account.server, account.port)?;
-        let advertised_ip = external_ip.unwrap_or_else(|| local_ip.clone());
+        let advertised_ip = external_ip.clone().unwrap_or_else(|| local_ip.clone());
 
         let server_addr = tokio::net::lookup_host(format!("{}:{}", account.server, account.port))
             .await?
@@ -170,27 +214,20 @@ impl SipStack {
             "SIP stack ready"
         );
 
-        let reg_call_id  = new_call_id(&local_ip);
-        let reg_from_tag = new_tag();
-
-        Ok(Self {
-            transport,
-            account,
-            local_ip,
-            advertised_ip,
-            local_port,
-            server_addr,
-            reg_call_id,
-            reg_from_tag,
-            reg_cseq:  Arc::new(AtomicU32::new(1)),
-            dialogs:   HashMap::new(),
-            subscriptions: HashMap::new(),
-            mwi_subscriptions: HashMap::new(),
-            event_tx,
-            cmd_rx,
-        })
+        Ok((transport, local_ip, advertised_ip, server_addr))
     }
 
+    /// Spawns the background task that runs this account's SIP stack for
+    /// the lifetime of the process. A transport failure (dropped TLS/TCP
+    /// connection, etc.) doesn't kill the account permanently -- `run()`
+    /// hands back the still-good `cmd_rx` on failure, and this loop
+    /// reconnects with the same exponential backoff shape already used for
+    /// registration retries, reusing the *same* `cmd_tx`/`event_rx` pair
+    /// `SipHandle` was constructed with so the reconnect is transparent to
+    /// callers (in-flight dialogs/subscriptions are necessarily lost across
+    /// a transport replacement, same as they always were the moment a
+    /// disconnect happened -- but the account itself now recovers instead
+    /// of staying dead until the whole process is restarted).
     pub async fn spawn(
         account:     SipAccount,
         local_port:  u16,
@@ -198,13 +235,53 @@ impl SipStack {
     ) -> anyhow::Result<SipHandle> {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let (cmd_tx,   cmd_rx)   = mpsc::unbounded_channel();
-        let stack = SipStack::new(account, local_port, external_ip, event_tx, cmd_rx).await?;
+        let stack = SipStack::new(account.clone(), local_port, external_ip.clone(), event_tx.clone(), cmd_rx)
+            .await
+            .map_err(|(e, _)| e)?;
         let advertised_ip = stack.advertised_ip.clone();
         let secure = stack.account.transport == TransportProtocol::Tls;
         let domain = stack.account.server.clone();
+
         tokio::spawn(async move {
-            if let Err(e) = stack.run().await {
-                error!("SIP stack crashed: {e}");
+            let mut stack: Option<SipStack> = Some(stack);
+            let mut pending_cmd_rx: Option<CmdRx> = None;
+            let mut retry_delay = Duration::from_secs(5);
+
+            loop {
+                if stack.is_none() {
+                    let cmd_rx = pending_cmd_rx.take()
+                        .expect("no live stack means a previous attempt stashed its cmd_rx");
+                    match SipStack::new(account.clone(), local_port, external_ip.clone(), event_tx.clone(), cmd_rx).await {
+                        Ok(s) => {
+                            info!("Reconnected");
+                            stack = Some(s);
+                            retry_delay = Duration::from_secs(5);
+                        }
+                        Err((e, cmd_rx)) => {
+                            error!("Reconnect attempt failed ({e:#}), retrying in {retry_delay:?}");
+                            pending_cmd_rx = Some(cmd_rx);
+                            tokio::time::sleep(retry_delay).await;
+                            retry_delay = (retry_delay * 2).min(MAX_RETRY);
+                            continue;
+                        }
+                    }
+                }
+
+                match stack.take().unwrap().run().await {
+                    // Only reachable if `run()` ever grows a deliberate
+                    // graceful-shutdown path -- it doesn't today, but the
+                    // shape should stay correct if that changes.
+                    Ok(()) => break,
+                    Err((e, cmd_rx)) => {
+                        error!("SIP stack disconnected ({e:#}), reconnecting in {retry_delay:?}");
+                        let _ = event_tx.send(SipEvent::RegistrationFailed {
+                            reason: format!("Disconnected: {e:#}"),
+                        });
+                        pending_cmd_rx = Some(cmd_rx);
+                        tokio::time::sleep(retry_delay).await;
+                        retry_delay = (retry_delay * 2).min(MAX_RETRY);
+                    }
+                }
             }
         });
         Ok(SipHandle { event_rx, cmd_tx, advertised_ip, secure, domain })
@@ -212,7 +289,7 @@ impl SipStack {
 
     // ── Main event loop ───────────────────────────────────────────────────────
 
-    pub async fn run(mut self) -> anyhow::Result<()> {
+    pub async fn run(mut self) -> Result<(), (anyhow::Error, CmdRx)> {
         let mut reregister_at = Instant::now();
         let mut retry_delay   = Duration::from_secs(5);
         let mut presence_tick = interval(PRESENCE_TICK);
@@ -249,8 +326,8 @@ impl SipStack {
                             }
                         }
                         Err(e) => {
-                            error!("Transport error: {e}");
-                            return Err(e);
+                            error!("Transport error: {e:#}");
+                            return Err((e, self.cmd_rx));
                         }
                     }
                 }
@@ -798,6 +875,9 @@ impl SipStack {
     /// (`message-summary`/`application/simple-message-summary`) use sites --
     /// everything else about the SUBSCRIBE (dialog identity, auth retry,
     /// refresh) is identical regardless of which event package it's for.
+    #[allow(clippy::too_many_arguments)] // each param is a distinct, meaningfully-named
+                                          // piece of a SUBSCRIBE's identity; bundling them
+                                          // into a struct wouldn't reduce real complexity here.
     fn build_subscribe(
         &self,
         call_id:       &str,

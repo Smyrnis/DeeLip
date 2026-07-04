@@ -167,7 +167,11 @@ pub struct DeelipApp {
     /// Shared handles for the tray's independent event-handling threads (see
     /// `tray` module docs) — `None` degrades to normal close-quits-the-app
     /// behavior if the tray icon failed to start.
-    tray: Option<(CtxSlot, QuitState)>,
+    tray: Option<(CtxSlot, QuitState, tray::BadgeSender)>,
+    /// Missed calls not yet acknowledged by opening the History tab —
+    /// mirrored to the tray icon's badge (see `sync_tray_badge`) whenever
+    /// it changes; reset to 0 on switching to the History tab.
+    unseen_missed_calls: u32,
 
     /// System-wide Answer/Hangup/Mute hotkeys (see `hotkeys` module docs) --
     /// `None` if disabled in config, or if registration failed (logged, not
@@ -279,7 +283,7 @@ impl DeelipApp {
         rt: Handle,
         config: AppConfig,
         config_path: PathBuf,
-        tray: Option<(CtxSlot, QuitState)>,
+        tray: Option<(CtxSlot, QuitState, tray::BadgeSender)>,
     ) -> Self {
         let accounts = accounts.into_iter().map(|(account, handle)| AccountState {
             label: account_label(&account),
@@ -344,6 +348,7 @@ impl DeelipApp {
             first_frame: true,
             palette: Palette::dark(),
             tray,
+            unseen_missed_calls: 0,
             hotkeys,
             history,
             history_path,
@@ -937,10 +942,23 @@ impl DeelipApp {
         } else {
             0
         };
+        let is_missed = status == CallStatus::Missed;
         let record = CallRecord { remote_uri, direction, timestamp: start_time, duration_secs: duration, status };
         self.history.push(record);
         if let Some(path) = &self.history_path {
             let _ = self.history.save(path);
+        }
+        if is_missed {
+            self.unseen_missed_calls += 1;
+            self.sync_tray_badge();
+        }
+    }
+
+    /// Push `unseen_missed_calls` to the tray icon's badge overlay/tooltip.
+    /// No-op if the tray failed to start.
+    fn sync_tray_badge(&self) {
+        if let Some((_, _, badge_tx)) = &self.tray {
+            let _ = badge_tx.send(self.unseen_missed_calls);
         }
     }
 
@@ -1277,7 +1295,7 @@ impl DeelipApp {
         match &self.pending_call {
             Some(p) if self.last_notified_call.as_deref() != Some(p.call_id.as_str()) => {
                 self.last_notified_call = Some(p.call_id.clone());
-                notify::notify_incoming_call(&p.from);
+                notify::notify_incoming_call(&p.call_id, &p.from);
             }
             None => self.last_notified_call = None,
             _ => {}
@@ -1306,7 +1324,7 @@ impl DeelipApp {
     /// `update()`, and (b) keeps the background threads' shared state fresh
     /// for whenever they do run.
     fn process_tray_events(&mut self, ctx: &egui::Context) {
-        let Some((ctx_slot, quit_state)) = &self.tray else { return };
+        let Some((ctx_slot, quit_state, _)) = &self.tray else { return };
 
         *ctx_slot.lock().unwrap() = Some(ctx.clone());
         *quit_state.calls.lock().unwrap() = self.calls.iter()
@@ -1350,6 +1368,24 @@ impl DeelipApp {
             }
         }
     }
+
+    /// Dispatch any Accept/Reject notification-button presses since the
+    /// last frame. Each action is checked against the *currently* pending
+    /// call, not just acted on blindly -- the notification's background
+    /// thread can resolve well after its call already ended some other way
+    /// (timed out, hung up remotely, answered from the app itself), and a
+    /// stale action for a since-gone or already-different call must be
+    /// silently ignored rather than accepting/rejecting the wrong thing.
+    fn process_notification_actions(&mut self) {
+        for (call_id, action) in notify::poll_actions() {
+            let Some(pending) = &self.pending_call else { continue };
+            if pending.call_id != call_id { continue; }
+            match action {
+                notify::NotificationAction::Accept => self.do_accept(),
+                notify::NotificationAction::Reject => self.do_reject(),
+            }
+        }
+    }
 }
 
 impl eframe::App for DeelipApp {
@@ -1369,6 +1405,7 @@ impl eframe::App for DeelipApp {
         self.sync_notifications();
         self.process_tray_events(ctx);
         self.process_hotkey_events();
+        self.process_notification_actions();
 
         self.palette = Palette::for_theme(self.config.dark_mode);
         let mut visuals = if self.config.dark_mode { egui::Visuals::dark() } else { egui::Visuals::light() };
@@ -1394,7 +1431,12 @@ impl eframe::App for DeelipApp {
         egui::TopBottomPanel::top("tabs").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut self.tab, Tab::Dialer,   format!("{}  Dialer",   egui_phosphor::regular::PHONE));
-                ui.selectable_value(&mut self.tab, Tab::History,  format!("{}  History",  egui_phosphor::regular::CLOCK_COUNTER_CLOCKWISE));
+                let history_label = if self.unseen_missed_calls > 0 {
+                    format!("{}  History ({})", egui_phosphor::regular::CLOCK_COUNTER_CLOCKWISE, self.unseen_missed_calls)
+                } else {
+                    format!("{}  History", egui_phosphor::regular::CLOCK_COUNTER_CLOCKWISE)
+                };
+                ui.selectable_value(&mut self.tab, Tab::History,  history_label);
                 ui.selectable_value(&mut self.tab, Tab::Contacts, format!("{}  Contacts", egui_phosphor::regular::ADDRESS_BOOK));
                 ui.selectable_value(&mut self.tab, Tab::Settings, format!("{}  Settings", egui_phosphor::regular::GEAR));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1406,6 +1448,11 @@ impl eframe::App for DeelipApp {
                 });
             });
         });
+
+        if self.tab == Tab::History && self.unseen_missed_calls > 0 {
+            self.unseen_missed_calls = 0;
+            self.sync_tray_badge();
+        }
 
         egui::CentralPanel::default().show(ctx, |ui| {
             match self.tab {
