@@ -3,18 +3,13 @@ mod call_actions;
 mod event_handling;
 mod frame;
 mod helpers;
-mod hotkeys;
 mod media;
-mod notify;
-mod ringtone;
+mod platform;
 mod theme;
-pub mod tray;
-mod view_contacts;
-mod view_dialer;
-mod view_history;
-mod view_settings;
+mod views;
 
 pub use app::DeelipApp;
+pub use platform::tray;
 
 /// Embedded Cantarell (GNOME's own default UI font, SIL OFL 1.1 -- see
 /// `assets/OFL.txt`) as the app's proportional font, replacing egui's

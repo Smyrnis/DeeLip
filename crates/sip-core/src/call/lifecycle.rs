@@ -3,12 +3,12 @@ use std::net::SocketAddr;
 use tracing::{debug, error};
 
 use crate::{
-    auth::build_challenge_response,
+    call::dialog::{Dialog, DialogState},
     client::SipStack,
-    dialog::{Dialog, DialogState},
     events::SipEvent,
-    message::{SipMessage, SipMethod},
-    util::{new_branch, new_call_id, new_tag, parse_tag, parse_uri},
+    wire::auth::build_challenge_response,
+    wire::message::{SipMessage, SipMethod},
+    wire::util::{new_branch, new_call_id, new_tag, parse_tag, parse_uri},
 };
 
 impl SipStack {

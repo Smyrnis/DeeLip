@@ -4,13 +4,13 @@ use tokio::time::Instant;
 use tracing::{debug, error};
 
 use crate::{
-    auth::build_challenge_response,
     client::{SipStack, MWI_ACCEPT, MWI_EVENT, PRESENCE_ACCEPT, PRESENCE_EVENT, SUBSCRIBE_EXPIRES},
-    message::SipMessage,
-    mwi::{parse_mwi_summary, MwiSubscription},
-    presence::{parse_pidf_basic, parse_subscription_state, PresenceSubscription},
     events::SipEvent,
-    util::{extract_expires, new_call_id, new_tag, parse_tag},
+    subscription::mwi::{parse_mwi_summary, MwiSubscription},
+    subscription::presence::{parse_pidf_basic, parse_subscription_state, PresenceSubscription},
+    wire::auth::build_challenge_response,
+    wire::message::SipMessage,
+    wire::util::{extract_expires, new_call_id, new_tag, parse_tag},
 };
 
 impl SipStack {
@@ -95,7 +95,7 @@ impl SipStack {
         event_package: &str,
         accept:        &str,
     ) -> String {
-        let branch     = crate::util::new_branch();
+        let branch     = crate::wire::util::new_branch();
         let server     = &self.account.server;
         let username   = &self.account.username;
         let adv_ip     = &self.advertised_ip;

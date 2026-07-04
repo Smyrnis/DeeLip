@@ -11,7 +11,7 @@ use tracing::{debug, warn};
 
 use deelip_config::TransportProtocol;
 
-use crate::framing::MessageFramer;
+use crate::wire::framing::MessageFramer;
 
 /// Unifies UDP (datagram) and TLS (persistent stream) SIP transports behind one API.
 pub enum SipTransport {

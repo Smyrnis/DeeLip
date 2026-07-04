@@ -3,10 +3,10 @@ use std::sync::atomic::Ordering;
 use tracing::{debug, info, warn};
 
 use crate::{
-    auth::build_challenge_response,
     client::{SipStack, REG_EXPIRES, REG_RECV_TIMEOUT},
-    message::SipMessage,
-    util::{extract_expires, new_branch},
+    wire::auth::build_challenge_response,
+    wire::message::SipMessage,
+    wire::util::{extract_expires, new_branch},
 };
 
 impl SipStack {

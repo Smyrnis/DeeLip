@@ -36,7 +36,7 @@ pub fn local_ip_for(server: &str, port: u16) -> anyhow::Result<String> {
 
 /// Read `Expires` from a REGISTER/SUBSCRIBE response, falling back to the
 /// `expires=` param on the `Contact` header (RFC 3261 §10.2.4 allows either).
-pub fn extract_expires(msg: &crate::message::SipMessage) -> Option<u32> {
+pub fn extract_expires(msg: &crate::wire::message::SipMessage) -> Option<u32> {
     if let Some(v) = msg.header("Expires") {
         if let Ok(n) = v.trim().parse::<u32>() { return Some(n); }
     }

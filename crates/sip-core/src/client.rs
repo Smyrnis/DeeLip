@@ -11,14 +11,14 @@ use tracing::{debug, error, info};
 use deelip_config::{SipAccount, TransportProtocol};
 
 use crate::{
-    dialog::Dialog,
+    call::dialog::Dialog,
     events::{SipCommand, SipEvent},
     handle::SipHandle,
-    message::{SipMessage, SipMethod, SipStartLine},
-    mwi::MwiSubscription,
-    presence::PresenceSubscription,
+    subscription::mwi::MwiSubscription,
+    subscription::presence::PresenceSubscription,
     transport::SipTransport,
-    util::local_ip_for,
+    wire::message::{SipMessage, SipMethod, SipStartLine},
+    wire::util::local_ip_for,
 };
 
 pub(crate) const REG_EXPIRES:        u32      = 3600;
@@ -74,8 +74,8 @@ impl SipStack {
                 Err(e) => return Err((e, cmd_rx)),
             };
 
-        let reg_call_id  = crate::util::new_call_id(&local_ip);
-        let reg_from_tag = crate::util::new_tag();
+        let reg_call_id  = crate::wire::util::new_call_id(&local_ip);
+        let reg_from_tag = crate::wire::util::new_tag();
 
         Ok(Self {
             transport,
@@ -400,7 +400,7 @@ impl SipStack {
         to_tag:   Option<&str>,
         cseq:     u32,
     ) -> String {
-        let branch      = crate::util::new_branch();
+        let branch      = crate::wire::util::new_branch();
         let server      = &self.account.server;
         let username    = &self.account.username;
         let adv_ip      = &self.advertised_ip;

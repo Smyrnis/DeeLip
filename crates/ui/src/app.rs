@@ -7,10 +7,10 @@ use tokio::runtime::Handle;
 
 use deelip_nat::{IceConnection, IceGathered, TurnRelay};
 
-use crate::hotkeys::Hotkeys;
-use crate::tray::{self, CtxSlot, QuitState};
+use crate::platform::hotkeys::Hotkeys;
+use crate::platform::tray::{self, CtxSlot, QuitState};
+use crate::platform::ringtone::Ringtone;
 use crate::theme::Palette;
-use crate::ringtone::Ringtone;
 
 // ── Tab navigation ────────────────────────────────────────────────────────────
 

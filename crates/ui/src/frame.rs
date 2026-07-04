@@ -1,9 +1,9 @@
 use std::time::Duration;
 
 use crate::app::DeelipApp;
-use crate::hotkeys::HotkeyAction;
-use crate::notify;
-use crate::ringtone::{RingKind, Ringtone};
+use crate::platform::hotkeys::HotkeyAction;
+use crate::platform::notify;
+use crate::platform::ringtone::{RingKind, Ringtone};
 use crate::theme;
 
 impl DeelipApp {

@@ -3,9 +3,9 @@ use std::net::SocketAddr;
 use tracing::debug;
 
 use crate::{
+    call::dialog::DialogState,
     client::SipStack,
-    dialog::DialogState,
-    util::{encode_replaces_param, new_branch},
+    wire::util::{encode_replaces_param, new_branch},
 };
 
 impl SipStack {

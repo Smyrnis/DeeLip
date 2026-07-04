@@ -1,5 +1,5 @@
-use crate::mwi::MwiState;
-use crate::presence::PresenceState;
+use crate::subscription::mwi::MwiState;
+use crate::subscription::presence::PresenceState;
 
 /// Events emitted by the SIP stack to the application.
 #[derive(Debug)]
