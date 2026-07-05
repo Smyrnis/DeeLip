@@ -90,6 +90,9 @@ impl DeelipApp {
 
         let mut call_target: Option<String> = None;
         let mut block_target: Option<String> = None;
+        let mut message_target: Option<String> = None;
+        let mut copy_target: Option<String> = None;
+        let mut delete_idx: Option<usize> = None;
 
         if self.history_filtered.is_empty() {
             empty_state(ui, &self.palette, "No matching calls.");
@@ -118,7 +121,8 @@ impl DeelipApp {
                 .auto_shrink([false, false])
                 .show_rows(ui, row_height, filtered.len(), |ui, row_range| {
                     for idx in row_range {
-                        let record = &records[filtered[idx]];
+                        let real_idx = filtered[idx];
+                        let record = &records[real_idx];
                         let (dir_icon, dir_color) = match record.direction {
                             CallDirection::Inbound => {
                                 (egui_phosphor::regular::PHONE_INCOMING, self.palette.info)
@@ -127,31 +131,60 @@ impl DeelipApp {
                                 (egui_phosphor::regular::PHONE_OUTGOING, self.palette.accent)
                             }
                         };
+                        let (status_icon, status_color) = match record.status {
+                            CallStatus::Answered => {
+                                (egui_phosphor::regular::CHECK_CIRCLE, self.palette.accent)
+                            }
+                            CallStatus::Missed => {
+                                (egui_phosphor::regular::PHONE_X, self.palette.warn)
+                            }
+                            CallStatus::Rejected => {
+                                (egui_phosphor::regular::X_CIRCLE, self.palette.danger)
+                            }
+                            CallStatus::Failed => {
+                                (egui_phosphor::regular::WARNING_CIRCLE, self.palette.danger)
+                            }
+                        };
                         let status_str = match record.status {
                             CallStatus::Answered => format_duration(record.duration_secs),
                             CallStatus::Missed => "Missed".into(),
                             CallStatus::Rejected => "Rejected".into(),
                             CallStatus::Failed => "Failed".into(),
                         };
+                        let display_name = self
+                            .contacts
+                            .find_by_uri(&record.remote_uri)
+                            .map(|c| c.name.clone())
+                            .unwrap_or_else(|| short_uri(&record.remote_uri));
 
                         let palette = self.palette;
                         list_row(ui, &palette, idx, |ui| {
                             ui.label(RichText::new(dir_icon).color(dir_color));
-                            ui.label(short_uri(&record.remote_uri));
+                            ui.label(display_name);
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
+                                    if ui.small_button(egui_phosphor::regular::TRASH).clicked() {
+                                        delete_idx = Some(real_idx);
+                                    }
+                                    if ui.small_button(egui_phosphor::regular::COPY).clicked() {
+                                        copy_target = Some(record.remote_uri.clone());
+                                    }
+                                    if ui.small_button(egui_phosphor::regular::CHAT_CIRCLE).clicked() {
+                                        message_target = Some(record.remote_uri.clone());
+                                    }
                                     if ui.small_button("Call").clicked() {
                                         call_target = Some(record.remote_uri.clone());
                                     }
                                     if ui.small_button("Block").clicked() {
                                         block_target = Some(record.remote_uri.clone());
                                     }
-                                    ui.label(RichText::new(&status_str).color(palette.muted));
                                     ui.label(
                                         RichText::new(format_age(record.timestamp))
                                             .color(palette.muted),
                                     );
+                                    ui.label(RichText::new(&status_str).color(palette.muted));
+                                    ui.label(RichText::new(status_icon).color(status_color));
                                 },
                             );
                         });
@@ -172,6 +205,19 @@ impl DeelipApp {
             {
                 self.config.blocklist.push(target);
                 self.save_config_quietly();
+            }
+        }
+        if let Some(target) = message_target {
+            self.message_from_list(target);
+        }
+        if let Some(target) = copy_target {
+            ui.output_mut(|o| o.copied_text = target);
+        }
+        if let Some(idx) = delete_idx {
+            self.history.records.remove(idx);
+            self.history_filter_key = None; // force the filtered list to recompute against the new indices
+            if let Err(e) = self.history.save(&self.db) {
+                tracing::error!("Failed to save call history: {e}");
             }
         }
     }

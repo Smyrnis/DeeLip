@@ -25,15 +25,21 @@ use crate::wire::sdp::{AudioCodec, IceAttrs, ParsedSdp, SrtpParams, SrtpSession,
 const ICE_GATHER_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Network settings a `SipStack` needs for call setup -- separate from
-/// `SipAccount` since these are process-wide (Settings' Network section),
-/// not per-account. Passed in once at `SipStack::spawn` time; like every
-/// other Network setting in this app, changing it requires a restart.
+/// `SipAccount` since STUN/TURN server config is process-wide (Settings'
+/// Network section), not per-account. Passed in once at `SipStack::spawn`
+/// time; like every other Network setting in this app, changing it requires
+/// a restart.
 #[derive(Debug, Clone, Default)]
 pub struct NetworkConfig {
     pub stun_server: Option<String>,
     pub turn_server: Option<String>,
     pub turn_username: String,
     pub turn_password: String,
+    /// Global default for whether to attempt ICE -- `SipAccount::ice_enabled`
+    /// can override this per account (see `SipAccount::wants_ice`), so
+    /// `try_gather_ice`/`try_answer_with_ice` take the already-resolved
+    /// decision as an explicit `enabled` parameter rather than reading this
+    /// field directly.
     pub ice_enabled: bool,
 }
 
@@ -53,7 +59,9 @@ pub fn account_codecs(acc: &SipAccount) -> Vec<AudioCodec> {
     if codecs.is_empty() { ALL_CODECS.to_vec() } else { codecs }
 }
 
-fn codec_from_str(s: &str) -> Option<AudioCodec> {
+/// Parse one of `codec_order`'s canonical lowercase codec names (also used
+/// by `SipAccount::force_incoming_codec`).
+pub fn codec_from_str(s: &str) -> Option<AudioCodec> {
     match s {
         "opus" => Some(AudioCodec::Opus),
         "g722" => Some(AudioCodec::G722),
@@ -95,8 +103,12 @@ pub async fn resolve_rtp_endpoint(
 /// handle) if ICE is disabled, no STUN/TURN server is configured, or
 /// gathering fails/times out, so every call site can fall back to the
 /// existing `resolve_rtp_endpoint` path exactly as if ICE didn't exist.
-pub async fn try_gather_ice(network: &NetworkConfig, is_controlling: bool) -> Option<IceGathered> {
-    if !network.ice_enabled { return None; }
+/// `enabled` is the caller's already-resolved decision (global
+/// `AppConfig::ice_enabled` combined with any per-account override via
+/// `SipAccount::wants_ice`) -- this function itself only knows about
+/// process-wide STUN/TURN config, not any particular account.
+pub async fn try_gather_ice(network: &NetworkConfig, enabled: bool, is_controlling: bool) -> Option<IceGathered> {
+    if !enabled { return None; }
     if network.stun_server.is_none() && network.turn_server.is_none() { return None; }
     let turn = network.turn();
     let turn_ref = turn.as_ref().map(|(s, u, p)| (s.as_str(), u.as_str(), p.as_str()));
@@ -142,12 +154,12 @@ pub async fn finish_ice_connect(gathered: Option<IceGathered>, is_controlling: b
 /// for a later event. Returns our own `IceAttrs` for the answer SDP, our
 /// default candidate's address for the plain c=/m= line, and the winning
 /// connection -- all three or nothing.
-pub async fn try_answer_with_ice(network: &NetworkConfig, offer: &ParsedSdp) -> Option<(IceAttrs, SocketAddr, IceConnection)> {
-    if !network.ice_enabled { return None; }
+pub async fn try_answer_with_ice(network: &NetworkConfig, enabled: bool, offer: &ParsedSdp) -> Option<(IceAttrs, SocketAddr, IceConnection)> {
+    if !enabled { return None; }
     let ufrag = offer.ice_ufrag.as_deref()?;
     let pwd = offer.ice_pwd.as_deref()?;
     if offer.ice_candidates.is_empty() { return None; }
-    let gathered = try_gather_ice(network, false).await?;
+    let gathered = try_gather_ice(network, enabled, false).await?;
     let attrs = IceAttrs { ufrag: gathered.local_ufrag.clone(), pwd: gathered.local_pwd.clone(), candidates: gathered.candidates.clone() };
     let default_addr = gathered.default_addr;
     match deelip_nat::ice::connect(gathered, false, ufrag, pwd, &offer.ice_candidates).await {
@@ -176,15 +188,16 @@ pub fn resolve_call_media(
     ice:            Option<IceConnection>,
     codec:          AudioCodec,
     dtmf_type:      Option<u8>,
+    cn_type:        Option<u8>,
     remote_rtp:     SocketAddr,
     remote_srtp:    Option<SrtpParams>,
-    account_secure: bool,
+    wants_srtp:     bool,
 ) -> (CallMedia, CallMediaReady) {
     let srtp_session = match (&local_srtp, &remote_srtp) {
         (Some(local), Some(remote)) => Some(SrtpSession { local: local.clone(), remote: remote.clone() }),
         _ => {
-            if account_secure {
-                tracing::warn!("TLS signaling active but remote SDP has no a=crypto -- falling back to plaintext RTP");
+            if wants_srtp {
+                tracing::warn!("SRTP requested but remote SDP has no a=crypto -- falling back to plaintext RTP");
             }
             None
         }
@@ -192,8 +205,8 @@ pub fn resolve_call_media(
     let relay_conn: Option<Arc<dyn Conn + Send + Sync>> = ice.as_ref().map(|c| c.conn.clone())
         .or_else(|| relay.as_ref().map(|r| r.conn.clone()));
 
-    let media = CallMedia { local_rtp, local_srtp, relay, ice, codec, dtmf_type };
-    let ready = CallMediaReady { codec, dtmf_type, local_rtp, remote_rtp, srtp: srtp_session, relay: relay_conn };
+    let media = CallMedia { local_rtp, local_srtp, relay, ice, codec, dtmf_type, cn_type };
+    let ready = CallMediaReady { codec, dtmf_type, cn_type, local_rtp, remote_rtp, srtp: srtp_session, relay: relay_conn };
     (media, ready)
 }
 

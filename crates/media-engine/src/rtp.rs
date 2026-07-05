@@ -126,15 +126,29 @@ impl RtpSender {
     }
 
     pub fn next_packet(&mut self, payload: Vec<u8>) -> RtpPacket {
-        let pkt = RtpPacket::new(
-            self.payload_type,
-            self.sequence,
-            self.timestamp,
-            self.ssrc,
-            payload,
-        );
+        self.next_packet_with_pt(self.payload_type, payload)
+    }
+
+    /// Same as `next_packet`, but with an explicit payload-type override --
+    /// used to send a comfort-noise (RFC 3389) packet on its own PT while
+    /// still advancing this sender's shared sequence/timestamp state.
+    pub fn next_packet_with_pt(&mut self, pt: u8, payload: Vec<u8>) -> RtpPacket {
+        let pkt = RtpPacket::new(pt, self.sequence, self.timestamp, self.ssrc, payload);
         self.sequence = self.sequence.wrapping_add(1);
         self.timestamp = self.timestamp.wrapping_add(self.ts_increment);
         pkt
+    }
+
+    /// Advance the RTP clock by one tick (`ts_increment`) without sending a
+    /// packet -- used during VAD-detected silence when neither a real audio
+    /// nor a comfort-noise packet is being sent for this particular 20ms
+    /// tick, so the timestamp on the next packet that IS sent still
+    /// correctly reflects how much real time has elapsed. RFC 3550 requires
+    /// the timestamp to track the sampling instant, not the count of
+    /// packets actually transmitted -- sequence-number gaps during DTX are
+    /// normal and receivers must tolerate them, but the timestamp must never
+    /// silently fall behind.
+    pub fn skip_tick(&mut self) {
+        self.timestamp = self.timestamp.wrapping_add(self.ts_increment);
     }
 }

@@ -27,10 +27,14 @@ pub(crate) enum UpdateMsg {
 
 impl DeelipApp {
     /// Kicks off a one-shot background check against GitHub Releases.
-    /// Called once at startup (see `DeelipApp::new`) -- not polled again
+    /// Called once at startup (see `DeelipApp::new`, gated on
+    /// `UpdateCheckFrequency::is_due`) and from the Settings tab's manual
+    /// "Check for updates now" button (never gated) -- not polled again
     /// during the session, matching "tell me when the app opens", not a
     /// recurring background poll.
     pub(crate) fn start_update_check(&mut self) {
+        self.config.last_update_check = Some(crate::helpers::unix_now());
+        self.save_config_quietly();
         let (tx, rx) = std::sync::mpsc::channel();
         self.update_rx = Some(rx);
         self.update_state = UpdateState::Checking;

@@ -36,7 +36,20 @@ CREATE TABLE IF NOT EXISTS accounts (
     dtmf_mode                 TEXT NOT NULL,
     auto_answer_enabled       INTEGER NOT NULL,
     auto_answer_secs          INTEGER NOT NULL,
-    mailbox                   TEXT
+    mailbox                   TEXT,
+    account_name              TEXT,
+    sip_proxy                 TEXT,
+    domain                    TEXT,
+    auth_username             TEXT,
+    dialing_prefix            TEXT,
+    hide_caller_id            INTEGER NOT NULL DEFAULT 0,
+    register_expires          INTEGER NOT NULL DEFAULT 3600,
+    keepalive_secs            INTEGER,
+    media_encryption          TEXT NOT NULL DEFAULT 'match_transport',
+    public_address            TEXT,
+    ice_enabled               INTEGER,
+    force_incoming_codec      TEXT,
+    vad_enabled               INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS contacts (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -82,11 +95,51 @@ impl Db {
         conn.execute_batch(SCHEMA)
             .context("Creating database schema")?;
         let db = Db { conn };
+        db.migrate_accounts_columns()
+            .context("Migrating accounts table columns")?;
 
         if is_fresh {
             db.migrate_legacy_or_seed_default()?;
         }
         Ok(db)
+    }
+
+    /// `CREATE TABLE IF NOT EXISTS` above only creates the `accounts` table
+    /// the very first time this DB file exists -- an already-existing table
+    /// from before a column was added (e.g. `mailbox`, or the account-editor
+    /// fields added alongside this method) never gets that column, and every
+    /// `SELECT`/`INSERT` in `account.rs` would then fail with "no such
+    /// column". Idempotently `ALTER TABLE ADD COLUMN` anything `SCHEMA`
+    /// expects but an existing table predates; SQLite has no "IF NOT
+    /// EXISTS" for columns, so a "duplicate column name" error (already has
+    /// it) is swallowed and anything else propagates.
+    fn migrate_accounts_columns(&self) -> anyhow::Result<()> {
+        const COLUMNS: &[&str] = &[
+            "account_name   TEXT",
+            "sip_proxy      TEXT",
+            "domain         TEXT",
+            "auth_username  TEXT",
+            "dialing_prefix TEXT",
+            "hide_caller_id INTEGER NOT NULL DEFAULT 0",
+            "register_expires INTEGER NOT NULL DEFAULT 3600",
+            "keepalive_secs INTEGER",
+            "media_encryption TEXT NOT NULL DEFAULT 'match_transport'",
+            "public_address TEXT",
+            "ice_enabled INTEGER",
+            "force_incoming_codec TEXT",
+            "vad_enabled INTEGER NOT NULL DEFAULT 0",
+        ];
+        for col in COLUMNS {
+            if let Err(e) = self
+                .conn
+                .execute(&format!("ALTER TABLE accounts ADD COLUMN {col}"), [])
+            {
+                if !e.to_string().contains("duplicate column name") {
+                    return Err(e.into());
+                }
+            }
+        }
+        Ok(())
     }
 
     fn migrate_legacy_or_seed_default(&self) -> anyhow::Result<()> {

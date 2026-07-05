@@ -64,7 +64,7 @@ impl SipStack {
         auth: Option<&str>,
     ) -> String {
         let branch = new_branch();
-        let server = &self.account.server;
+        let server = self.account.domain();
         let username = &self.account.username;
         let adv_ip = &self.advertised_ip;
         let local_ip = &self.local_ip;
@@ -152,7 +152,7 @@ impl SipStack {
                     return;
                 };
                 let Some(auth) = build_challenge_response(
-                    &self.account.username,
+                    self.account.auth_username(),
                     &self.account.password,
                     "MESSAGE",
                     &to,

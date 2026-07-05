@@ -1,5 +1,6 @@
 use anyhow::Context;
 use tracing::warn;
+use tracing_subscriber::fmt::writer::MakeWriterExt;
 use tracing_subscriber::EnvFilter;
 
 use deelip_config::{AppConfig, Db};
@@ -7,22 +8,54 @@ use deelip_sip::SipStack;
 use deelip_ui::DeelipApp;
 
 fn main() -> anyhow::Result<()> {
-    // ── Logging ───────────────────────────────────────────────────────────────
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-            EnvFilter::new("deelip=debug,deelip_sip=debug,deelip_media=debug,deelip_nat=info")
-        }))
-        .init();
-
-    tracing::info!("DeeLip v{}", env!("CARGO_PKG_VERSION"));
-
     // ── Config ────────────────────────────────────────────────────────────────
     // `Db::open_default()` creates `~/.config/deelip/deelip.db` on first run,
     // one-time-importing any existing `config.toml`/`contacts.json`/
     // `history.json` into it (left on disk untouched), or seeding a single
     // default account if there's no legacy data to import either.
+    //
+    // Deliberately opened before logging is set up below -- `log_to_file`
+    // decides the tracing subscriber's writer, and a `tracing_subscriber`
+    // global subscriber can only be installed once (`.init()` panics on a
+    // second call), so there's no way to defer this decision until after an
+    // initial console-only subscriber were already active.
     let db = Db::open_default().context("Opening database")?;
     let config = AppConfig::load(&db).context("Loading config")?;
+
+    // ── Logging ───────────────────────────────────────────────────────────────
+    // `_log_guard` (only bound when logging to a file) must live for the
+    // whole process -- its `Drop` flushes the non-blocking writer's queue;
+    // dropping it early would silently lose buffered log lines on exit.
+    let make_filter = || {
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+            EnvFilter::new("deelip=debug,deelip_sip=debug,deelip_media=debug,deelip_nat=info")
+        })
+    };
+    let _log_guard = if config.log_to_file {
+        match deelip_config::log_file_path() {
+            Ok(path) => {
+                let parent = path.parent().expect("log_file_path always has a parent").to_path_buf();
+                let file_name = path.file_name().expect("log_file_path always has a file name").to_owned();
+                let appender = tracing_appender::rolling::never(parent, file_name);
+                let (non_blocking, guard) = tracing_appender::non_blocking(appender);
+                tracing_subscriber::fmt()
+                    .with_env_filter(make_filter())
+                    .with_writer(std::io::stdout.and(non_blocking))
+                    .init();
+                Some(guard)
+            }
+            Err(e) => {
+                tracing_subscriber::fmt().with_env_filter(make_filter()).init();
+                warn!("Failed to resolve log file path ({e:#}), logging to console only");
+                None
+            }
+        }
+    } else {
+        tracing_subscriber::fmt().with_env_filter(make_filter()).init();
+        None
+    };
+
+    tracing::info!("DeeLip v{}", env!("CARGO_PKG_VERSION"));
 
     let enabled_accounts: Vec<_> = config
         .accounts

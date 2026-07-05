@@ -108,6 +108,10 @@ pub struct DeelipApp {
     /// The `call_id` last notified about, so `sync_notifications` fires once
     /// per incoming call rather than every frame it's still ringing.
     pub(crate) last_notified_call: Option<String>,
+    /// Same idiom as `last_notified_call`, for `sync_window_raise` -- kept
+    /// as a separate field since window-raising isn't gated on
+    /// `notifications_enabled` and so can't share the same edge tracking.
+    pub(crate) last_raised_call: Option<String>,
 
     /// Live-edited settings draft, shown/edited in the Settings tab and
     /// saved to `db` on demand — takes effect on next restart.
@@ -121,6 +125,11 @@ pub struct DeelipApp {
     /// Account section (distinct from `selected_account`, which picks which
     /// *running/registered* identity places outgoing calls).
     pub(crate) edit_account_idx: usize,
+    /// Reveal-toggle for the account editor's password field -- purely
+    /// local UI state, reset to masked whenever a different account is
+    /// selected would be nice but isn't worth the extra bookkeeping; it's
+    /// low-stakes since the password itself never leaves this process.
+    pub(crate) show_account_password: bool,
     /// Cached (input, output) cpal device names for the Settings tab's
     /// device pickers. Populated lazily on first render and via an explicit
     /// Refresh button only -- calling cpal's device enumeration every frame
@@ -336,10 +345,12 @@ impl DeelipApp {
             ringtone: None,
             was_ringing: false,
             last_notified_call: None,
+            last_raised_call: None,
             config,
             db,
             settings_saved_notice: false,
             edit_account_idx: 0,
+            show_account_password: false,
             audio_device_cache: None,
             autostart_enabled: deelip_config::is_autostart_enabled(),
             first_frame: true,
@@ -366,7 +377,14 @@ impl DeelipApp {
             update_rx: None,
         };
 
-        app.start_update_check();
+        let now = crate::helpers::unix_now();
+        if app
+            .config
+            .update_check_frequency
+            .is_due(app.config.last_update_check, now)
+        {
+            app.start_update_check();
+        }
         app
     }
 }

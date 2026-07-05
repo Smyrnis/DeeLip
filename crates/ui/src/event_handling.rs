@@ -341,6 +341,23 @@ impl DeelipApp {
         self.save_config_quietly();
     }
 
+    /// Same shape as `toggle_dnd`, for `auto_answer_enabled` -- a dialer
+    /// quick-toggle for the setting that's otherwise Settings-tab-only.
+    pub(crate) fn toggle_auto_answer(&mut self, idx: usize) {
+        let new_val = !self.accounts[idx].account.auto_answer_enabled;
+        self.accounts[idx].account.auto_answer_enabled = new_val;
+        let username = self.accounts[idx].account.username.clone();
+        if let Some(cfg_acc) = self
+            .config
+            .accounts
+            .iter_mut()
+            .find(|a| a.username == username)
+        {
+            cfg_acc.auto_answer_enabled = new_val;
+        }
+        self.save_config_quietly();
+    }
+
     /// Subscribe every `watch_presence` contact resolved to `account`,
     /// called once that account has actually registered (subscribing before
     /// then would just hit the same 401/407 retry path unnecessarily).

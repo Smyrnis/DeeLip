@@ -3,7 +3,7 @@ use std::sync::atomic::Ordering;
 use tracing::{debug, info, warn};
 
 use crate::{
-    client::{SipStack, REG_EXPIRES, REG_RECV_TIMEOUT},
+    client::{SipStack, REG_RECV_TIMEOUT},
     wire::auth::build_challenge_response,
     wire::message::SipMessage,
     wire::util::{extract_expires, new_branch},
@@ -17,7 +17,7 @@ impl SipStack {
         match resp.status_code() {
             Some(200) => {
                 info!("Registered (no auth)");
-                return Ok(extract_expires(&resp).unwrap_or(REG_EXPIRES));
+                return Ok(extract_expires(&resp).unwrap_or(self.account.register_expires));
             }
             Some(401) | Some(407) => {}
             Some(c) => return Err(anyhow::anyhow!("REGISTER rejected: {c}")),
@@ -34,9 +34,9 @@ impl SipStack {
             .ok_or_else(|| anyhow::anyhow!("Missing {hdr_name}"))?
             .to_owned();
 
-        let uri = format!("sip:{}", self.account.server);
+        let uri = format!("sip:{}", self.account.domain());
         let auth = build_challenge_response(
-            &self.account.username,
+            self.account.auth_username(),
             &self.account.password,
             "REGISTER",
             &uri,
@@ -49,7 +49,7 @@ impl SipStack {
         match resp2.status_code() {
             Some(200) => {
                 info!("Registered");
-                Ok(extract_expires(&resp2).unwrap_or(REG_EXPIRES))
+                Ok(extract_expires(&resp2).unwrap_or(self.account.register_expires))
             }
             Some(c) => Err(anyhow::anyhow!("REGISTER rejected: {c}")),
             None => Err(anyhow::anyhow!("Expected response")),
@@ -59,7 +59,7 @@ impl SipStack {
     async fn send_register(&self, auth: Option<&str>) -> anyhow::Result<()> {
         let cseq = self.reg_cseq.fetch_add(1, Ordering::SeqCst);
         let branch = new_branch();
-        let server = &self.account.server;
+        let server = self.account.domain();
         let username = &self.account.username;
         let adv_ip = &self.advertised_ip;
         let local_ip = &self.local_ip;
@@ -69,6 +69,7 @@ impl SipStack {
         let display = self.account.display_name.as_deref().unwrap_or(username);
         let via_proto = self.via_proto();
         let contact_transport = self.contact_transport_param();
+        let expires = self.account.register_expires;
 
         let mut msg = format!(
             "REGISTER sip:{server} SIP/2.0\r\n\
@@ -79,7 +80,7 @@ impl SipStack {
              Call-ID: {call_id}\r\n\
              CSeq: {cseq} REGISTER\r\n\
              Contact: <sip:{username}@{adv_ip}:{local_port}{contact_transport}>\r\n\
-             Expires: {REG_EXPIRES}\r\n\
+             Expires: {expires}\r\n\
              User-Agent: DeeLip/0.1.0\r\n"
         );
         if let Some(a) = auth {

@@ -9,7 +9,10 @@ mod db;
 mod history;
 mod messages;
 
-pub use account::{AppConfig, AudioConfig, DtmfMode, SipAccount, TransportProtocol};
+pub use account::{
+    AppConfig, AudioConfig, DtmfMode, MediaEncryption, RecordingFormat, SipAccount,
+    TransportProtocol, UpdateCheckFrequency,
+};
 pub use autostart::{is_autostart_enabled, set_autostart};
 pub use contacts::{Contact, ContactBook};
 pub use db::{default_db_path, Db};
@@ -22,9 +25,23 @@ fn deelip_dir() -> anyhow::Result<PathBuf> {
     Ok(base.join("deelip"))
 }
 
-/// Returns `~/.config/deelip/recordings`, creating it if it doesn't exist yet.
-pub fn recordings_dir() -> anyhow::Result<PathBuf> {
-    let dir = deelip_dir()?.join("recordings");
+/// Returns `~/.config/deelip/deelip.log`, creating the parent directory if
+/// it doesn't exist yet -- used by `AppConfig::log_to_file`.
+pub fn log_file_path() -> anyhow::Result<PathBuf> {
+    let dir = deelip_dir()?;
+    std::fs::create_dir_all(&dir)
+        .with_context(|| format!("Creating config dir {}", dir.display()))?;
+    Ok(dir.join("deelip.log"))
+}
+
+/// Returns the recordings directory, creating it if it doesn't exist yet --
+/// `override_dir` if set and non-empty (`AppConfig::recordings_dir_override`),
+/// otherwise the default `~/.config/deelip/recordings`.
+pub fn recordings_dir(override_dir: Option<&str>) -> anyhow::Result<PathBuf> {
+    let dir = match override_dir.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(custom) => PathBuf::from(custom),
+        None => deelip_dir()?.join("recordings"),
+    };
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("Creating recordings dir {}", dir.display()))?;
     Ok(dir)

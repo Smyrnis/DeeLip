@@ -27,7 +27,8 @@ impl DeelipApp {
             // `was_ringing` doc comment) — it's still `None` either way.
             let device = self.config.audio.ringtone_device.as_deref();
             let file = self.config.audio.ringtone_file.as_deref();
-            match Ringtone::start(desired.unwrap(), device, file) {
+            let volume = self.config.audio.ringtone_volume;
+            match Ringtone::start(desired.unwrap(), device, file, volume) {
                 Ok(r) => self.ringtone = Some(r),
                 Err(e) => tracing::warn!("Ringtone failed to start: {e}"),
             }
@@ -35,6 +36,25 @@ impl DeelipApp {
             self.ringtone = None;
         }
         self.was_ringing = is_ringing;
+    }
+
+    /// Raise/focus the main window once per incoming call -- deliberately
+    /// not gated on `notifications_enabled` (a user who disabled desktop
+    /// notifications may still want the window to come to front), so this
+    /// tracks its own rising edge rather than reusing `sync_notifications`'s.
+    /// Reuses the exact `ViewportCommand` pair the tray icon's own
+    /// restore-from-tray path already uses (`platform::tray::restore_window`).
+    /// Called once per frame.
+    pub(crate) fn sync_window_raise(&mut self, ctx: &egui::Context) {
+        match &self.pending_call {
+            Some(p) if self.last_raised_call.as_deref() != Some(p.call_id.as_str()) => {
+                self.last_raised_call = Some(p.call_id.clone());
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            }
+            None => self.last_raised_call = None,
+            _ => {}
+        }
     }
 
     /// Fire a desktop notification once per incoming call (not every frame
@@ -171,6 +191,7 @@ impl eframe::App for DeelipApp {
         self.process_sip_events();
         self.check_pending_call_timeout();
         self.sync_ringtone();
+        self.sync_window_raise(ctx);
         self.sync_notifications();
         self.process_tray_events(ctx);
         self.process_hotkey_events();

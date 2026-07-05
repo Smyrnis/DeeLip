@@ -19,6 +19,8 @@ use crate::wire::sdp::{AudioCodec, SrtpSession};
 pub struct CallMediaReady {
     pub codec: AudioCodec,
     pub dtmf_type: Option<u8>,
+    /// Comfort-noise PT the remote signaled, if any -- see `ParsedSdp::cn_type`.
+    pub cn_type: Option<u8>,
     pub local_rtp: u16,
     pub remote_rtp: SocketAddr,
     pub srtp: Option<SrtpSession>,

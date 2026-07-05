@@ -1,6 +1,4 @@
 use std::collections::VecDeque;
-use std::fs::File;
-use std::io::BufWriter;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -15,54 +13,22 @@ use webrtc_srtp::option::srtp_replay_protection;
 use webrtc_srtp::protection_profile::ProtectionProfile;
 use webrtc_util::Conn;
 
-use deelip_config::recordings_dir;
+use deelip_config::RecordingFormat;
 use deelip_sip::{AudioCodec, SrtpSession};
 
 use crate::aec::EchoCanceller;
-use crate::audio::{open_streams, AudioStreams, PlaybackTx, FRAME_SAMPLES, SAMPLE_RATE};
+use crate::agc::AutomaticGainControl;
+use crate::audio::{open_streams, AudioStreams, PlaybackTx, FRAME_SAMPLES};
 use crate::codec::{
-    decode_pcma, decode_pcmu, encode_pcma, encode_pcmu, G722Decoder, G722Encoder, GsmDecoder,
-    GsmEncoder, IlbcDecoder, IlbcEncoder, OpusDecoder, OpusEncoder,
+    decode_pcma, decode_pcmu, encode_pcma, encode_pcmu, G722Decoder, G722Encoder, G729Decoder,
+    G729Encoder, GsmDecoder, GsmEncoder, IlbcDecoder, IlbcEncoder, OpusDecoder, OpusEncoder,
 };
 use crate::dtmf::{
     build_dtmf_burst, char_to_event, dtmf_tone_frame, DTMF_PAYLOAD_TYPE, INBAND_FRAME_COUNT,
 };
+use crate::recording::{RecordingOptions, RecordingWriter};
 use crate::rtp::{RtpPacket, RtpSender};
-
-type WavWriter = hound::WavWriter<BufWriter<File>>;
-
-/// Replace anything outside `[A-Za-z0-9._-]` with `_` (SIP Call-IDs can
-/// contain `@` and other characters not safe verbatim in a filename).
-fn sanitize_filename(s: &str) -> String {
-    s.chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect()
-}
-
-/// Open a stereo (left=near-end mic, right=far-end received/mixed) WAV
-/// writer for this call, under `recordings_dir()`.
-fn open_recorder(call_id: &str) -> anyhow::Result<WavWriter> {
-    let dir = recordings_dir().context("Resolving recordings dir")?;
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let path = dir.join(format!("{timestamp}_{}.wav", sanitize_filename(call_id)));
-    let spec = hound::WavSpec {
-        channels: 2,
-        sample_rate: SAMPLE_RATE,
-        bits_per_sample: 16,
-        sample_format: hound::SampleFormat::Int,
-    };
-    hound::WavWriter::create(&path, spec)
-        .with_context(|| format!("Creating recording at {}", path.display()))
-}
+use crate::vad::{ComfortNoiseState, VadDecision, VoiceActivityDetector, synthesize_comfort_noise};
 
 /// Per-packet RTP timestamp increment for a 20ms frame, in units of the
 /// codec's declared RTP clock rate. G.711's clock is 8000 Hz; Opus's RTP
@@ -75,7 +41,8 @@ fn ts_increment_for(codec: AudioCodec) -> u32 {
         | AudioCodec::Pcma
         | AudioCodec::G722
         | AudioCodec::Gsm
-        | AudioCodec::Ilbc => 160,
+        | AudioCodec::Ilbc
+        | AudioCodec::G729 => 160,
     }
 }
 
@@ -198,7 +165,8 @@ fn clock_hz_for(codec: AudioCodec) -> f64 {
         | AudioCodec::Pcma
         | AudioCodec::G722
         | AudioCodec::Gsm
-        | AudioCodec::Ilbc => 8000.0,
+        | AudioCodec::Ilbc
+        | AudioCodec::G729 => 8000.0,
     }
 }
 
@@ -221,7 +189,17 @@ pub struct MediaEngine {
     /// synchronous caller side — `stop()` aborts both tasks without awaiting
     /// them, so anything only reachable from inside a task would be subject
     /// to a cancellation race and might never run its cleanup.
-    recorder: Arc<Mutex<Option<WavWriter>>>,
+    recorder: Arc<Mutex<Option<RecordingWriter>>>,
+    /// Kept so `set_recording(true)` can lazily open a `RecordingWriter`
+    /// on demand (manual per-call Record button) using the same
+    /// name/format/directory this call would have used had
+    /// `RecordingOptions::enabled` been true from the start.
+    call_id: String,
+    recording_format: RecordingFormat,
+    recordings_dir_override: Option<String>,
+    /// Live in-call speaker/mic level controls -- see `crate::audio::SharedGain`.
+    output_gain: crate::audio::SharedGain,
+    input_gain: crate::audio::SharedGain,
     stats: SharedStats,
 }
 
@@ -231,16 +209,22 @@ impl MediaEngine {
     /// - `remote_rtp`:     remote RTP endpoint.
     /// - `codec`:          negotiated voice codec (PCMU/PCMA/Opus).
     /// - `dtmf_pt`:        DTMF telephone-event payload type (typically Some(101)).
+    /// - `cn_pt`:          RFC 3389 comfort-noise payload type the remote signaled, if
+    ///   any -- enables VAD-gated silence suppression on leg 1 only (a conference's
+    ///   second leg always sends continuously, see `crate::vad`'s module doc for the
+    ///   inter-SID-gap simplification this makes).
     /// - `srtp`:           local/remote SDES-SRTP keys, if the call negotiated encrypted media.
     /// - `relay`:          a TURN-allocated relay `Conn` (see `deelip_nat::allocate_relay`),
     ///   if the call is relaying media instead of using a direct local socket.
     /// - `echo_cancellation`: run acoustic echo cancellation on the mic path
     ///   (see `crate::aec`) — only useful on speakers/mic, not headsets.
+    /// - `agc_enabled`: run adaptive microphone gain control on the mic path
+    ///   (see `crate::agc`).
     /// - `input_device`/`output_device`: specific cpal device names to use,
     ///   falling back to the system default if unset or not found.
-    /// - `recording_enabled`: record this call to a stereo WAV file (left =
-    ///   near-end mic, right = far-end/mixed received audio) under
-    ///   `deelip_config::recordings_dir()`.
+    /// - `recording`: whether/how/where to record this call to a stereo
+    ///   file (left = near-end mic, right = far-end/mixed received audio) —
+    ///   see `RecordingOptions`.
     /// - `call_id`: used to name the recording file; ignored if recording is disabled.
     /// - `second_leg`: `Some` to bridge a second remote party into a 3-way
     ///   conference, sharing this same mic/speaker pair — `None` (every
@@ -251,18 +235,21 @@ impl MediaEngine {
         remote_rtp: SocketAddr,
         codec: AudioCodec,
         dtmf_pt: Option<u8>,
+        cn_pt: Option<u8>,
         srtp: Option<SrtpSession>,
         relay: Option<Arc<dyn Conn + Send + Sync>>,
         echo_cancellation: bool,
+        agc_enabled: bool,
         input_device: Option<&str>,
         output_device: Option<&str>,
-        recording_enabled: bool,
+        recording: RecordingOptions,
         call_id: &str,
         second_leg: Option<ConferenceLeg>,
     ) -> anyhow::Result<Self> {
-        let (audio_streams, mut cap_rx, hw_playback_tx, echo_ref) =
+        let (audio_streams, mut cap_rx, hw_playback_tx, echo_ref, output_gain) =
             open_streams(input_device, output_device, echo_cancellation)
                 .context("Opening audio streams")?;
+        let input_gain = crate::audio::new_shared_gain();
 
         let stats: SharedStats = Arc::new(Mutex::new(CallStatsSnapshot {
             leg1: LegStats::default(),
@@ -281,6 +268,10 @@ impl MediaEngine {
 
         let dtmf_payload_type = dtmf_pt.unwrap_or(DTMF_PAYLOAD_TYPE);
         let payload_type = codec.payload_type();
+        // Defense-in-depth against `CN_PAYLOAD_TYPE`'s clock-mismatch hazard
+        // (see its doc comment in sip-core) even if negotiation somehow
+        // still signaled CN alongside Opus.
+        let cn_pt = cn_pt.filter(|_| codec != AudioCodec::Opus);
 
         // Per RFC 4568, each side's a=crypto line declares the key THAT SIDE uses to
         // encrypt what it sends; the peer decrypts with that same key. So we encrypt
@@ -384,8 +375,8 @@ impl MediaEngine {
         let (dtmf_tx, mut dtmf_rx) = mpsc::unbounded_channel::<char>();
         let (inband_dtmf_tx, mut inband_dtmf_rx) = mpsc::unbounded_channel::<char>();
 
-        let recorder: Arc<Mutex<Option<WavWriter>>> = Arc::new(Mutex::new(if recording_enabled {
-            match open_recorder(call_id) {
+        let recorder: Arc<Mutex<Option<RecordingWriter>>> = Arc::new(Mutex::new(if recording.enabled {
+            match RecordingWriter::create(call_id, recording.dir_override.as_deref(), recording.format) {
                 Ok(w) => Some(w),
                 Err(e) => {
                     error!("Failed to start call recording: {e}");
@@ -422,6 +413,11 @@ impl MediaEngine {
         } else {
             None
         };
+        let mut g729_enc = if codec == AudioCodec::G729 {
+            Some(G729Encoder::new())
+        } else {
+            None
+        };
         let mut opus_enc2 = match leg2_codec {
             Some(AudioCodec::Opus) => {
                 Some(OpusEncoder::new().context("Creating Opus encoder (leg2)")?)
@@ -442,14 +438,21 @@ impl MediaEngine {
             }
             _ => None,
         };
+        let mut g729_enc2 = match leg2_codec {
+            Some(AudioCodec::G729) => Some(G729Encoder::new()),
+            _ => None,
+        };
         let mut rtp_send2 =
             leg2_codec.map(|c| RtpSender::new(c.payload_type(), ts_increment_for(c)));
         let dtmf_ssrc2 = rtp_send2.as_ref().map(|r| r.ssrc);
         let mut dtmf_seq2 = 0u16;
 
         let mut echo_canceller = echo_ref.as_ref().map(|_| EchoCanceller::new());
+        let mut agc = agc_enabled.then(AutomaticGainControl::new);
+        let mut vad = cn_pt.map(|_| VoiceActivityDetector::new());
         let muted = Arc::new(AtomicBool::new(false));
         let send_muted = muted.clone();
+        let send_input_gain = input_gain.clone();
         let send_recorder = recorder.clone();
         let send_leg1_buf = leg1_buf.clone();
         let send_leg2_buf = leg2_buf.clone();
@@ -467,6 +470,7 @@ impl MediaEngine {
             loop {
                 tokio::select! {
                     Some(pcm) = cap_rx.recv() => {
+                        let is_dtmf_tone = inband_active.is_some();
                         let pcm = if let Some((digit, remaining)) = inband_active {
                             let tone = dtmf_tone_frame(digit, inband_phase)
                                 .expect("inband_active only ever holds a valid DTMF character");
@@ -479,36 +483,85 @@ impl MediaEngine {
                             } else {
                                 pcm
                             };
-                            match (echo_canceller.as_mut(), echo_ref.as_ref()) {
+                            let pcm = match (echo_canceller.as_mut(), echo_ref.as_ref()) {
                                 (Some(canceller), Some(echo_ref)) => canceller.process(&pcm, echo_ref),
                                 _ => pcm,
+                            };
+                            let pcm = match agc.as_mut() {
+                                Some(agc) => agc.process(&pcm),
+                                None => pcm,
+                            };
+                            let g = crate::audio::load_gain(&send_input_gain);
+                            if g == 1.0 {
+                                pcm
+                            } else {
+                                pcm.iter()
+                                    .map(|&s| (s as f32 * g).clamp(i16::MIN as f32, i16::MAX as f32) as i16)
+                                    .collect()
                             }
                         };
 
-                        // Leg 1: encode + send.
-                        let encoded = match codec {
-                            AudioCodec::Opus => opus_enc.as_mut().unwrap().encode(&pcm),
-                            AudioCodec::G722 => g722_enc.as_mut().unwrap().encode(&pcm),
-                            AudioCodec::Gsm  => gsm_enc.as_mut().unwrap().encode(&pcm),
-                            AudioCodec::Ilbc => ilbc_enc.as_mut().unwrap().encode(&pcm),
-                            AudioCodec::Pcma => encode_pcma(&pcm),
-                            AudioCodec::Pcmu => encode_pcmu(&pcm),
-                        };
-                        let bytes = rtp_send.next_packet(encoded).encode();
-                        let out = match encrypt_ctx.as_mut() {
-                            Some(ctx) => match ctx.encrypt_rtp(&bytes) {
-                                Ok(b) => b.to_vec(),
-                                Err(e) => { error!("SRTP encrypt: {e}"); continue; }
-                            },
-                            None => bytes,
-                        };
-                        match send_sock.send_to(&out, remote_rtp).await {
-                            Ok(()) => {
-                                let mut s = send_stats.lock().unwrap();
-                                s.leg1.packets_sent += 1;
-                                s.leg1.bytes_sent   += out.len() as u64;
+                        // A DTMF tone is never subject to VAD gating -- it's
+                        // deliberately generated audio, not silence to detect.
+                        let vad_decision = if is_dtmf_tone {
+                            VadDecision::Talking
+                        } else {
+                            match vad.as_mut() {
+                                Some(v) => v.process(&pcm),
+                                None => VadDecision::Talking,
                             }
-                            Err(e) => error!("RTP send: {e}"),
+                        };
+
+                        // Leg 1: encode + send (or send comfort noise, or
+                        // skip entirely -- see `vad_decision`).
+                        match vad_decision {
+                            VadDecision::Talking => {
+                                let encoded = match codec {
+                                    AudioCodec::Opus => opus_enc.as_mut().unwrap().encode(&pcm),
+                                    AudioCodec::G722 => g722_enc.as_mut().unwrap().encode(&pcm),
+                                    AudioCodec::Gsm  => gsm_enc.as_mut().unwrap().encode(&pcm),
+                                    AudioCodec::Ilbc => ilbc_enc.as_mut().unwrap().encode(&pcm),
+                                    AudioCodec::G729 => g729_enc.as_mut().unwrap().encode(&pcm),
+                                    AudioCodec::Pcma => encode_pcma(&pcm),
+                                    AudioCodec::Pcmu => encode_pcmu(&pcm),
+                                };
+                                let bytes = rtp_send.next_packet(encoded).encode();
+                                let out = match encrypt_ctx.as_mut() {
+                                    Some(ctx) => match ctx.encrypt_rtp(&bytes) {
+                                        Ok(b) => b.to_vec(),
+                                        Err(e) => { error!("SRTP encrypt: {e}"); continue; }
+                                    },
+                                    None => bytes,
+                                };
+                                match send_sock.send_to(&out, remote_rtp).await {
+                                    Ok(()) => {
+                                        let mut s = send_stats.lock().unwrap();
+                                        s.leg1.packets_sent += 1;
+                                        s.leg1.bytes_sent   += out.len() as u64;
+                                    }
+                                    Err(e) => error!("RTP send: {e}"),
+                                }
+                            }
+                            VadDecision::SendComfortNoise(level) => {
+                                let pt = cn_pt.expect("vad is only Some when cn_pt is Some");
+                                let bytes = rtp_send.next_packet_with_pt(pt, vec![level]).encode();
+                                let out = match encrypt_ctx.as_mut() {
+                                    Some(ctx) => match ctx.encrypt_rtp(&bytes) {
+                                        Ok(b) => b.to_vec(),
+                                        Err(e) => { error!("SRTP encrypt (CN): {e}"); continue; }
+                                    },
+                                    None => bytes,
+                                };
+                                match send_sock.send_to(&out, remote_rtp).await {
+                                    Ok(()) => {
+                                        let mut s = send_stats.lock().unwrap();
+                                        s.leg1.packets_sent += 1;
+                                        s.leg1.bytes_sent   += out.len() as u64;
+                                    }
+                                    Err(e) => error!("RTP send (CN): {e}"),
+                                }
+                            }
+                            VadDecision::Skip => rtp_send.skip_tick(),
                         }
 
                         // Leg 2 (conference): encode independently (may differ
@@ -522,6 +575,7 @@ impl MediaEngine {
                                 AudioCodec::G722 => g722_enc2.as_mut().unwrap().encode(&pcm),
                                 AudioCodec::Gsm  => gsm_enc2.as_mut().unwrap().encode(&pcm),
                                 AudioCodec::Ilbc => ilbc_enc2.as_mut().unwrap().encode(&pcm),
+                                AudioCodec::G729 => g729_enc2.as_mut().unwrap().encode(&pcm),
                                 AudioCodec::Pcma => encode_pcma(&pcm),
                                 AudioCodec::Pcmu => encode_pcmu(&pcm),
                             };
@@ -638,11 +692,17 @@ impl MediaEngine {
         } else {
             None
         };
+        let mut g729_dec = if codec == AudioCodec::G729 {
+            Some(G729Decoder::new())
+        } else {
+            None
+        };
         let recv_stats = stats.clone();
         let recv_clock_hz = clock_hz_for(codec);
 
         let recv_task = tokio::spawn(async move {
             let mut jitter = JitterTracker::default();
+            let mut cn_state = ComfortNoiseState::new();
             let mut buf = vec![0u8; 2048];
             loop {
                 tokio::select! {
@@ -669,13 +729,22 @@ impl MediaEngine {
                                 s.leg1.bytes_received   += len as u64;
                                 jitter.observe(&mut s.leg1, &pkt, recv_clock_hz);
                             }
-                            let pcm = match codec {
-                                AudioCodec::Opus => opus_dec.as_mut().unwrap().decode(&pkt.payload),
-                                AudioCodec::G722 => g722_dec.as_mut().unwrap().decode(&pkt.payload),
-                                AudioCodec::Gsm  => gsm_dec.as_mut().unwrap().decode(&pkt.payload),
-                                AudioCodec::Ilbc => ilbc_dec.as_mut().unwrap().decode(&pkt.payload),
-                                AudioCodec::Pcma => decode_pcma(&pkt.payload),
-                                AudioCodec::Pcmu => decode_pcmu(&pkt.payload),
+                            let pcm = if cn_pt == Some(pkt.payload_type) {
+                                // Comfort-noise/SID packet -- see `vad`'s
+                                // module doc for the inter-SID-gap
+                                // simplification this represents.
+                                let level = pkt.payload.first().copied().unwrap_or(127);
+                                synthesize_comfort_noise(level, FRAME_SAMPLES, &mut cn_state)
+                            } else {
+                                match codec {
+                                    AudioCodec::Opus => opus_dec.as_mut().unwrap().decode(&pkt.payload),
+                                    AudioCodec::G722 => g722_dec.as_mut().unwrap().decode(&pkt.payload),
+                                    AudioCodec::Gsm  => gsm_dec.as_mut().unwrap().decode(&pkt.payload),
+                                    AudioCodec::Ilbc => ilbc_dec.as_mut().unwrap().decode(&pkt.payload),
+                                    AudioCodec::G729 => g729_dec.as_mut().unwrap().decode(&pkt.payload),
+                                    AudioCodec::Pcma => decode_pcma(&pkt.payload),
+                                    AudioCodec::Pcmu => decode_pcmu(&pkt.payload),
+                                }
                             };
                             push_to_jitter(&leg1_buf, &pcm);
                         }
@@ -708,6 +777,11 @@ impl MediaEngine {
             };
             let mut ilbc_dec2 = if leg.codec == AudioCodec::Ilbc {
                 Some(IlbcDecoder::new().context("Creating iLBC decoder (leg2)")?)
+            } else {
+                None
+            };
+            let mut g729_dec2 = if leg.codec == AudioCodec::G729 {
+                Some(G729Decoder::new())
             } else {
                 None
             };
@@ -751,6 +825,7 @@ impl MediaEngine {
                                     AudioCodec::G722 => g722_dec2.as_mut().unwrap().decode(&pkt.payload),
                                     AudioCodec::Gsm  => gsm_dec2.as_mut().unwrap().decode(&pkt.payload),
                                     AudioCodec::Ilbc => ilbc_dec2.as_mut().unwrap().decode(&pkt.payload),
+                                    AudioCodec::G729 => g729_dec2.as_mut().unwrap().decode(&pkt.payload),
                                     AudioCodec::Pcma => decode_pcma(&pkt.payload),
                                     AudioCodec::Pcmu => decode_pcmu(&pkt.payload),
                                 };
@@ -778,6 +853,11 @@ impl MediaEngine {
             inband_dtmf_tx,
             muted,
             recorder,
+            call_id: call_id.to_string(),
+            recording_format: recording.format,
+            recordings_dir_override: recording.dir_override.clone(),
+            output_gain,
+            input_gain,
             stats,
         })
     }
@@ -812,6 +892,56 @@ impl MediaEngine {
         self.muted.load(Ordering::Relaxed)
     }
 
+    /// Start/stop recording this call on demand (manual per-call Record
+    /// button) -- independent of whatever `RecordingOptions::enabled` this
+    /// engine was started with. Turning on lazily opens a fresh
+    /// `RecordingWriter` (so a manually-started recording only captures
+    /// audio from this point forward, not the part of the call already
+    /// missed); turning off finalizes and drops it immediately rather than
+    /// waiting for `stop()`. A failure to open the file is logged and
+    /// leaves recording off, same as the auto-record path at `start()`.
+    pub fn set_recording(&self, on: bool) {
+        let mut guard = self.recorder.lock().unwrap();
+        if on {
+            if guard.is_some() {
+                return;
+            }
+            match RecordingWriter::create(
+                &self.call_id,
+                self.recordings_dir_override.as_deref(),
+                self.recording_format,
+            ) {
+                Ok(w) => *guard = Some(w),
+                Err(e) => error!("Failed to start call recording: {e}"),
+            }
+        } else if let Some(writer) = guard.take() {
+            if let Err(e) = writer.finalize() {
+                error!("Failed to finalize call recording: {e}");
+            }
+        }
+    }
+
+    pub fn is_recording(&self) -> bool {
+        self.recorder.lock().unwrap().is_some()
+    }
+
+    /// Live in-call speaker volume -- `1.0` is unchanged/unity gain.
+    pub fn set_output_gain(&self, gain: f32) {
+        crate::audio::store_gain(&self.output_gain, gain);
+    }
+    pub fn output_gain(&self) -> f32 {
+        crate::audio::load_gain(&self.output_gain)
+    }
+
+    /// Live in-call microphone gain, applied after AGC (if enabled) as a
+    /// final user-adjustable trim -- `1.0` is unchanged/unity gain.
+    pub fn set_input_gain(&self, gain: f32) {
+        crate::audio::store_gain(&self.input_gain, gain);
+    }
+    pub fn input_gain(&self) -> f32 {
+        crate::audio::load_gain(&self.input_gain)
+    }
+
     /// Async so callers can actually wait for the send/recv tasks to finish,
     /// not just be scheduled for cancellation -- `abort()` alone doesn't
     /// guarantee the task (and whatever it holds, e.g. a TURN relay `Conn`)
@@ -834,9 +964,9 @@ impl MediaEngine {
             let _ = t2.await;
         }
         // Finalize here (not inside the send task) so it runs deterministically
-        // regardless of the abort race above -- hound needs an explicit
-        // finalize() to fix up the RIFF header sizes; Drop alone would leave
-        // a malformed file.
+        // regardless of the abort race above -- both WAV and MP3 need an
+        // explicit finalize() (RIFF header sizes / final encoder flush);
+        // Drop alone would leave either format malformed/truncated.
         if let Some(writer) = self.recorder.lock().unwrap().take() {
             if let Err(e) = writer.finalize() {
                 error!("Failed to finalize call recording: {e}");
@@ -882,13 +1012,11 @@ fn mix_frames(a: &[i16], b: &[i16]) -> Vec<i16> {
 /// Write one interleaved stereo frame (left = near-end `pcm`, right = the
 /// already-mixed far-end audio for this same frame). No-op if recording
 /// isn't enabled for this call.
-fn write_recording(recorder: &Mutex<Option<WavWriter>>, near: &[i16], far: &[i16]) {
+fn write_recording(recorder: &Mutex<Option<RecordingWriter>>, near: &[i16], far: &[i16]) {
     let mut guard = recorder.lock().unwrap();
     let Some(writer) = guard.as_mut() else { return };
-    for (i, &near_sample) in near.iter().enumerate() {
-        let far_sample = far.get(i).copied().unwrap_or(0);
-        let _ = writer.write_sample(near_sample);
-        let _ = writer.write_sample(far_sample);
+    if let Err(e) = writer.write_frame(near, far) {
+        warn!("Failed to write call recording frame: {e}");
     }
 }
 

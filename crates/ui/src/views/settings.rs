@@ -1,4 +1,6 @@
-use deelip_config::{DtmfMode, SipAccount, TransportProtocol};
+use deelip_config::{
+    DtmfMode, MediaEncryption, RecordingFormat, SipAccount, TransportProtocol, UpdateCheckFrequency,
+};
 use egui::{RichText, Ui};
 
 use crate::app::DeelipApp;
@@ -93,6 +95,12 @@ impl DeelipApp {
                 });
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
+                    edited |= ui.checkbox(&mut self.config.log_to_file, "Enable log file").changed();
+                    info_hint(ui, &palette, "Also writes logs to ~/.config/deelip/deelip.log, \
+                        in addition to the console. Restart to apply.");
+                });
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
                     if ui.checkbox(&mut self.autostart_enabled, "Start DeeLip on login").changed() {
                         if let Err(e) = deelip_config::set_autostart(self.autostart_enabled) {
                             tracing::error!("Failed to update autostart: {e}");
@@ -107,6 +115,29 @@ impl DeelipApp {
             // ── Updates (applies immediately) ────────────────────────────────
             settings_section(ui, &palette, "Updates", Some("Applies immediately — no restart needed."), |ui| {
                 ui.label(RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION"))).color(palette.muted));
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.label("Check for updates:");
+                    egui::ComboBox::from_id_source("settings_update_check_frequency")
+                        .selected_text(match self.config.update_check_frequency {
+                            UpdateCheckFrequency::Always => "Every launch",
+                            UpdateCheckFrequency::Daily => "Daily",
+                            UpdateCheckFrequency::Weekly => "Weekly",
+                            UpdateCheckFrequency::Never => "Never",
+                        })
+                        .show_ui(ui, |ui| {
+                            for (val, label) in [
+                                (UpdateCheckFrequency::Always, "Every launch"),
+                                (UpdateCheckFrequency::Daily, "Daily"),
+                                (UpdateCheckFrequency::Weekly, "Weekly"),
+                                (UpdateCheckFrequency::Never, "Never"),
+                            ] {
+                                if ui.selectable_value(&mut self.config.update_check_frequency, val, label).changed() {
+                                    self.save_config_quietly();
+                                }
+                            }
+                        });
+                });
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     if ui.checkbox(&mut self.config.auto_update_enabled, "Automatically download and install updates").changed() {
@@ -187,15 +218,37 @@ impl DeelipApp {
                     .num_columns(2)
                     .spacing([8.0, 4.0])
                     .show(ui, |ui| {
+                        ui.label("Account name:");
+                        edited |= optional_text_field(ui, &mut account.account_name, "e.g. Home, Work");
+                        ui.end_row();
+
                         ui.label("Username:");
                         edited |= ui.add(egui::TextEdit::singleline(&mut account.username)
                             .desired_width(f32::INFINITY)).changed();
                         ui.end_row();
 
                         ui.label("Password:");
-                        edited |= ui.add(egui::TextEdit::singleline(&mut account.password)
-                            .password(true)
-                            .desired_width(f32::INFINITY)).changed();
+                        ui.horizontal(|ui| {
+                            edited |= ui.add(egui::TextEdit::singleline(&mut account.password)
+                                .password(!self.show_account_password)
+                                .desired_width(200.0)).changed();
+                            let icon = if self.show_account_password {
+                                egui_phosphor::regular::EYE_SLASH
+                            } else {
+                                egui_phosphor::regular::EYE
+                            };
+                            if ui.small_button(icon).clicked() {
+                                self.show_account_password = !self.show_account_password;
+                            }
+                        });
+                        ui.end_row();
+
+                        ui.label("Login (optional):");
+                        ui.horizontal(|ui| {
+                            edited |= optional_text_field(ui, &mut account.auth_username, "defaults to Username");
+                            info_hint(ui, &palette, "Digest-auth identity, when a provider requires \
+                                a login distinct from the public SIP username above.");
+                        });
                         ui.end_row();
 
                         ui.label("Server:");
@@ -205,6 +258,22 @@ impl DeelipApp {
 
                         ui.label("Port:");
                         edited |= ui.add(egui::DragValue::new(&mut account.port)).changed();
+                        ui.end_row();
+
+                        ui.label("Domain (optional):");
+                        ui.horizontal(|ui| {
+                            edited |= optional_text_field(ui, &mut account.domain, "defaults to Server");
+                            info_hint(ui, &palette, "SIP domain used in From/To/Contact URIs, when it \
+                                differs from the registrar host in Server above.");
+                        });
+                        ui.end_row();
+
+                        ui.label("SIP proxy (optional):");
+                        ui.horizontal(|ui| {
+                            edited |= optional_text_field(ui, &mut account.sip_proxy, "host[:port]");
+                            info_hint(ui, &palette, "Outbound proxy to actually connect through, \
+                                instead of Server/Port directly.");
+                        });
                         ui.end_row();
 
                         ui.label("Display name:");
@@ -217,16 +286,22 @@ impl DeelipApp {
                                 TransportProtocol::Udp => "UDP",
                                 TransportProtocol::Tcp => "TCP",
                                 TransportProtocol::Tls => "TLS",
+                                TransportProtocol::Auto => "Auto",
                             })
                             .show_ui(ui, |ui| {
                                 edited |= ui.selectable_value(&mut account.transport, TransportProtocol::Udp, "UDP").changed();
                                 edited |= ui.selectable_value(&mut account.transport, TransportProtocol::Tcp, "TCP").changed();
                                 edited |= ui.selectable_value(&mut account.transport, TransportProtocol::Tls, "TLS").changed();
+                                edited |= ui.selectable_value(&mut account.transport, TransportProtocol::Auto, "Auto").changed();
                             });
+                        if account.transport == TransportProtocol::Auto {
+                            info_hint(ui, &palette, "Tries UDP, then TCP, then TLS at connect time, \
+                                keeping whichever one actually gets a response from the server.");
+                        }
                         ui.end_row();
                     });
 
-                if account.transport == TransportProtocol::Tls {
+                if matches!(account.transport, TransportProtocol::Tls | TransportProtocol::Auto) {
                     edited |= ui.checkbox(
                         &mut account.tls_insecure_skip_verify,
                         "Skip TLS certificate verification (self-signed/home-lab PBXes)",
@@ -261,7 +336,7 @@ impl DeelipApp {
                 if let Some(i) = move_up { account.codec_order.swap(i, i - 1); edited = true; }
                 if let Some(i) = move_down { account.codec_order.swap(i, i + 1); edited = true; }
                 if let Some(i) = to_disable { account.codec_order.remove(i); edited = true; }
-                for name in ["opus", "g722", "pcmu", "pcma", "gsm", "ilbc"] {
+                for name in ["opus", "g722", "pcmu", "pcma", "gsm", "ilbc", "g729"] {
                     if !account.codec_order.iter().any(|c| c == name) {
                         ui.horizontal(|ui| {
                             ui.label(RichText::new(codec_label(name)).color(palette.muted));
@@ -272,6 +347,38 @@ impl DeelipApp {
                         });
                     }
                 }
+
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.label("Force codec for incoming:");
+                    let selected_label = account.force_incoming_codec.as_deref()
+                        .map(codec_label)
+                        .unwrap_or("No override");
+                    egui::ComboBox::from_id_source("settings_force_incoming_codec")
+                        .selected_text(selected_label)
+                        .show_ui(ui, |ui| {
+                            if ui.selectable_label(account.force_incoming_codec.is_none(), "No override").clicked() {
+                                account.force_incoming_codec = None;
+                                edited = true;
+                            }
+                            for name in &account.codec_order {
+                                if ui.selectable_label(account.force_incoming_codec.as_deref() == Some(name.as_str()), codec_label(name)).clicked() {
+                                    account.force_incoming_codec = Some(name.clone());
+                                    edited = true;
+                                }
+                            }
+                        });
+                    info_hint(ui, &palette, "Negotiates this codec on an incoming call whenever the \
+                        caller offers it at all, ignoring the caller's own preference order.");
+                });
+
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    edited |= ui.checkbox(&mut account.vad_enabled, "Voice activity detection (comfort noise)").changed();
+                    info_hint(ui, &palette, "During silence, sends occasional comfort-noise packets \
+                        instead of continuous audio, and plays synthesized background noise for the \
+                        far end's silence instead of dead air. Only takes effect with a non-Opus codec.");
+                });
 
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
@@ -325,6 +432,77 @@ impl DeelipApp {
                 ui.horizontal(|ui| {
                     edited |= optional_text_field(ui, &mut account.mailbox, "1000");
                 });
+
+                ui.add_space(6.0);
+                ui.label("Dialing prefix (optional):");
+                ui.horizontal(|ui| {
+                    edited |= optional_text_field(ui, &mut account.dialing_prefix, "e.g. 9");
+                    info_hint(ui, &palette, "Auto-prepended to bare numbers dialed from this account \
+                        (e.g. \"9\" for an outside line) -- not applied to a full SIP URI or an \
+                        explicit user@host entry.");
+                });
+
+                ui.add_space(6.0);
+                edited |= ui.checkbox(&mut account.hide_caller_id, "Hide caller ID (send Privacy: id)").changed();
+
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.label("Register refresh (seconds):");
+                    edited |= ui.add(egui::DragValue::new(&mut account.register_expires).range(60..=86400)).changed();
+                    info_hint(ui, &palette, "Requested REGISTER Expires -- the server may return a \
+                        shorter value, which re-registration timing always honors regardless of this.");
+                });
+
+                ui.add_space(6.0);
+                let mut keepalive_on = account.keepalive_secs.is_some();
+                if ui.checkbox(&mut keepalive_on, "NAT keepalive").changed() {
+                    account.keepalive_secs = if keepalive_on { Some(15) } else { None };
+                    edited = true;
+                }
+                if let Some(secs) = &mut account.keepalive_secs {
+                    ui.horizontal(|ui| {
+                        ui.label("every (seconds):");
+                        edited |= ui.add(egui::DragValue::new(secs).range(5..=300)).changed();
+                        info_hint(ui, &palette, "Sends a lone empty packet to the registrar on this \
+                            interval, to hold a NAT/firewall's outbound binding open between registrations.");
+                    });
+                }
+
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.label("Media encryption:");
+                    egui::ComboBox::from_id_source("settings_media_encryption")
+                        .selected_text(match account.media_encryption {
+                            MediaEncryption::MatchTransport => "Match transport (default)",
+                            MediaEncryption::Disabled => "Disabled",
+                            MediaEncryption::Enabled => "Always (SRTP)",
+                        })
+                        .show_ui(ui, |ui| {
+                            edited |= ui.selectable_value(&mut account.media_encryption, MediaEncryption::MatchTransport, "Match transport (default)").changed();
+                            edited |= ui.selectable_value(&mut account.media_encryption, MediaEncryption::Disabled, "Disabled").changed();
+                            edited |= ui.selectable_value(&mut account.media_encryption, MediaEncryption::Enabled, "Always (SRTP)").changed();
+                        });
+                });
+                info_hint(ui, &palette, "\"Match transport\" offers SRTP exactly when the signaling \
+                    transport is TLS (today's behavior); the other two are independent of transport.");
+
+                ui.add_space(6.0);
+                ui.label("Public address (optional):");
+                ui.horizontal(|ui| {
+                    edited |= optional_text_field(ui, &mut account.public_address, "e.g. 203.0.113.5");
+                    info_hint(ui, &palette, "Overrides the address advertised in Contact/SDP for this \
+                        account, instead of the globally STUN-discovered external IP.");
+                });
+
+                ui.add_space(6.0);
+                let mut ice_override_on = account.ice_enabled.is_some();
+                if ui.checkbox(&mut ice_override_on, "Override global ICE setting for this account").changed() {
+                    account.ice_enabled = if ice_override_on { Some(self.config.ice_enabled) } else { None };
+                    edited = true;
+                }
+                if let Some(ice_on) = &mut account.ice_enabled {
+                    edited |= ui.checkbox(ice_on, "Use ICE (RFC 8445) for this account").changed();
+                }
             });
 
             if !self.config.accounts.iter().any(|a| a.enabled) {
@@ -385,11 +563,51 @@ impl DeelipApp {
                 });
 
                 ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.label("Ringtone volume:");
+                    edited |= ui.add(egui::Slider::new(&mut self.config.audio.ringtone_volume, 0.0..=2.0)
+                        .fixed_decimals(2)).changed();
+                });
+
+                ui.add_space(6.0);
                 edited |= ui.checkbox(&mut self.config.audio.echo_cancellation, "Echo cancellation").changed();
                 ui.horizontal(|ui| {
-                    edited |= ui.checkbox(&mut self.config.recording_enabled, "Record calls").changed();
-                    info_hint(ui, &palette, "Recordings saved to ~/.config/deelip/recordings/");
+                    edited |= ui.checkbox(&mut self.config.audio.agc_enabled, "Automatic microphone gain control").changed();
+                    info_hint(ui, &palette, "Adaptively boosts a quiet mic signal and limits a loud one.");
                 });
+
+                ui.add_space(6.0);
+                edited |= ui.checkbox(&mut self.config.recording_enabled, "Record calls").changed();
+                if self.config.recording_enabled {
+                    ui.horizontal(|ui| {
+                        ui.label("Format:");
+                        egui::ComboBox::from_id_source("settings_recording_format")
+                            .selected_text(match self.config.recording_format {
+                                RecordingFormat::Wav => "WAV (lossless, larger files)",
+                                RecordingFormat::Mp3 => "MP3 (lossy, smaller files)",
+                            })
+                            .show_ui(ui, |ui| {
+                                edited |= ui.selectable_value(&mut self.config.recording_format, RecordingFormat::Wav, "WAV (lossless, larger files)").changed();
+                                edited |= ui.selectable_value(&mut self.config.recording_format, RecordingFormat::Mp3, "MP3 (lossy, smaller files)").changed();
+                            });
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Save to:");
+                        let shown = self.config.recordings_dir_override.as_deref()
+                            .unwrap_or("~/.config/deelip/recordings (default)");
+                        ui.label(RichText::new(shown).color(palette.muted));
+                        if ui.small_button("Choose…").clicked() {
+                            if let Some(dir) = rfd::FileDialog::new().pick_folder() {
+                                self.config.recordings_dir_override = Some(dir.to_string_lossy().into_owned());
+                                edited = true;
+                            }
+                        }
+                        if self.config.recordings_dir_override.is_some() && ui.small_button("Reset").clicked() {
+                            self.config.recordings_dir_override = None;
+                            edited = true;
+                        }
+                    });
+                }
             });
 
             ui.add_space(14.0);

@@ -1,7 +1,7 @@
 use deelip_config::{CallDirection, CallStatus, DtmfMode};
 
 use crate::app::{DeelipApp, PendingAccept, PendingOutbound, Tab};
-use crate::helpers::{normalize_target, short_uri, unix_now};
+use crate::helpers::{normalize_target_with_prefix, short_uri, unix_now};
 
 impl DeelipApp {
     // ── Call actions ─────────────────────────────────────────────────────────
@@ -19,7 +19,8 @@ impl DeelipApp {
     /// plain STUN/TURN-fallback path unchanged.
     pub(crate) fn place_call(&mut self, acc: usize, target: &str, attempt_ice: bool) {
         let domain = self.accounts[acc].handle.domain.clone();
-        let t = normalize_target(target, &domain);
+        let prefix = self.accounts[acc].account.dialing_prefix.clone().unwrap_or_default();
+        let t = normalize_target_with_prefix(target, &domain, &prefix);
         self.accounts[acc].handle.make_call(&t, attempt_ice);
         self.last_dialed = Some(t.clone());
         self.pending_outbound = Some(PendingOutbound {
@@ -58,6 +59,14 @@ impl DeelipApp {
         if can_dial && self.reg_ok {
             self.do_call(Some(target));
         }
+    }
+
+    /// Switch to the Messages tab and load `target` into the compose box --
+    /// same shape as `dial_from_list`, for History's/Contacts' "Message"
+    /// quick-action buttons.
+    pub(crate) fn message_from_list(&mut self, target: String) {
+        self.tab = Tab::Messages;
+        self.message_to = target;
     }
 
     /// Start the consultation call for an attended transfer: holds the
@@ -265,6 +274,41 @@ impl DeelipApp {
         }
     }
 
+    /// Whether the focused call's `MediaEngine` is currently recording --
+    /// true either because auto-record is on, or because the user manually
+    /// started it with `do_record_toggle` below.
+    pub(crate) fn is_recording(&self) -> bool {
+        self.media.as_ref().is_some_and(|m| m.is_recording())
+    }
+
+    /// Manual per-call Record button -- independent of the global
+    /// auto-record setting, same shape as `do_mute_toggle`.
+    pub(crate) fn do_record_toggle(&self) {
+        if let Some(engine) = &self.media {
+            engine.set_recording(!engine.is_recording());
+        }
+    }
+
+    /// Live in-call speaker/mic volume sliders -- `1.0` (unity gain) when
+    /// there's no active call, same "no-op without an engine" shape as
+    /// `is_muted`.
+    pub(crate) fn output_gain(&self) -> f32 {
+        self.media.as_ref().map_or(1.0, |m| m.output_gain())
+    }
+    pub(crate) fn set_output_gain(&self, gain: f32) {
+        if let Some(engine) = &self.media {
+            engine.set_output_gain(gain);
+        }
+    }
+    pub(crate) fn input_gain(&self) -> f32 {
+        self.media.as_ref().map_or(1.0, |m| m.input_gain())
+    }
+    pub(crate) fn set_input_gain(&self, gain: f32) {
+        if let Some(engine) = &self.media {
+            engine.set_input_gain(gain);
+        }
+    }
+
     /// Blind-transfer the focused call to `self.transfer_target`.
     pub(crate) fn do_transfer(&mut self) {
         let Some(idx) = self.focused_call else { return };
@@ -274,7 +318,8 @@ impl DeelipApp {
         }
         let acc = self.calls[idx].account;
         let domain = self.accounts[acc].handle.domain.clone();
-        let target = normalize_target(&raw, &domain);
+        let prefix = self.accounts[acc].account.dialing_prefix.clone().unwrap_or_default();
+        let target = normalize_target_with_prefix(&raw, &domain, &prefix);
         let call_id = self.calls[idx].call_id.clone();
         self.accounts[acc].handle.blind_transfer(&call_id, target);
         self.status_line = "Transferring…".into();

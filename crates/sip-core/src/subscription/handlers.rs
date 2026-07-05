@@ -131,7 +131,7 @@ impl SipStack {
         accept: &str,
     ) -> String {
         let branch = crate::wire::util::new_branch();
-        let server = &self.account.server;
+        let server = self.account.domain();
         let username = &self.account.username;
         let adv_ip = &self.advertised_ip;
         let local_ip = &self.local_ip;
@@ -221,7 +221,7 @@ impl SipStack {
                     return;
                 };
                 let Some(auth) = build_challenge_response(
-                    &self.account.username,
+                    self.account.auth_username(),
                     &self.account.password,
                     "SUBSCRIBE",
                     &target_uri,
@@ -394,7 +394,7 @@ impl SipStack {
                     return;
                 };
                 let Some(auth) = build_challenge_response(
-                    &self.account.username,
+                    self.account.auth_username(),
                     &self.account.password,
                     "SUBSCRIBE",
                     &target_uri,

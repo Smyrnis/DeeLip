@@ -37,15 +37,19 @@ impl Ringtone {
     /// `ringtone_file`: a WAV path to play instead of the synthesized tone,
     /// consulted only for `RingKind::Incoming`; falls back to the synthesized
     /// cadence if unset or it fails to load/decode (a bad ringtone file
-    /// should never mean a silently-missed call).
+    /// should never mean a silently-missed call). `volume`: linear gain
+    /// applied via `Sink::set_volume`, uniformly across both the custom-WAV
+    /// and synthesized-tone paths -- `1.0` is unchanged/full volume.
     pub fn start(
         kind: RingKind,
         device_name: Option<&str>,
         ringtone_file: Option<&str>,
+        volume: f32,
     ) -> anyhow::Result<Self> {
         let (stream, handle) = open_stream(device_name)?;
 
         let sink = Sink::try_new(&handle)?;
+        sink.set_volume(volume);
         if kind == RingKind::Incoming {
             if let Some(path) = ringtone_file {
                 match load_wav_looped(path) {

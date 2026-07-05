@@ -33,6 +33,7 @@ serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
 dirs = "5"
 md5 = { package = "md-5", version = "0.10" }
 serde_json = "1"
@@ -66,6 +67,7 @@ ureq = "3"
 semver = "1"
 flate2 = "1"
 tar = "0.4"
+mp3lame-encoder = "0.2"
 
 deelip-config = { path = "crates/config" }
 deelip-sip = { path = "crates/sip-core" }
@@ -90,6 +92,7 @@ deelip-nat = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }
 anyhow = { workspace = true }
 eframe = { workspace = true }
 egui = { workspace = true }

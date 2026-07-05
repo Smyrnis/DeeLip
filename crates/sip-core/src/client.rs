@@ -24,7 +24,6 @@ use crate::{
     wire::util::local_ip_for,
 };
 
-pub(crate) const REG_EXPIRES:        u32      = 3600;
 const REG_MARGIN:         u32      = 60;
 pub(crate) const REG_RECV_TIMEOUT:   Duration = Duration::from_secs(10);
 const MAX_RETRY:          Duration = Duration::from_secs(300);
@@ -78,6 +77,7 @@ pub(crate) enum StackEvent {
         ice:         Option<IceConnection>,
         codec:       AudioCodec,
         dtmf_type:   Option<u8>,
+        cn_type:     Option<u8>,
         remote_rtp:  SocketAddr,
         remote_srtp: Option<SrtpParams>,
     },
@@ -93,6 +93,13 @@ pub struct SipStack {
     pub(crate) advertised_ip: String,
     pub(crate) local_port:    u16,
     pub(crate) server_addr:   SocketAddr,
+    /// The concrete transport actually in use -- identical to
+    /// `account.transport` unless that's `TransportProtocol::Auto`, in
+    /// which case this is whichever of Udp/Tcp/Tls `connect_transport`
+    /// resolved it to. Everything that cares about "is this connection
+    /// TLS/UDP/TCP" (via headers, SRTP-by-default, `SipHandle.secure`)
+    /// reads this, never `account.transport` directly.
+    pub(crate) resolved_transport: TransportProtocol,
 
     pub(crate) reg_call_id:  String,
     pub(crate) reg_from_tag: String,
@@ -131,7 +138,7 @@ impl SipStack {
         event_tx:     mpsc::UnboundedSender<SipEvent>,
         cmd_rx:       CmdRx,
     ) -> Result<Self, (anyhow::Error, CmdRx)> {
-        let (transport, local_ip, advertised_ip, server_addr) =
+        let (transport, local_ip, advertised_ip, server_addr, resolved_transport) =
             match Self::connect_transport(&account, local_port, &external_ip).await {
                 Ok(c) => c,
                 Err(e) => return Err((e, cmd_rx)),
@@ -149,6 +156,7 @@ impl SipStack {
             advertised_ip,
             local_port,
             server_addr,
+            resolved_transport,
             reg_call_id,
             reg_from_tag,
             reg_cseq:  Arc::new(AtomicU32::new(1)),
@@ -163,33 +171,61 @@ impl SipStack {
         })
     }
 
-    /// Just the connection-establishing steps (DNS resolution, socket bind,
-    /// transport connect) -- deliberately takes no ownership of `cmd_rx`/
-    /// `event_tx` so a failure here (used both for the first connection and
-    /// every later reconnect attempt) never loses the command-channel
-    /// receiver `spawn`'s reconnect loop needs to keep retrying with.
+    /// Dispatches to either a single concrete connect (`connect_transport_concrete`)
+    /// or, for `TransportProtocol::Auto`, a probing attempt across all three
+    /// candidates (`connect_transport_auto`) -- deliberately takes no
+    /// ownership of `cmd_rx`/`event_tx` so a failure here (used both for the
+    /// first connection and every later reconnect attempt) never loses the
+    /// command-channel receiver `spawn`'s reconnect loop needs to keep
+    /// retrying with.
     async fn connect_transport(
         account:     &SipAccount,
         local_port:  u16,
         external_ip: &Option<String>,
-    ) -> anyhow::Result<(Arc<SipTransport>, String, String, SocketAddr)> {
-        let local_ip = local_ip_for(&account.server, account.port)?;
-        let advertised_ip = external_ip.clone().unwrap_or_else(|| local_ip.clone());
+    ) -> anyhow::Result<(Arc<SipTransport>, String, String, SocketAddr, TransportProtocol)> {
+        if account.transport == TransportProtocol::Auto {
+            Self::connect_transport_auto(account, local_port, external_ip).await
+        } else {
+            let proto = account.transport;
+            let (transport, local_ip, advertised_ip, server_addr) =
+                Self::connect_transport_concrete(account, proto, local_port, external_ip).await?;
+            Ok((transport, local_ip, advertised_ip, server_addr, proto))
+        }
+    }
 
-        let server_addr = tokio::net::lookup_host(format!("{}:{}", account.server, account.port))
+    /// Just the connection-establishing steps (DNS resolution, socket bind,
+    /// transport connect) for one concrete transport -- shared by the
+    /// direct (non-`Auto`) path and each candidate `connect_transport_auto` tries.
+    async fn connect_transport_concrete(
+        account:     &SipAccount,
+        proto:       TransportProtocol,
+        local_port:  u16,
+        external_ip: &Option<String>,
+    ) -> anyhow::Result<(Arc<SipTransport>, String, String, SocketAddr)> {
+        let (connect_host, connect_port) = account.connect_target();
+        let local_ip = local_ip_for(&connect_host, connect_port)?;
+        let advertised_ip = account
+            .public_address
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .map(str::to_string)
+            .or_else(|| external_ip.clone())
+            .unwrap_or_else(|| local_ip.clone());
+
+        let server_addr = tokio::net::lookup_host(format!("{connect_host}:{connect_port}"))
             .await?
             .next()
-            .ok_or_else(|| anyhow::anyhow!("DNS lookup failed for {}", account.server))?;
+            .ok_or_else(|| anyhow::anyhow!("DNS lookup failed for {connect_host}"))?;
 
         let bind_addr: SocketAddr = format!("0.0.0.0:{local_port}")
             .parse()
             .context("Invalid bind address")?;
         let transport = Arc::new(
             SipTransport::connect(
-                account.transport.clone(),
+                proto,
                 bind_addr,
                 server_addr,
-                &account.server,
+                &connect_host,
                 account.tls_insecure_skip_verify,
             )
             .await?,
@@ -199,10 +235,56 @@ impl SipStack {
             local   = %format!("{local_ip}:{local_port}"),
             advertised = %advertised_ip,
             server  = %server_addr,
+            transport = ?proto,
             "SIP stack ready"
         );
 
         Ok((transport, local_ip, advertised_ip, server_addr))
+    }
+
+    /// `TransportProtocol::Auto`: try UDP, then TCP, then TLS in that order,
+    /// each bounded by `AUTO_PROBE_TIMEOUT` -- keeps the first candidate
+    /// that both connects *and* gets an actual response (any status code)
+    /// to a one-shot unauthenticated REGISTER probe, since UDP alone always
+    /// "connects" (it's just a local bind) and so can't be told apart from
+    /// a genuinely unreachable server without a real round-trip. Once one
+    /// candidate succeeds, the rest of the stack treats the connection
+    /// exactly as if that concrete transport had been configured directly
+    /// (see `resolved_transport`).
+    async fn connect_transport_auto(
+        account:     &SipAccount,
+        local_port:  u16,
+        external_ip: &Option<String>,
+    ) -> anyhow::Result<(Arc<SipTransport>, String, String, SocketAddr, TransportProtocol)> {
+        const CANDIDATES: [TransportProtocol; 3] = [
+            TransportProtocol::Udp,
+            TransportProtocol::Tcp,
+            TransportProtocol::Tls,
+        ];
+        let mut last_err: Option<anyhow::Error> = None;
+
+        for proto in CANDIDATES {
+            let connected =
+                Self::connect_transport_concrete(account, proto, local_port, external_ip).await;
+            let (transport, local_ip, advertised_ip, server_addr) = match connected {
+                Ok(c) => c,
+                Err(e) => {
+                    debug!("Auto-transport: {proto:?} failed to connect ({e:#})");
+                    last_err = Some(e);
+                    continue;
+                }
+            };
+
+            if probe_register(&transport, proto, account, &local_ip, &advertised_ip, local_port, server_addr).await {
+                info!("Auto-transport: resolved to {proto:?}");
+                return Ok((transport, local_ip, advertised_ip, server_addr, proto));
+            }
+            debug!("Auto-transport: {proto:?} connected but didn't respond to probe REGISTER");
+        }
+
+        Err(last_err.unwrap_or_else(|| {
+            anyhow::anyhow!("Auto-transport: no candidate transport reached a live server")
+        }))
     }
 
     /// Spawns the background task that runs this account's SIP stack for
@@ -228,8 +310,8 @@ impl SipStack {
             .await
             .map_err(|(e, _)| e)?;
         let advertised_ip = stack.advertised_ip.clone();
-        let secure = stack.account.transport == TransportProtocol::Tls;
-        let domain = stack.account.server.clone();
+        let secure = stack.resolved_transport == TransportProtocol::Tls;
+        let domain = stack.account.domain().to_string();
 
         tokio::spawn(async move {
             let mut stack: Option<SipStack> = Some(stack);
@@ -282,12 +364,24 @@ impl SipStack {
         let mut reregister_at = Instant::now();
         let mut retry_delay   = Duration::from_secs(5);
         let mut presence_tick = interval(PRESENCE_TICK);
+        // NAT/firewall keepalive -- only ticks when the account has one
+        // configured; `if keepalive_tick.is_some()` below guards the whole
+        // branch, so an unset value just never sends anything (today's
+        // behavior, unchanged).
+        let mut keepalive_tick = self
+            .account
+            .keepalive_secs
+            .filter(|&s| s > 0)
+            .map(|s| interval(Duration::from_secs(s as u64)));
 
         loop {
             tokio::select! {
                 _ = presence_tick.tick() => {
                     self.refresh_presence_subscriptions().await;
                     self.refresh_mwi_subscriptions().await;
+                }
+                _ = async { keepalive_tick.as_mut().unwrap().tick().await }, if keepalive_tick.is_some() => {
+                    self.send_keepalive().await;
                 }
                 _ = sleep_until(reregister_at) => {
                     match self.register_once().await {
@@ -346,6 +440,17 @@ impl SipStack {
         }
     }
 
+    /// Send a lone CRLF-CRLF datagram to the registrar to hold a NAT/
+    /// firewall's outbound UDP binding (or TCP/TLS connection) open between
+    /// registrations -- RFC 2617-style auth and dialog state don't apply to
+    /// this, it's purely traffic to keep the path alive, so failures are
+    /// logged and otherwise ignored (the next tick tries again regardless).
+    async fn send_keepalive(&self) {
+        if let Err(e) = self.transport.send(b"\r\n\r\n", self.server_addr).await {
+            debug!("Keepalive send failed: {e:#}");
+        }
+    }
+
     /// Dispatch a completed background call-setup result -- see
     /// `StackEvent`'s doc comment. Handlers live in `call::lifecycle`
     /// alongside the rest of the call-establishment logic they finish.
@@ -358,11 +463,7 @@ impl SipStack {
     }
 
     pub(crate) fn via_proto(&self) -> &'static str {
-        match self.account.transport {
-            TransportProtocol::Udp => "UDP",
-            TransportProtocol::Tcp => "TCP",
-            TransportProtocol::Tls => "TLS",
-        }
+        via_proto_str(self.resolved_transport)
     }
 
     /// `;transport=...` URI parameter for our own `Contact:` header — empty
@@ -372,11 +473,7 @@ impl SipStack {
     /// TCP/TLS rather than defaulting to UDP on our registered port, which
     /// silently goes nowhere since we never bind a UDP listener there.
     pub(crate) fn contact_transport_param(&self) -> &'static str {
-        match self.account.transport {
-            TransportProtocol::Udp => "",
-            TransportProtocol::Tcp => ";transport=tcp",
-            TransportProtocol::Tls => ";transport=tls",
-        }
+        contact_transport_param_str(self.resolved_transport)
     }
 
     // ── Message dispatcher ────────────────────────────────────────────────────
@@ -486,7 +583,7 @@ impl SipStack {
         cseq:     u32,
         branch:   &str,
     ) -> String {
-        let server      = &self.account.server;
+        let server      = self.account.domain();
         let username    = &self.account.username;
         let adv_ip      = &self.advertised_ip;
         let local_ip    = &self.local_ip;
@@ -507,5 +604,89 @@ impl SipStack {
              Contact: <sip:{username}@{adv_ip}:{local_port}{contact_transport}>\r\n\
              Content-Length: 0\r\n\r\n"
         )
+    }
+}
+
+fn via_proto_str(proto: TransportProtocol) -> &'static str {
+    match proto {
+        TransportProtocol::Udp => "UDP",
+        TransportProtocol::Tcp => "TCP",
+        TransportProtocol::Tls => "TLS",
+        TransportProtocol::Auto => unreachable!("resolved_transport is never Auto"),
+    }
+}
+
+fn contact_transport_param_str(proto: TransportProtocol) -> &'static str {
+    match proto {
+        TransportProtocol::Udp => "",
+        TransportProtocol::Tcp => ";transport=tcp",
+        TransportProtocol::Tls => ";transport=tls",
+        TransportProtocol::Auto => unreachable!("resolved_transport is never Auto"),
+    }
+}
+
+const AUTO_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// One-shot, unauthenticated `REGISTER` (`Expires: 0`, so a compliant
+/// registrar treats it as a no-op rather than actually registering)
+/// used only to test whether a just-connected transport candidate in
+/// `connect_transport_auto` actually reaches a live server -- any response
+/// at all (2xx, 401/407 challenge, even a rejection) proves the path
+/// works; a timeout with nothing back means it doesn't. Deliberately
+/// free-standing rather than `self.register_once()`/`send_register()` in
+/// `registration.rs`, since those need a fully-constructed `SipStack`
+/// (`reg_call_id`/`reg_from_tag`/`reg_cseq` etc.) that doesn't exist yet
+/// this early in connection setup.
+async fn probe_register(
+    transport:     &SipTransport,
+    proto:         TransportProtocol,
+    account:       &SipAccount,
+    local_ip:      &str,
+    advertised_ip: &str,
+    local_port:    u16,
+    server_addr:   SocketAddr,
+) -> bool {
+    let call_id = crate::wire::util::new_call_id(local_ip);
+    let branch = crate::wire::util::new_branch();
+    let from_tag = crate::wire::util::new_tag();
+    let username = &account.username;
+    let server = account.domain();
+    let display = account.display_name.as_deref().unwrap_or(username);
+    let via_proto = via_proto_str(proto);
+    let contact_transport = contact_transport_param_str(proto);
+
+    let msg = format!(
+        "REGISTER sip:{server} SIP/2.0\r\n\
+         Via: SIP/2.0/{via_proto} {local_ip}:{local_port};branch={branch};rport\r\n\
+         Max-Forwards: 70\r\n\
+         To: \"{display}\" <sip:{username}@{server}>\r\n\
+         From: \"{display}\" <sip:{username}@{server}>;tag={from_tag}\r\n\
+         Call-ID: {call_id}\r\n\
+         CSeq: 1 REGISTER\r\n\
+         Contact: <sip:{username}@{advertised_ip}:{local_port}{contact_transport}>\r\n\
+         Expires: 0\r\n\
+         User-Agent: DeeLip/0.1.0\r\n\
+         Content-Length: 0\r\n\r\n"
+    );
+    if transport.send(msg.as_bytes(), server_addr).await.is_err() {
+        return false;
+    }
+
+    let deadline = Instant::now() + AUTO_PROBE_TIMEOUT;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return false;
+        }
+        let Ok(Ok((data, _from))) = tokio::time::timeout(remaining, transport.recv()).await else {
+            return false;
+        };
+        if let Some(resp) = SipMessage::parse(&data) {
+            if resp.call_id().is_some_and(|id| id == call_id) && resp.status_code().is_some() {
+                return true;
+            }
+        }
+        // Unrelated datagram (retransmit noise, another in-flight
+        // transaction) -- keep waiting until the deadline.
     }
 }

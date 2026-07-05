@@ -2,8 +2,8 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::Context;
-use tokio::io::{split, AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
-use tokio::net::{TcpSocket, UdpSocket};
+use tokio::io::{split, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf};
+use tokio::net::{TcpSocket, TcpStream, UdpSocket};
 use tokio::sync::Mutex;
 use tokio_rustls::client::TlsStream;
 use tokio_rustls::TlsConnector;
@@ -13,9 +13,11 @@ use deelip_config::TransportProtocol;
 
 use crate::wire::framing::MessageFramer;
 
-/// Unifies UDP (datagram) and TLS (persistent stream) SIP transports behind one API.
+/// Unifies UDP (datagram), plain TCP, and TLS (both persistent streams) SIP
+/// transports behind one API.
 pub enum SipTransport {
     Udp(UdpSocket),
+    Tcp(TcpConn),
     Tls(TlsConn),
 }
 
@@ -35,11 +37,21 @@ impl SipTransport {
                         .context("Connecting SIP-over-TLS transport")?;
                 Ok(Self::Tls(conn))
             }
-            // Plain TCP (no TLS) is not implemented; fall back to UDP semantics.
-            TransportProtocol::Udp | TransportProtocol::Tcp => {
+            TransportProtocol::Tcp => {
+                let conn = TcpConn::connect(bind_addr, server_addr)
+                    .await
+                    .context("Connecting SIP-over-TCP transport")?;
+                Ok(Self::Tcp(conn))
+            }
+            TransportProtocol::Udp => {
                 let socket = UdpSocket::bind(bind_addr).await?;
                 debug!("SIP transport (UDP) bound to {}", socket.local_addr()?);
                 Ok(Self::Udp(socket))
+            }
+            TransportProtocol::Auto => {
+                unreachable!(
+                    "Auto must be resolved to a concrete transport before SipTransport::connect"
+                )
             }
         }
     }
@@ -47,24 +59,27 @@ impl SipTransport {
     pub fn local_addr(&self) -> anyhow::Result<SocketAddr> {
         match self {
             Self::Udp(s) => Ok(s.local_addr()?),
-            Self::Tls(t) => Ok(t.local_addr),
+            Self::Tcp(t) => Ok(t.halves.local_addr),
+            Self::Tls(t) => Ok(t.halves.local_addr),
         }
     }
 
-    /// Send a message. For the `Tls` variant `to` is ignored — all traffic
-    /// funnels through the one persistent connection to the server.
+    /// Send a message. For the `Tcp`/`Tls` variants `to` is ignored — all
+    /// traffic funnels through the one persistent connection to the server.
     pub async fn send(&self, data: &[u8], to: SocketAddr) -> anyhow::Result<()> {
         match self {
             Self::Udp(s) => {
                 s.send_to(data, to).await?;
                 Ok(())
             }
-            Self::Tls(t) => t.send(data).await,
+            Self::Tcp(t) => t.halves.send(data).await,
+            Self::Tls(t) => t.halves.send(data).await,
         }
     }
 
-    /// Receive one complete SIP message; for `Tls` the returned address is
-    /// always the server's address (TLS has no per-datagram sender).
+    /// Receive one complete SIP message; for `Tcp`/`Tls` the returned
+    /// address is always the server's address (neither has a
+    /// per-datagram sender).
     pub async fn recv(&self) -> anyhow::Result<(Vec<u8>, SocketAddr)> {
         match self {
             Self::Udp(s) => {
@@ -73,8 +88,83 @@ impl SipTransport {
                 buf.truncate(len);
                 Ok((buf, from))
             }
-            Self::Tls(t) => t.recv().await,
+            Self::Tcp(t) => t.halves.recv(t.server_addr).await,
+            Self::Tls(t) => t.halves.recv(t.server_addr).await,
         }
+    }
+}
+
+// ── Shared stream (TCP/TLS) send/recv/framing ────────────────────────────────
+// Both plain TCP and TLS-over-TCP are a persistent byte stream needing the
+// same split-read/write-plus-framer plumbing -- only how the stream itself
+// gets established differs (a bare `TcpStream` vs. a TLS handshake wrapping
+// one), so that plumbing lives here once instead of duplicated per variant.
+
+struct StreamHalves<S> {
+    local_addr: SocketAddr,
+    write: Mutex<WriteHalf<S>>,
+    read: Mutex<(ReadHalf<S>, MessageFramer)>,
+}
+
+impl<S: AsyncRead + AsyncWrite + Unpin> StreamHalves<S> {
+    fn new(stream: S, local_addr: SocketAddr) -> Self {
+        let (read_half, write_half) = split(stream);
+        Self {
+            local_addr,
+            write: Mutex::new(write_half),
+            read: Mutex::new((read_half, MessageFramer::new())),
+        }
+    }
+
+    async fn send(&self, data: &[u8]) -> anyhow::Result<()> {
+        let mut w = self.write.lock().await;
+        w.write_all(data).await.context("Stream write")
+    }
+
+    async fn recv(&self, server_addr: SocketAddr) -> anyhow::Result<(Vec<u8>, SocketAddr)> {
+        let mut guard = self.read.lock().await;
+        let (read_half, framer) = &mut *guard;
+        loop {
+            if let Some(msg) = framer.try_take_message() {
+                return Ok((msg, server_addr));
+            }
+            let mut chunk = [0u8; 4096];
+            let n = read_half.read(&mut chunk).await.context("Stream read")?;
+            if n == 0 {
+                anyhow::bail!("Connection closed by peer");
+            }
+            framer.push(&chunk[..n]);
+        }
+    }
+}
+
+// ── Plain TCP transport ───────────────────────────────────────────────────────
+
+pub struct TcpConn {
+    server_addr: SocketAddr,
+    halves: StreamHalves<TcpStream>,
+}
+
+impl TcpConn {
+    async fn connect(bind_addr: SocketAddr, server_addr: SocketAddr) -> anyhow::Result<Self> {
+        let socket = if bind_addr.is_ipv4() {
+            TcpSocket::new_v4()?
+        } else {
+            TcpSocket::new_v6()?
+        };
+        socket.set_reuseaddr(true)?;
+        socket.bind(bind_addr).context("Binding TCP socket")?;
+        let stream = socket
+            .connect(server_addr)
+            .await
+            .context("Connecting TCP")?;
+        let local_addr = stream.local_addr()?;
+        debug!("SIP transport (TCP) connected to {server_addr} (local {local_addr})");
+
+        Ok(Self {
+            server_addr,
+            halves: StreamHalves::new(stream, local_addr),
+        })
     }
 }
 
@@ -82,9 +172,7 @@ impl SipTransport {
 
 pub struct TlsConn {
     server_addr: SocketAddr,
-    local_addr: SocketAddr,
-    write: Mutex<WriteHalf<TlsStream<tokio::net::TcpStream>>>,
-    read: Mutex<(ReadHalf<TlsStream<tokio::net::TcpStream>>, MessageFramer)>,
+    halves: StreamHalves<TlsStream<TcpStream>>,
 }
 
 impl TlsConn {
@@ -139,34 +227,10 @@ impl TlsConn {
             .context("TLS handshake")?;
         debug!("SIP transport (TLS) connected to {server_addr} (local {local_addr})");
 
-        let (read_half, write_half) = split(tls_stream);
         Ok(Self {
             server_addr,
-            local_addr,
-            write: Mutex::new(write_half),
-            read: Mutex::new((read_half, MessageFramer::new())),
+            halves: StreamHalves::new(tls_stream, local_addr),
         })
-    }
-
-    async fn send(&self, data: &[u8]) -> anyhow::Result<()> {
-        let mut w = self.write.lock().await;
-        w.write_all(data).await.context("TLS write")
-    }
-
-    async fn recv(&self) -> anyhow::Result<(Vec<u8>, SocketAddr)> {
-        let mut guard = self.read.lock().await;
-        let (read_half, framer) = &mut *guard;
-        loop {
-            if let Some(msg) = framer.try_take_message() {
-                return Ok((msg, self.server_addr));
-            }
-            let mut chunk = [0u8; 4096];
-            let n = read_half.read(&mut chunk).await.context("TLS read")?;
-            if n == 0 {
-                anyhow::bail!("TLS connection closed by peer");
-            }
-            framer.push(&chunk[..n]);
-        }
     }
 }
 

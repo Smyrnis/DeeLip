@@ -272,9 +272,14 @@ fn digit_letters(digit: char) -> &'static str {
 
 /// Display label for an account picker — `display_name` if set, else `user@server`.
 pub(crate) fn account_label(account: &SipAccount) -> String {
-    match account.display_name.as_deref() {
-        Some(name) if !name.is_empty() => name.to_string(),
-        _ => format!("{}@{}", account.username, account.server),
+    match account
+        .account_name
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .or_else(|| account.display_name.as_deref().filter(|s| !s.is_empty()))
+    {
+        Some(name) => name.to_string(),
+        None => format!("{}@{}", account.username, account.server),
     }
 }
 
@@ -328,6 +333,7 @@ pub(crate) fn codec_label(s: &str) -> &'static str {
         "pcma" => "PCMA (G.711 A-law)",
         "gsm" => "GSM 06.10",
         "ilbc" => "iLBC",
+        "g729" => "G.729",
         _ => "Unknown",
     }
 }
@@ -343,6 +349,7 @@ pub(crate) fn audio_codec_label(codec: AudioCodec) -> &'static str {
         AudioCodec::Pcma => "pcma",
         AudioCodec::Gsm => "gsm",
         AudioCodec::Ilbc => "ilbc",
+        AudioCodec::G729 => "g729",
     })
 }
 
@@ -350,6 +357,15 @@ pub(crate) fn audio_codec_label(codec: AudioCodec) -> &'static str {
 /// (no scheme, no "@") are dialed against the account's own domain, matching
 /// how MicroSIP and other softphones resolve local extensions.
 pub(crate) fn normalize_target(raw: &str, domain: &str) -> String {
+    normalize_target_with_prefix(raw, domain, "")
+}
+
+/// Same as `normalize_target`, but auto-prepends `prefix` (e.g. "9" for an
+/// outside line) to a bare number before appending the domain -- only the
+/// bare-number case gets it, since a full SIP URI or an explicit `user@host`
+/// entry is already a specific destination, not a local extension to dial
+/// out from.
+pub(crate) fn normalize_target_with_prefix(raw: &str, domain: &str, prefix: &str) -> String {
     let raw = raw.trim();
     let lower = raw.to_ascii_lowercase();
     if lower.starts_with("sip:") || lower.starts_with("sips:") {
@@ -357,7 +373,7 @@ pub(crate) fn normalize_target(raw: &str, domain: &str) -> String {
     } else if raw.contains('@') {
         format!("sip:{raw}")
     } else {
-        format!("sip:{raw}@{domain}")
+        format!("sip:{prefix}{raw}@{domain}")
     }
 }
 

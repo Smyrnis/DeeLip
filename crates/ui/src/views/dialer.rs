@@ -51,6 +51,14 @@ impl DeelipApp {
             ui.add_space(8.0);
         }
 
+        if let Some(current) = self.selected_account_idx() {
+            let mut auto_answer = self.accounts[current].account.auto_answer_enabled;
+            if ui.checkbox(&mut auto_answer, "Auto-answer incoming calls").changed() {
+                self.toggle_auto_answer(current);
+            }
+            ui.add_space(4.0);
+        }
+
         theme::full_width_card(ui, self.palette, |ui| {
             ui.label(
                 RichText::new("SIP address / number")
@@ -251,7 +259,7 @@ impl DeelipApp {
                             "Active"
                         };
                         ui.label(RichText::new(state).color(self.palette.muted));
-                        if self.config.recording_enabled {
+                        if self.is_recording() {
                             ui.label(RichText::new("● REC").color(self.palette.danger));
                         }
                         ui.add_space(8.0);
@@ -340,6 +348,14 @@ impl DeelipApp {
                 if ui.button(mute_label).clicked() {
                     self.do_mute_toggle();
                 }
+                let record_label = format!(
+                    "{}  {}",
+                    egui_phosphor::regular::RECORD,
+                    if self.is_recording() { "Stop recording" } else { "Record" }
+                );
+                if ui.button(record_label).clicked() {
+                    self.do_record_toggle();
+                }
                 let transfer_label = format!(
                     "{}  {}",
                     egui_phosphor::regular::ARROW_BEND_UP_RIGHT,
@@ -371,6 +387,20 @@ impl DeelipApp {
                 let dtmf_label = format!("{}  Keypad", egui_phosphor::regular::NUMPAD);
                 if ui.selectable_label(self.showing_dtmf, dtmf_label).clicked() {
                     self.showing_dtmf = !self.showing_dtmf;
+                }
+            });
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.label(egui_phosphor::regular::SPEAKER_HIGH);
+                let mut out_gain = self.output_gain();
+                if ui.add(egui::Slider::new(&mut out_gain, 0.0..=2.0).show_value(false)).changed() {
+                    self.set_output_gain(out_gain);
+                }
+                ui.add_space(8.0);
+                ui.label(egui_phosphor::regular::MICROPHONE);
+                let mut in_gain = self.input_gain();
+                if ui.add(egui::Slider::new(&mut in_gain, 0.0..=2.0).show_value(false)).changed() {
+                    self.set_input_gain(in_gain);
                 }
             });
             if self.showing_transfer {

@@ -44,6 +44,7 @@ impl DeelipApp {
         ui.add_space(4.0);
 
         let mut call_target: Option<String> = None;
+        let mut message_target: Option<String> = None;
         let mut edit_idx: Option<usize> = None;
         let mut delete_idx: Option<usize> = None;
 
@@ -82,6 +83,9 @@ impl DeelipApp {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui.small_button(egui_phosphor::regular::PHONE).clicked() {
                                 call_target = Some(uri.clone());
+                            }
+                            if ui.small_button(egui_phosphor::regular::CHAT_CIRCLE).clicked() {
+                                message_target = Some(uri.clone());
                             }
                             if ui
                                 .small_button(
@@ -203,6 +207,9 @@ impl DeelipApp {
 
         if let Some(target) = call_target {
             self.dial_from_list(target);
+        }
+        if let Some(target) = message_target {
+            self.message_from_list(target);
         }
     }
 

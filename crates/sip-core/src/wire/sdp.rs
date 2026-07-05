@@ -6,6 +6,13 @@ pub const OPUS_PAYLOAD_TYPE: u8 = 111;
 /// Dynamic PT for iLBC (RFC 3952 has no static assignment) — picked clear
 /// of every other PT already in use here (0/3/8/9 static, 101/111 dynamic).
 pub const ILBC_PAYLOAD_TYPE: u8 = 98;
+/// RFC 3551 static assignment for Comfort Noise at an 8000 Hz clock (RFC
+/// 3389). Only ever advertised/used alongside a codec whose own RTP clock
+/// is also 8000 Hz (i.e. never Opus, which is 48000) -- CN packets share
+/// the same `RtpSender` timestamp counter as the main codec's packets (see
+/// `deelip_media::rtp::RtpSender::next_packet_with_pt`), so a clock
+/// mismatch between them would corrupt playout timing on the far end.
+pub const CN_PAYLOAD_TYPE: u8 = 13;
 
 /// Negotiated voice codec. The numeric RTP payload type for the wire is
 /// derived from this (see `AudioCodec::payload_type`); it's shared by both
@@ -29,19 +36,27 @@ pub enum AudioCodec {
     /// match DeeLip's fixed 20ms RTP framing throughout — the alternative
     /// 30ms mode is deliberately not offered.
     Ilbc,
+    /// G.729 (RFC 3551 static PT 18) -- a low-bitrate (8kbps) narrowband
+    /// codec, native 8kHz same as this pipeline throughout. Annex B (VAD/
+    /// comfort-noise/DTX) is neither offered nor handled -- see the
+    /// `annexb=no` fmtp this declares -- so the far end shouldn't send
+    /// discontinuous-transmission frames we'd otherwise have no comfort-
+    /// noise generator to decode.
+    G729,
 }
 
 /// Every codec this codebase knows how to negotiate, in the historical
 /// default preference order — used as the fallback when an account's
 /// configured codec list is empty (shouldn't normally happen; the Settings
 /// UI itself refuses to let the last enabled codec be disabled).
-pub const ALL_CODECS: [AudioCodec; 6] = [
+pub const ALL_CODECS: [AudioCodec; 7] = [
     AudioCodec::Opus,
     AudioCodec::G722,
     AudioCodec::Pcmu,
     AudioCodec::Pcma,
     AudioCodec::Gsm,
     AudioCodec::Ilbc,
+    AudioCodec::G729,
 ];
 
 impl AudioCodec {
@@ -51,6 +66,7 @@ impl AudioCodec {
             AudioCodec::Gsm => 3,
             AudioCodec::Pcma => 8,
             AudioCodec::G722 => 9,
+            AudioCodec::G729 => 18,
             AudioCodec::Opus => OPUS_PAYLOAD_TYPE,
             AudioCodec::Ilbc => ILBC_PAYLOAD_TYPE,
         }
@@ -68,6 +84,7 @@ impl AudioCodec {
             AudioCodec::G722 => "G722/8000",
             AudioCodec::Gsm => "GSM/8000",
             AudioCodec::Ilbc => "iLBC/8000",
+            AudioCodec::G729 => "G729/8000",
         }
     }
 
@@ -78,6 +95,9 @@ impl AudioCodec {
             // RFC 3952 §4.2 -- without this, a receiver defaults to the
             // 30ms/50-byte mode, which doesn't match what we actually send.
             AudioCodec::Ilbc => Some(format!("a=fmtp:{} mode=20\r\n", self.payload_type())),
+            // Declares we neither send nor understand Annex B VAD/DTX
+            // comfort-noise frames -- see `AudioCodec::G729`'s doc comment.
+            AudioCodec::G729 => Some(format!("a=fmtp:{} annexb=no\r\n", self.payload_type())),
             _ => None,
         }
     }
@@ -207,6 +227,7 @@ pub fn build_offer(
     srtp: Option<&SrtpParams>,
     codecs: &[AudioCodec],
     ice: Option<&IceAttrs>,
+    vad_enabled: bool,
 ) -> String {
     let sid = now_ntp();
     let codecs: &[AudioCodec] = if codecs.is_empty() {
@@ -214,6 +235,11 @@ pub fn build_offer(
     } else {
         codecs
     };
+    // Only offered if at least one candidate codec shares CN's 8000 Hz
+    // clock -- see `CN_PAYLOAD_TYPE`'s doc comment. If the answerer ends up
+    // choosing Opus anyway, `MediaEngine` separately re-checks the actually
+    // negotiated codec before ever using this.
+    let advertise_cn = vad_enabled && codecs.iter().any(|&c| c != AudioCodec::Opus);
     let pt_list: String = codecs
         .iter()
         .map(|c| c.payload_type().to_string())
@@ -221,16 +247,23 @@ pub fn build_offer(
         .join(" ");
     let codec_lines: String = codecs.iter().map(|&c| rtpmap_and_fmtp_lines(c)).collect();
     let profile = savp_profile(srtp);
+    let cn_pt_suffix = if advertise_cn { format!(" {CN_PAYLOAD_TYPE}") } else { String::new() };
+    let cn_line = if advertise_cn {
+        format!("a=rtpmap:{CN_PAYLOAD_TYPE} CN/8000\r\n")
+    } else {
+        String::new()
+    };
     format!(
         "v=0\r\n\
          o=- {sid} {sid} IN IP4 {local_ip}\r\n\
          s=-\r\n\
          c=IN IP4 {local_ip}\r\n\
          t=0 0\r\n\
-         m=audio {rtp_port} {profile} {pt_list} 101\r\n\
+         m=audio {rtp_port} {profile} {pt_list} 101{cn_pt_suffix}\r\n\
          {codec_lines}\
          a=rtpmap:101 telephone-event/8000\r\n\
          a=fmtp:101 0-15\r\n\
+         {cn_line}\
          {crypto}\
          {ice_lines}\
          a=ptime:20\r\n\
@@ -248,20 +281,30 @@ pub fn build_answer(
     codec: AudioCodec,
     srtp: Option<&SrtpParams>,
     ice: Option<&IceAttrs>,
+    vad_enabled: bool,
 ) -> String {
     let sid = now_ntp();
     let pt = codec.payload_type();
     let profile = savp_profile(srtp);
+    // See `CN_PAYLOAD_TYPE`'s doc comment for why this excludes Opus.
+    let advertise_cn = vad_enabled && codec != AudioCodec::Opus;
+    let pt_suffix = if advertise_cn { format!(" {CN_PAYLOAD_TYPE}") } else { String::new() };
+    let cn_line = if advertise_cn {
+        format!("a=rtpmap:{CN_PAYLOAD_TYPE} CN/8000\r\n")
+    } else {
+        String::new()
+    };
     format!(
         "v=0\r\n\
          o=- {sid} {sid} IN IP4 {local_ip}\r\n\
          s=-\r\n\
          c=IN IP4 {local_ip}\r\n\
          t=0 0\r\n\
-         m=audio {rtp_port} {profile} {pt} 101\r\n\
+         m=audio {rtp_port} {profile} {pt} 101{pt_suffix}\r\n\
          {codec_lines}\
          a=rtpmap:101 telephone-event/8000\r\n\
          a=fmtp:101 0-15\r\n\
+         {cn_line}\
          {crypto}\
          {ice_lines}\
          a=ptime:20\r\n\
@@ -340,6 +383,10 @@ pub struct ParsedSdp {
     pub payload_type: u8,
     /// DTMF telephone-event PT if present (commonly 101).
     pub dtmf_type: Option<u8>,
+    /// Comfort-noise (RFC 3389) PT the remote signaled, if any (commonly
+    /// `CN_PAYLOAD_TYPE`/13) -- our own CN sends to them use this PT, same
+    /// idiom as `dtmf_type` for RFC 2833 telephone-event.
+    pub cn_type: Option<u8>,
     /// True if remote set a=sendonly (they are holding us).
     pub is_sendonly: bool,
     /// Remote's offered/answered SRTP key, if the SDP included a supported `a=crypto:` line.
@@ -355,13 +402,29 @@ pub struct ParsedSdp {
 /// Parse an SDP offer/answer, picking the first payload type in the `m=`
 /// line's preference order that both we recognize AND is in `allowed` (a
 /// disabled codec is treated as unrecognized — it's skipped just like a
-/// codec this codebase never implemented).
+/// codec this codebase never implemented). Equivalent to
+/// `parse_sdp_forcing(sdp, allowed, None)`.
 pub fn parse_sdp(sdp: &str, allowed: &[AudioCodec]) -> Option<ParsedSdp> {
+    parse_sdp_forcing(sdp, allowed, None)
+}
+
+/// Same as `parse_sdp`, but if `force` is `Some` and the offer's payload-type
+/// list contains it at all (and it's in `allowed`), that codec wins
+/// regardless of the offer's own preference order -- "Force Codec for
+/// Incoming" (`SipAccount::force_incoming_codec`). Falls back to ordinary
+/// preference-order selection if `force` is `None`, isn't in `allowed`, or
+/// the remote simply didn't offer it.
+pub fn parse_sdp_forcing(
+    sdp: &str,
+    allowed: &[AudioCodec],
+    force: Option<AudioCodec>,
+) -> Option<ParsedSdp> {
     let mut connection_ip: Option<String> = None;
     let mut rtp_port: Option<u16> = None;
     let mut pt_list: Vec<u8> = Vec::new();
     let mut rtpmaps: Vec<(u8, String)> = Vec::new();
     let mut dtmf_type: Option<u8> = None;
+    let mut cn_type: Option<u8> = None;
     let mut is_sendonly = false;
     let mut srtp: Option<SrtpParams> = None;
     let mut ice_ufrag: Option<String> = None;
@@ -396,6 +459,8 @@ pub fn parse_sdp(sdp: &str, allowed: &[AudioCodec]) -> Option<ParsedSdp> {
                     let lname = name.to_ascii_lowercase();
                     if lname.starts_with("telephone-event") {
                         dtmf_type = Some(pt);
+                    } else if lname.starts_with("cn") {
+                        cn_type = Some(pt);
                     } else {
                         rtpmaps.push((pt, lname));
                     }
@@ -412,11 +477,11 @@ pub fn parse_sdp(sdp: &str, allowed: &[AudioCodec]) -> Option<ParsedSdp> {
     let port = rtp_port?;
     let rtp_addr: SocketAddr = format!("{ip}:{port}").parse().ok()?;
 
-    // Pick the first payload type in the m= line's preference order that we
-    // recognize, either from an explicit rtpmap or (for 0/8) the static
-    // RTP/AVP defaults when no rtpmap overrides them.
-    let (codec, payload_type) = pt_list.iter().find_map(|&pt| {
-        let recognized = if let Some((_, name)) = rtpmaps.iter().find(|(p, _)| *p == pt) {
+    // Resolve one payload type to the codec it names, either from an
+    // explicit rtpmap or (for 0/8) the static RTP/AVP defaults when no
+    // rtpmap overrides them.
+    let resolve = |pt: u8| -> Option<AudioCodec> {
+        if let Some((_, name)) = rtpmaps.iter().find(|(p, _)| *p == pt) {
             if name.starts_with("opus") {
                 Some(AudioCodec::Opus)
             } else if name.starts_with("pcmu") {
@@ -429,6 +494,8 @@ pub fn parse_sdp(sdp: &str, allowed: &[AudioCodec]) -> Option<ParsedSdp> {
                 Some(AudioCodec::Gsm)
             } else if name.starts_with("ilbc") {
                 Some(AudioCodec::Ilbc)
+            } else if name.starts_with("g729") {
+                Some(AudioCodec::G729)
             } else {
                 None
             }
@@ -438,17 +505,35 @@ pub fn parse_sdp(sdp: &str, allowed: &[AudioCodec]) -> Option<ParsedSdp> {
                 3 => Some(AudioCodec::Gsm),
                 8 => Some(AudioCodec::Pcma),
                 9 => Some(AudioCodec::G722),
+                18 => Some(AudioCodec::G729),
                 _ => None,
             }
-        };
-        recognized.filter(|c| allowed.contains(c)).map(|c| (c, pt))
-    })?;
+        }
+    };
+
+    // Forced codec wins if the offer contains it at all, regardless of its
+    // own preference order; otherwise (or with no force) fall back to the
+    // first payload type in the m= line's order that we recognize AND allow.
+    let (codec, payload_type) = force
+        .and_then(|forced| {
+            pt_list.iter().find_map(|&pt| {
+                resolve(pt)
+                    .filter(|&c| c == forced && allowed.contains(&c))
+                    .map(|c| (c, pt))
+            })
+        })
+        .or_else(|| {
+            pt_list.iter().find_map(|&pt| {
+                resolve(pt).filter(|c| allowed.contains(c)).map(|c| (c, pt))
+            })
+        })?;
 
     Some(ParsedSdp {
         rtp_addr,
         codec,
         payload_type,
         dtmf_type,
+        cn_type,
         is_sendonly,
         srtp,
         ice_ufrag,

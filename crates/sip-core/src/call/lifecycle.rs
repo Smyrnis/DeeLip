@@ -10,8 +10,8 @@ use crate::{
     wire::auth::build_challenge_response,
     wire::message::{SipMessage, SipMethod},
     wire::sdp::{
-        build_answer, build_hold_offer, build_offer, build_resume_offer, parse_sdp, IceAttrs,
-        SrtpParams,
+        build_answer, build_hold_offer, build_offer, build_resume_offer, parse_sdp,
+        parse_sdp_forcing, IceAttrs, SrtpParams,
     },
     wire::util::{new_branch, new_call_id, new_tag, parse_tag, parse_uri},
 };
@@ -46,13 +46,15 @@ impl SipStack {
 
         let network = self.network.clone();
         let account = self.account.clone();
+        let resolved_transport = self.resolved_transport;
         let advertised_ip = self.advertised_ip.clone();
         let internal_tx = self.internal_tx.clone();
         let to = to.to_string();
+        let attempt_ice = attempt_ice && account.wants_ice(network.ice_enabled);
         tokio::spawn(async move {
             let mut relay = None;
             let ice_gathered = if attempt_ice {
-                media_setup::try_gather_ice(&network, true).await
+                media_setup::try_gather_ice(&network, true, true).await
             } else {
                 None
             };
@@ -73,8 +75,8 @@ impl SipStack {
                 media_setup::resolve_rtp_endpoint(&network, &advertised_ip, local_rtp, &mut relay)
                     .await;
 
-            let account_secure = account.transport == deelip_config::TransportProtocol::Tls;
-            let srtp = if account_secure {
+            let wants_srtp = account.wants_srtp(resolved_transport);
+            let srtp = if wants_srtp {
                 Some(SrtpParams::generate())
             } else {
                 None
@@ -86,6 +88,7 @@ impl SipStack {
                 srtp.as_ref(),
                 &codecs,
                 ice_attrs.as_ref(),
+                account.vad_enabled,
             );
 
             let _ = internal_tx.send(StackEvent::OutgoingOfferReady {
@@ -163,7 +166,7 @@ impl SipStack {
         auth: Option<&str>,
         branch: &str,
     ) -> String {
-        let server = &self.account.server;
+        let server = self.account.domain();
         let username = &self.account.username;
         let adv_ip = &self.advertised_ip;
         let local_ip = &self.local_ip;
@@ -185,6 +188,9 @@ impl SipStack {
              Content-Type: application/sdp\r\n\
              User-Agent: DeeLip/0.1.0\r\n"
         );
+        if self.account.hide_caller_id {
+            msg.push_str("Privacy: id\r\n");
+        }
         if let Some(a) = auth {
             msg.push_str(a);
             msg.push_str("\r\n");
@@ -216,7 +222,7 @@ impl SipStack {
         let cseq = dialog.next_local_cseq();
         let branch = new_branch();
 
-        let server = self.account.server.clone();
+        let server = self.account.domain().to_string();
         let username = self.account.username.clone();
         let display = self
             .account
@@ -277,7 +283,7 @@ impl SipStack {
         let cseq = dialog.next_local_cseq();
         let branch = new_branch();
 
-        let server = self.account.server.clone();
+        let server = self.account.domain().to_string();
         let username = self.account.username.clone();
         let display = self
             .account
@@ -579,6 +585,7 @@ impl SipStack {
                 let remote_srtp = parsed.srtp.clone();
                 let codec = parsed.codec;
                 let dtmf_type = parsed.dtmf_type;
+                let cn_type = parsed.cn_type;
                 tokio::spawn(async move {
                     let ice = media_setup::finish_ice_connect(ice_gathered, true, &parsed).await;
                     let _ = internal_tx.send(StackEvent::OutgoingConnected {
@@ -589,6 +596,7 @@ impl SipStack {
                         ice,
                         codec,
                         dtmf_type,
+                        cn_type,
                         remote_rtp,
                         remote_srtp,
                     });
@@ -665,7 +673,7 @@ impl SipStack {
                 let _ = self.transport.send(ack.as_bytes(), self.server_addr).await;
 
                 let Some(auth) = build_challenge_response(
-                    &self.account.username,
+                    self.account.auth_username(),
                     &self.account.password,
                     "INVITE",
                     &to_uri,
@@ -717,6 +725,7 @@ impl SipStack {
             ice,
             codec,
             dtmf_type,
+            cn_type,
             remote_rtp,
             remote_srtp,
         } = ev
@@ -727,7 +736,7 @@ impl SipStack {
         if !self.dialogs.contains_key(&call_id) {
             return;
         }
-        let account_secure = self.account.transport == deelip_config::TransportProtocol::Tls;
+        let wants_srtp = self.account.wants_srtp(self.resolved_transport);
         let (media, ready) = media_setup::resolve_call_media(
             local_rtp,
             local_srtp,
@@ -735,9 +744,10 @@ impl SipStack {
             ice,
             codec,
             dtmf_type,
+            cn_type,
             remote_rtp,
             remote_srtp,
-            account_secure,
+            wants_srtp,
         );
         self.dialogs.get_mut(&call_id).expect("checked above").media = Some(media);
         let _ = self.event_tx.send(SipEvent::CallConnected {
@@ -832,7 +842,12 @@ impl SipStack {
         let remote_sdp = dialog.remote_sdp.clone().unwrap_or_default();
 
         let codecs = media_setup::account_codecs(&self.account);
-        let Some(parsed) = parse_sdp(&remote_sdp, &codecs) else {
+        let force_codec = self
+            .account
+            .force_incoming_codec
+            .as_deref()
+            .and_then(media_setup::codec_from_str);
+        let Some(parsed) = parse_sdp_forcing(&remote_sdp, &codecs, force_codec) else {
             self.reject_call(call_id).await;
             let _ = self.event_tx.send(SipEvent::CallFailed {
                 call_id: call_id.to_string(),
@@ -858,12 +873,14 @@ impl SipStack {
 
         let network = self.network.clone();
         let advertised_ip = self.advertised_ip.clone();
-        let account_secure = self.account.transport == deelip_config::TransportProtocol::Tls;
+        let wants_srtp = self.account.wants_srtp(self.resolved_transport);
+        let wants_ice = self.account.wants_ice(self.network.ice_enabled);
+        let vad_enabled = self.account.vad_enabled;
         let internal_tx = self.internal_tx.clone();
         let call_id = call_id.to_string();
         tokio::spawn(async move {
             let mut relay = None;
-            let ice_result = media_setup::try_answer_with_ice(&network, &parsed).await;
+            let ice_result = media_setup::try_answer_with_ice(&network, wants_ice, &parsed).await;
             let (rtp_ip, rtp_port, ice_attrs, ice) = match ice_result {
                 Some((attrs, addr, conn)) => {
                     (addr.ip().to_string(), addr.port(), Some(attrs), Some(conn))
@@ -880,7 +897,7 @@ impl SipStack {
                 }
             };
 
-            let local_srtp = if account_secure {
+            let local_srtp = if wants_srtp {
                 Some(SrtpParams::generate())
             } else {
                 None
@@ -891,6 +908,7 @@ impl SipStack {
                 parsed.codec,
                 local_srtp.as_ref(),
                 ice_attrs.as_ref(),
+                vad_enabled,
             );
 
             let _ = internal_tx.send(StackEvent::IncomingAnswerReady {
@@ -944,7 +962,7 @@ impl SipStack {
         let adv_ip = self.advertised_ip.clone();
         let local_port = self.local_port;
         let username = self.account.username.clone();
-        let server = self.account.server.clone();
+        let server = self.account.domain().to_string();
         let display = self
             .account
             .display_name
@@ -973,7 +991,7 @@ impl SipStack {
 
         let _ = self.transport.send(ok_msg.as_bytes(), contact).await;
 
-        let account_secure = self.account.transport == deelip_config::TransportProtocol::Tls;
+        let wants_srtp = self.account.wants_srtp(self.resolved_transport);
         let (media, ready) = media_setup::resolve_call_media(
             local_rtp,
             local_srtp,
@@ -981,9 +999,10 @@ impl SipStack {
             ice,
             parsed.codec,
             parsed.dtmf_type,
+            parsed.cn_type,
             parsed.rtp_addr,
             parsed.srtp,
-            account_secure,
+            wants_srtp,
         );
 
         let dialog = self
@@ -1008,7 +1027,7 @@ impl SipStack {
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(self.server_addr);
             let username = &self.account.username;
-            let server = &self.account.server;
+            let server = self.account.domain();
             let display = self.account.display_name.as_deref().unwrap_or(username);
             let local_tag = &dialog.local_tag;
             let remote_uri = &dialog.remote_uri;
@@ -1045,7 +1064,7 @@ impl SipStack {
         dialog.state = DialogState::Terminating;
         let cseq = dialog.next_local_cseq();
         let branch = new_branch();
-        let server = self.account.server.clone();
+        let server = self.account.domain().to_string();
         let username = self.account.username.clone();
         let display = self
             .account

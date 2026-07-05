@@ -65,6 +65,12 @@ impl ContactBook {
         Ok(())
     }
 
+    /// The saved contact whose `sip_uri` exactly matches `uri`, if any --
+    /// used to resolve a raw call-history URI to a display name.
+    pub fn find_by_uri(&self, uri: &str) -> Option<&Contact> {
+        self.contacts.iter().find(|c| c.sip_uri == uri)
+    }
+
     /// Contacts whose name or URI contains `query` (case-insensitive), paired
     /// with their index in `self.contacts` so callers can edit/delete them.
     pub fn search<'a>(&'a self, query: &str) -> Vec<(usize, &'a Contact)> {

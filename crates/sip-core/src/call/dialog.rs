@@ -29,6 +29,8 @@ pub struct CallMedia {
     pub ice: Option<IceConnection>,
     pub codec: AudioCodec,
     pub dtmf_type: Option<u8>,
+    /// Comfort-noise PT the remote signaled, if any -- see `ParsedSdp::cn_type`.
+    pub cn_type: Option<u8>,
 }
 
 /// Offerer-side media state resolved before the INVITE was sent (local RTP

@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::Context;
@@ -23,18 +24,36 @@ pub struct AudioStreams {
     _output: cpal::Stream,
 }
 
+/// Live-adjustable linear gain, shared between whichever thread wants to
+/// change it (the UI, via `MediaEngine::set_output_gain`) and the realtime
+/// cpal callback that reads it every sample -- stores an `f32`'s bits in an
+/// `AtomicU32` since there's no `AtomicF32`. `1.0` is unity/unchanged.
+pub type SharedGain = Arc<AtomicU32>;
+
+pub fn new_shared_gain() -> SharedGain {
+    Arc::new(AtomicU32::new(1.0f32.to_bits()))
+}
+pub fn load_gain(gain: &SharedGain) -> f32 {
+    f32::from_bits(gain.load(Ordering::Relaxed))
+}
+pub fn store_gain(gain: &SharedGain, value: f32) {
+    gain.store(value.to_bits(), Ordering::Relaxed);
+}
+
 /// Open input + output devices at 8 kHz mono — `input_device`/`output_device`
 /// name a specific cpal device to use (falling back to the system default if
 /// unset or not found); pass `None` for both to always use the defaults.
 /// Returns the streams (keep alive), a receiver for captured audio, a shared
-/// jitter buffer to push playback audio into, and — when `echo_cancellation`
-/// is true — a far-end reference buffer mirroring everything written to the
-/// output device, for echo cancellation to compare against the mic capture.
+/// jitter buffer to push playback audio into, a shared output-gain knob
+/// (see `SharedGain`) applied directly in the output callback below, and —
+/// when `echo_cancellation` is true — a far-end reference buffer mirroring
+/// everything written to the output device, for echo cancellation to
+/// compare against the mic capture.
 pub fn open_streams(
     input_device: Option<&str>,
     output_device: Option<&str>,
     echo_cancellation: bool,
-) -> anyhow::Result<(AudioStreams, CaptureRx, PlaybackTx, Option<EchoRefBuf>)> {
+) -> anyhow::Result<(AudioStreams, CaptureRx, PlaybackTx, Option<EchoRefBuf>, SharedGain)> {
     let host = cpal::default_host();
 
     let in_dev = find_device(&host, input_device, true)
@@ -65,9 +84,16 @@ pub fn open_streams(
         echo_cancellation.then(|| Arc::new(Mutex::new(VecDeque::with_capacity(4800))));
     let echo_ref_out = echo_ref.clone();
 
+    let output_gain = new_shared_gain();
+    let output_gain_out = output_gain.clone();
+
     let output_stream = match out_dev.default_output_config()?.sample_format() {
-        SampleFormat::I16 => build_output_i16(&out_dev, &config, jitter_out, echo_ref_out)?,
-        SampleFormat::F32 => build_output_f32(&out_dev, &config, jitter_out, echo_ref_out)?,
+        SampleFormat::I16 => {
+            build_output_i16(&out_dev, &config, jitter_out, echo_ref_out, output_gain_out)?
+        }
+        SampleFormat::F32 => {
+            build_output_f32(&out_dev, &config, jitter_out, echo_ref_out, output_gain_out)?
+        }
         fmt => anyhow::bail!("Unsupported output sample format: {fmt:?}"),
     };
 
@@ -82,6 +108,7 @@ pub fn open_streams(
         cap_rx,
         jitter,
         echo_ref,
+        output_gain,
     ))
 }
 
@@ -161,14 +188,17 @@ fn build_output_i16(
     config: &StreamConfig,
     jitter: PlaybackTx,
     echo_ref: Option<EchoRefBuf>,
+    gain: SharedGain,
 ) -> anyhow::Result<cpal::Stream> {
     let stream = device
         .build_output_stream(
             config,
             move |data: &mut [i16], _| {
+                let g = load_gain(&gain);
                 let mut buf = jitter.lock().unwrap();
                 for s in data.iter_mut() {
-                    *s = buf.pop_front().unwrap_or(0);
+                    let sample = buf.pop_front().unwrap_or(0);
+                    *s = (sample as f32 * g).clamp(i16::MIN as f32, i16::MAX as f32) as i16;
                 }
                 drop(buf);
                 push_frame_to_echo_ref(&echo_ref, data);
@@ -212,16 +242,19 @@ fn build_output_f32(
     config: &StreamConfig,
     jitter: PlaybackTx,
     echo_ref: Option<EchoRefBuf>,
+    gain: SharedGain,
 ) -> anyhow::Result<cpal::Stream> {
     let mut written: Vec<i16> = Vec::new();
     let stream = device
         .build_output_stream(
             config,
             move |data: &mut [f32], _| {
+                let g = load_gain(&gain);
                 let mut buf = jitter.lock().unwrap();
                 written.clear();
                 for s in data.iter_mut() {
-                    let sample = buf.pop_front().unwrap_or(0);
+                    let sample = (buf.pop_front().unwrap_or(0) as f32 * g)
+                        .clamp(i16::MIN as f32, i16::MAX as f32) as i16;
                     *s = sample as f32 / i16::MAX as f32;
                     written.push(sample);
                 }

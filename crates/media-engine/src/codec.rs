@@ -238,6 +238,54 @@ impl G722Decoder {
     }
 }
 
+// ── G.729 ─────────────────────────────────────────────────────────────────────
+//
+// Native 8kHz, same as this pipeline throughout -- no resampling needed
+// (unlike G.722 above). `audio-codec`'s own `g729` module already handles
+// the 160-sample RTP frame <-> two 80-sample (10ms) G.729 frames looping
+// internally (160 samples in / 20 encoded bytes out, and back), so these
+// wrappers are just the same thin encode/decode-per-frame shape as every
+// other codec here. Its `g729-sys` dependency is a pure-Rust G.729
+// implementation, not an FFI wrapper around ITU reference C code.
+
+use audio_codec::g729::{G729Decoder as RawG729Decoder, G729Encoder as RawG729Encoder};
+
+pub struct G729Encoder(RawG729Encoder);
+
+impl Default for G729Encoder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl G729Encoder {
+    pub fn new() -> Self {
+        Self(RawG729Encoder::new())
+    }
+
+    pub fn encode(&mut self, pcm: &[i16]) -> Vec<u8> {
+        self.0.encode(pcm)
+    }
+}
+
+pub struct G729Decoder(RawG729Decoder);
+
+impl Default for G729Decoder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl G729Decoder {
+    pub fn new() -> Self {
+        Self(RawG729Decoder::new())
+    }
+
+    pub fn decode(&mut self, payload: &[u8]) -> Vec<i16> {
+        self.0.decode(payload)
+    }
+}
+
 // ── GSM 06.10 ─────────────────────────────────────────────────────────────────
 //
 // No usable pure-Rust crate exists for this (the only one published,

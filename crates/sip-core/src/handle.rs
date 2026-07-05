@@ -12,8 +12,9 @@ pub struct SipHandle {
     pub advertised_ip: String,
     /// True when signaling runs over TLS — callers use this to decide whether to offer SRTP.
     pub secure: bool,
-    /// The account's SIP domain (`account.server`) — used to resolve bare
-    /// extension numbers typed into the dialer into a full SIP URI.
+    /// The account's SIP domain (`account.domain()`, which falls back to
+    /// `account.server` when unset) — used to resolve bare extension
+    /// numbers typed into the dialer into a full SIP URI.
     pub domain: String,
 }
 

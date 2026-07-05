@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use deelip_media::{ConferenceLeg, MediaEngine};
+use deelip_media::{ConferenceLeg, MediaEngine, RecordingOptions};
 
 use crate::app::DeelipApp;
 
@@ -20,12 +20,18 @@ impl DeelipApp {
             media.remote_rtp,
             media.codec,
             media.dtmf_type,
+            media.cn_type,
             media.srtp,
             media.relay,
             self.config.audio.echo_cancellation,
+            self.config.audio.agc_enabled,
             input_device.as_deref(),
             output_device.as_deref(),
-            self.config.recording_enabled,
+            RecordingOptions {
+                enabled: self.config.recording_enabled,
+                format: self.config.recording_format,
+                dir_override: self.config.recordings_dir_override.clone(),
+            },
             &call_id,
             None,
         ));
@@ -105,12 +111,18 @@ impl DeelipApp {
             media0.remote_rtp,
             media0.codec,
             media0.dtmf_type,
+            media0.cn_type,
             media0.srtp,
             media0.relay,
             self.config.audio.echo_cancellation,
+            self.config.audio.agc_enabled,
             input_device.as_deref(),
             output_device.as_deref(),
-            self.config.recording_enabled,
+            RecordingOptions {
+                enabled: self.config.recording_enabled,
+                format: self.config.recording_format,
+                dir_override: self.config.recordings_dir_override.clone(),
+            },
             &call_id0,
             Some(leg2),
         ));

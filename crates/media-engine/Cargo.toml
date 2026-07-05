@@ -20,3 +20,4 @@ audio-codec = { workspace = true }
 gsm-sys      = { workspace = true }
 oxideav-ilbc = { workspace = true }
 oxideav-core = { workspace = true }
+mp3lame-encoder = { workspace = true }
