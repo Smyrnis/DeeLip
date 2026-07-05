@@ -4,7 +4,11 @@ use egui::{RichText, Ui};
 
 use crate::theme::Palette;
 
-pub(crate) fn status_bar(ui: &mut Ui, palette: &Palette, text: &str, ok: bool, held: bool, new_voicemail: u32) {
+/// Left-hand side of the bottom status bar -- just the connection dot and
+/// status text. Caller wraps this in its own `ui.horizontal()` alongside a
+/// right-to-left cluster (voicemail badge / DND toggle / account label) so
+/// everything shares one row, MicroSIP-style.
+pub(crate) fn status_bar(ui: &mut Ui, palette: &Palette, text: &str, ok: bool, held: bool) {
     let color = if held {
         palette.warn
     } else if ok {
@@ -12,16 +16,66 @@ pub(crate) fn status_bar(ui: &mut Ui, palette: &Palette, text: &str, ok: bool, h
     } else {
         palette.warn
     };
-    ui.horizontal(|ui| {
-        ui.label(RichText::new("●").color(color));
-        ui.label(text);
-        if new_voicemail > 0 {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(RichText::new(format!("{} {new_voicemail}", egui_phosphor::regular::VOICEMAIL))
-                    .color(palette.accent));
-            });
-        }
-    });
+    ui.label(RichText::new("●").color(color));
+    ui.label(text);
+}
+
+/// Paint a subtle divider line along a list row's bottom edge, shared by
+/// History/Contacts/Messages so all three read as one consistent list
+/// design instead of three independently-styled dividers. Row content must
+/// be a single widget (e.g. one `ui.horizontal()`) whose response `rect` is
+/// passed in here -- a second sibling widget for the divider would add an
+/// extra `item_spacing.y` gap that per-row height estimates (needed for
+/// `show_rows` virtualization) can't represent.
+pub(crate) fn list_row_divider(ui: &Ui, palette: &Palette, row_rect: egui::Rect) {
+    ui.painter().hline(row_rect.x_range(), row_rect.bottom(), egui::Stroke::new(1.0, palette.divider));
+}
+
+/// Render one list row: `add_contents` inside a single `ui.horizontal`, with
+/// a hover-highlight background and a bottom divider -- shared by
+/// History/Contacts/Messages so hovering any list row gives the same
+/// feedback everywhere. The highlight uses egui's standard "reserve a shape
+/// slot before the content, fill it in once the row's rect/hover state are
+/// known" trick, since otherwise a background painted *after* the row's own
+/// widgets would draw on top of them instead of behind.
+///
+/// `id_source` must be unique per row (e.g. the row's index): egui derives
+/// `ui.horizontal()`'s child id purely from the *parent* ui's id plus the
+/// fixed literal "child", so every row rendered from the same virtualized
+/// `show_rows` loop would otherwise get the exact same id. `Response::hovered`
+/// is a lookup by that id into a per-frame hovered-id set, so with colliding
+/// ids, hovering one row marked *every* row hovered simultaneously. Wrapping
+/// in `ui.push_id` salts the id per row so only the actual hovered row lights up.
+pub(crate) fn list_row(ui: &mut Ui, palette: &Palette, id_source: impl std::hash::Hash, add_contents: impl FnOnce(&mut Ui)) {
+    let bg_idx = ui.painter().add(egui::Shape::Noop);
+    let row = ui.push_id(id_source, |ui| ui.horizontal(add_contents)).inner.response;
+    if row.hovered() {
+        ui.painter().set(bg_idx, egui::Shape::rect_filled(row.rect, 0.0, palette.row_hover));
+    }
+    list_row_divider(ui, palette, row.rect);
+}
+
+/// A small "ⓘ" icon that reveals `text` as a tooltip on hover -- Settings'
+/// replacement for always-visible small-gray-text footnotes ("Applies
+/// immediately -- no restart needed.", etc.), so each section/field reads as
+/// one line with the explanation tucked away instead of a wall of captions.
+pub(crate) fn info_hint(ui: &mut Ui, palette: &Palette, text: &str) {
+    ui.label(RichText::new(egui_phosphor::regular::INFO).color(palette.muted))
+        .on_hover_text(text);
+}
+
+/// A registration-status dot (`palette.accent` green when registered,
+/// `palette.muted` otherwise) followed by the plain-colored account label,
+/// as one `LayoutJob` -- so account pickers read the same "online" green as
+/// the main status bar's dot instead of an uncolored `●`/`○` character
+/// baked into a plain string.
+pub(crate) fn account_status_label(ui: &Ui, palette: &Palette, reg_ok: bool, label: &str) -> egui::text::LayoutJob {
+    let font_id = egui::TextStyle::Body.resolve(ui.style());
+    let dot_color = if reg_ok { palette.accent } else { palette.muted };
+    let mut job = egui::text::LayoutJob::default();
+    job.append("● ", 0.0, egui::TextFormat { font_id: font_id.clone(), color: dot_color, ..Default::default() });
+    job.append(label, 0.0, egui::TextFormat { font_id, color: ui.visuals().text_color(), ..Default::default() });
+    job
 }
 
 /// A 3x4 phone-style dial pad (1-9,*,0,#), each digit with the classic small
@@ -197,69 +251,5 @@ pub(crate) fn ctx_key_enter(ui: &Ui) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{account_codecs, extract_user_part, normalize_target};
-    use deelip_config::SipAccount;
-    use deelip_sip::{sdp, AudioCodec};
-
-    #[test]
-    fn bare_number_gets_domain_appended() {
-        assert_eq!(normalize_target("600", "127.0.0.1"), "sip:600@127.0.0.1");
-    }
-
-    #[test]
-    fn existing_sip_uri_is_untouched() {
-        assert_eq!(normalize_target("sip:600@127.0.0.1", "example.com"), "sip:600@127.0.0.1");
-    }
-
-    #[test]
-    fn sips_uri_is_untouched() {
-        assert_eq!(normalize_target("sips:bob@example.com", "example.com"), "sips:bob@example.com");
-    }
-
-    #[test]
-    fn user_at_host_without_scheme_gets_scheme_added() {
-        assert_eq!(normalize_target("bob@example.com", "example.com"), "sip:bob@example.com");
-    }
-
-    #[test]
-    fn trims_whitespace() {
-        assert_eq!(normalize_target("  600  ", "127.0.0.1"), "sip:600@127.0.0.1");
-    }
-
-    #[test]
-    fn extracts_user_from_bare_number() {
-        assert_eq!(extract_user_part("5551234"), "5551234");
-    }
-
-    #[test]
-    fn extracts_user_from_full_uri_with_params() {
-        assert_eq!(extract_user_part("sip:5551234@host.example;user=phone"), "5551234");
-    }
-
-    #[test]
-    fn extract_user_part_is_case_insensitive() {
-        assert_eq!(extract_user_part("SIP:Bob@Example.com"), extract_user_part("sip:bob@example.com"));
-    }
-
-    #[test]
-    fn account_codecs_honors_configured_order() {
-        let mut acc = SipAccount::default();
-        acc.codec_order = vec!["pcma".into(), "pcmu".into()];
-        assert_eq!(account_codecs(&acc), vec![AudioCodec::Pcma, AudioCodec::Pcmu]);
-    }
-
-    #[test]
-    fn account_codecs_falls_back_when_list_is_empty() {
-        let mut acc = SipAccount::default();
-        acc.codec_order = vec![];
-        assert_eq!(account_codecs(&acc).len(), sdp::ALL_CODECS.len());
-    }
-
-    #[test]
-    fn account_codecs_skips_unrecognized_entries() {
-        let mut acc = SipAccount::default();
-        acc.codec_order = vec!["opus".into(), "carrier-pigeon".into()];
-        assert_eq!(account_codecs(&acc), vec![AudioCodec::Opus]);
-    }
-}
+#[path = "../tests/unit/helpers.rs"]
+mod tests;

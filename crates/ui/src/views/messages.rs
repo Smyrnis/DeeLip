@@ -2,7 +2,7 @@ use deelip_config::{Message, MessageDirection};
 use egui::{RichText, Ui};
 
 use crate::app::DeelipApp;
-use crate::helpers::{normalize_target, short_uri, unix_now};
+use crate::helpers::{list_row, normalize_target, short_uri, unix_now};
 
 impl DeelipApp {
     pub(crate) fn show_messages(&mut self, ui: &mut Ui) {
@@ -26,17 +26,20 @@ impl DeelipApp {
                         MessageDirection::Outbound => (egui_phosphor::regular::ARROW_UP_RIGHT, self.palette.accent),
                     };
                     let peer_uri = m.peer_uri.clone();
-                    let row = ui.horizontal(|ui| {
+                    let body = m.body.clone();
+                    let uri = m.peer_uri.clone();
+                    let direction = m.direction.clone();
+                    let palette = self.palette;
+                    list_row(ui, &palette, idx, |ui| {
                         ui.label(RichText::new(icon).color(color));
-                        ui.label(short_uri(&m.peer_uri));
+                        ui.label(short_uri(&uri));
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if m.direction == MessageDirection::Inbound && ui.small_button("Reply").clicked() {
+                            if direction == MessageDirection::Inbound && ui.small_button("Reply").clicked() {
                                 reply_target = Some(peer_uri.clone());
                             }
-                            ui.label(RichText::new(&m.body).color(self.palette.muted));
+                            ui.label(RichText::new(&body).color(palette.muted));
                         });
-                    }).response;
-                    ui.painter().hline(row.rect.x_range(), row.rect.bottom(), ui.visuals().widgets.noninteractive.bg_stroke);
+                    });
                 }
             });
             if let Some(peer) = reply_target {

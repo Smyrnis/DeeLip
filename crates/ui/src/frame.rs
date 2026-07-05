@@ -160,31 +160,6 @@ impl eframe::App for DeelipApp {
         theme::apply_style(ctx, &mut visuals, &self.palette);
         ctx.set_visuals(visuals);
 
-        // ── Status bar ───────────────────────────────────────────────────────
-        let on_hold = self.focused_call.is_none() && !self.calls.is_empty();
-        let new_voicemail: u32 = self.accounts.iter()
-            .filter_map(|a| a.mwi.as_ref())
-            .filter(|m| m.waiting)
-            .map(|m| m.new_messages)
-            .sum();
-        egui::TopBottomPanel::top("status").show(ctx, |ui| {
-            crate::helpers::status_bar(ui, &self.palette, &self.status_line, self.reg_ok, on_hold, new_voicemail);
-            if let Some(idx) = self.selected_account_idx() {
-                let dnd = self.accounts[idx].account.dnd;
-                let (icon, label, color) = if dnd {
-                    (egui_phosphor::regular::BELL_SLASH, "DND on", self.palette.danger)
-                } else {
-                    (egui_phosphor::regular::BELL, "DND off", self.palette.muted)
-                };
-                if ui.small_button(egui::RichText::new(format!("{icon}  {label}")).color(color))
-                    .on_hover_text("Toggle Do Not Disturb for the selected account")
-                    .clicked()
-                {
-                    self.toggle_dnd(idx);
-                }
-            }
-        });
-
         // ── Tab bar ──────────────────────────────────────────────────────────
         // Selected tab gets an accent-tinted background for free, via
         // `visuals.selection.bg_fill` (set to `palette.accent` in
@@ -207,13 +182,6 @@ impl eframe::App for DeelipApp {
                 ui.selectable_value(&mut self.tab, crate::app::Tab::Messages, messages_label);
                 ui.selectable_value(&mut self.tab, crate::app::Tab::Contacts, format!("{}  Contacts", egui_phosphor::regular::ADDRESS_BOOK));
                 ui.selectable_value(&mut self.tab, crate::app::Tab::Settings, format!("{}  Settings", egui_phosphor::regular::GEAR));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let icon = if self.config.dark_mode { egui_phosphor::regular::SUN } else { egui_phosphor::regular::MOON };
-                    if ui.button(icon).on_hover_text("Toggle light/dark theme").clicked() {
-                        self.config.dark_mode = !self.config.dark_mode;
-                        self.save_config_quietly();
-                    }
-                });
             });
         });
 
@@ -224,6 +192,47 @@ impl eframe::App for DeelipApp {
         if self.tab == crate::app::Tab::Messages && self.unseen_messages > 0 {
             self.unseen_messages = 0;
         }
+
+        // ── Status bar (bottom, MicroSIP-style) ───────────────────────────────
+        // One row: connection dot + status text on the left; voicemail badge,
+        // DND toggle, and the selected account's label on the right, in that
+        // left-to-right order (added right-to-left so the account label lands
+        // pinned to the far right edge, mirroring MicroSIP's "● Online ...
+        // extension" bar).
+        let on_hold = self.focused_call.is_none() && !self.calls.is_empty();
+        let new_voicemail: u32 = self.accounts.iter()
+            .filter_map(|a| a.mwi.as_ref())
+            .filter(|m| m.waiting)
+            .map(|m| m.new_messages)
+            .sum();
+        egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                crate::helpers::status_bar(ui, &self.palette, &self.status_line, self.reg_ok, on_hold);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if let Some(idx) = self.selected_account_idx() {
+                        ui.label(egui::RichText::new(&self.accounts[idx].label).color(self.palette.muted).small());
+                        ui.add_space(8.0);
+                        let dnd = self.accounts[idx].account.dnd;
+                        let (icon, color) = if dnd {
+                            (egui_phosphor::regular::BELL_SLASH, self.palette.danger)
+                        } else {
+                            (egui_phosphor::regular::BELL, self.palette.muted)
+                        };
+                        if ui.small_button(egui::RichText::new(icon).color(color))
+                            .on_hover_text(if dnd { "DND on -- click to disable" } else { "DND off -- click to enable" })
+                            .clicked()
+                        {
+                            self.toggle_dnd(idx);
+                        }
+                    }
+                    if new_voicemail > 0 {
+                        ui.add_space(8.0);
+                        ui.label(egui::RichText::new(format!("{} {new_voicemail}", egui_phosphor::regular::VOICEMAIL))
+                            .color(self.palette.accent));
+                    }
+                });
+            });
+        });
 
         egui::CentralPanel::default().show(ctx, |ui| {
             match self.tab {

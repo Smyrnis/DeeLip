@@ -23,6 +23,11 @@ pub struct Dialog {
     /// least Asterisk/pjproject, which just keeps waiting for a real
     /// response until its own timeout fires.
     pub remote_via:     String,
+    /// The branch we put on our own most recent outgoing INVITE (initial or
+    /// re-INVITE). A non-2xx response's ACK must reuse this exact branch
+    /// (RFC 3261 §17.1.1.3) -- only a 2xx ACK is a new transaction with its
+    /// own fresh branch.
+    pub invite_branch:  String,
     pub local_cseq:     u32,
     pub remote_cseq:    Option<u32>,
     pub state:          DialogState,
@@ -47,6 +52,7 @@ impl Dialog {
             remote_uri:     to_uri,
             remote_contact: None,
             remote_via:     String::new(),
+            invite_branch:  String::new(),
             local_cseq:     1,
             remote_cseq:    None,
             state:          DialogState::Calling,
@@ -74,6 +80,7 @@ impl Dialog {
             remote_uri:     from_uri,
             remote_contact: None,
             remote_via,
+            invite_branch:  String::new(),
             local_cseq:     0,
             remote_cseq:    Some(remote_cseq),
             state:          DialogState::Calling,

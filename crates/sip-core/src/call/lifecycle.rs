@@ -17,10 +17,12 @@ impl SipStack {
     pub(crate) async fn initiate_call(&mut self, to: &str, local_sdp: &str) {
         let call_id  = new_call_id(&self.local_ip);
         let from_tag = new_tag();
+        let branch   = new_branch();
         let mut dialog = Dialog::new_outgoing(call_id.clone(), from_tag.clone(), to.to_string());
-        dialog.local_sdp = Some(local_sdp.to_string());
+        dialog.local_sdp     = Some(local_sdp.to_string());
+        dialog.invite_branch = branch.clone();
 
-        let msg = self.build_invite(&dialog.call_id, &dialog.local_tag, dialog.local_cseq, to, local_sdp, None);
+        let msg = self.build_invite(&dialog.call_id, &dialog.local_tag, dialog.local_cseq, to, local_sdp, None, &branch);
         debug!("→ INVITE {to}");
         if let Err(e) = self.transport.send(msg.as_bytes(), self.server_addr).await {
             error!("Failed to send INVITE: {e}");
@@ -29,6 +31,9 @@ impl SipStack {
         self.dialogs.insert(call_id, dialog);
     }
 
+    #[allow(clippy::too_many_arguments)] // each param is a distinct, meaningfully-named
+                                          // piece of an INVITE's identity; bundling them
+                                          // into a struct wouldn't reduce real complexity here.
     fn build_invite(
         &self,
         call_id:  &str,
@@ -37,8 +42,8 @@ impl SipStack {
         to:       &str,
         sdp:      &str,
         auth:     Option<&str>,
+        branch:   &str,
     ) -> String {
-        let branch     = new_branch();
         let server     = &self.account.server;
         let username   = &self.account.username;
         let adv_ip     = &self.advertised_ip;
@@ -324,12 +329,14 @@ impl SipStack {
             Act::Nothing  => {}
             Act::Ringing  => { let _ = self.event_tx.send(SipEvent::CallRinging { call_id }); }
             Act::Connected { call_id, remote_sdp, ack_cid, ack_from_tag, ack_to_uri, ack_to_tag, ack_cseq } => {
-                let ack = self.build_ack(&ack_cid, &ack_from_tag, &ack_to_uri, ack_to_tag.as_deref(), ack_cseq);
+                // A 2xx ACK is a new transaction in its own right (RFC 3261
+                // §13.2.2.4) -- unlike a non-2xx ACK, it gets a fresh branch.
+                let ack = self.build_ack(&ack_cid, &ack_from_tag, &ack_to_uri, ack_to_tag.as_deref(), ack_cseq, &new_branch());
                 let _ = self.transport.send(ack.as_bytes(), self.server_addr).await;
                 let _ = self.event_tx.send(SipEvent::CallConnected { call_id, remote_sdp });
             }
             Act::ReInviteAck { call_id, hold, ack_cid, ack_from_tag, ack_to_uri, ack_to_tag, ack_cseq } => {
-                let ack = self.build_ack(&ack_cid, &ack_from_tag, &ack_to_uri, ack_to_tag.as_deref(), ack_cseq);
+                let ack = self.build_ack(&ack_cid, &ack_from_tag, &ack_to_uri, ack_to_tag.as_deref(), ack_cseq, &new_branch());
                 let _ = self.transport.send(ack.as_bytes(), self.server_addr).await;
                 let ev = if hold {
                     SipEvent::CallHeld { call_id }
@@ -350,7 +357,11 @@ impl SipStack {
                 call_id, to_uri, local_sdp, challenge_raw,
                 ack_cid, ack_from_tag, ack_to_uri, ack_to_tag, ack_cseq,
             } => {
-                let ack = self.build_ack(&ack_cid, &ack_from_tag, &ack_to_uri, ack_to_tag.as_deref(), ack_cseq);
+                // ACK to a non-2xx response must reuse the *original*
+                // INVITE's branch (RFC 3261 §17.1.1.3), unlike a 2xx ACK
+                // which is a new transaction with its own fresh branch.
+                let Some(invite_branch) = self.dialogs.get(&call_id).map(|d| d.invite_branch.clone()) else { return };
+                let ack = self.build_ack(&ack_cid, &ack_from_tag, &ack_to_uri, ack_to_tag.as_deref(), ack_cseq, &invite_branch);
                 let _ = self.transport.send(ack.as_bytes(), self.server_addr).await;
 
                 let Some(auth) = build_challenge_response(
@@ -364,10 +375,12 @@ impl SipStack {
                 };
 
                 let Some(dialog) = self.dialogs.get_mut(&call_id) else { return; };
-                let cseq = dialog.next_local_cseq();
+                let cseq   = dialog.next_local_cseq();
+                let branch = new_branch();
+                dialog.invite_branch = branch.clone();
                 let dialog_call_id  = dialog.call_id.clone();
                 let dialog_from_tag = dialog.local_tag.clone();
-                let msg = self.build_invite(&dialog_call_id, &dialog_from_tag, cseq, &to_uri, &local_sdp, Some(&auth));
+                let msg = self.build_invite(&dialog_call_id, &dialog_from_tag, cseq, &to_uri, &local_sdp, Some(&auth), &branch);
                 debug!("→ INVITE {to_uri} (authenticated)");
                 let _ = self.transport.send(msg.as_bytes(), self.server_addr).await;
             }

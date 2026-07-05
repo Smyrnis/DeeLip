@@ -2,7 +2,7 @@ use deelip_config::{CallDirection, CallStatus};
 use egui::{RichText, Ui};
 
 use crate::app::{DeelipApp, Tab};
-use crate::helpers::{csv_escape, extract_user_part, format_age, format_duration, short_uri, status_filter_label};
+use crate::helpers::{csv_escape, extract_user_part, format_age, format_duration, list_row, short_uri, status_filter_label};
 
 impl DeelipApp {
     pub(crate) fn show_history(&mut self, ui: &mut Ui, _ctx: &egui::Context) {
@@ -79,7 +79,7 @@ impl DeelipApp {
                 + ui.spacing().item_spacing.y;
             let filtered = &self.history_filtered;
             let records  = &self.history.records;
-            egui::ScrollArea::vertical().show_rows(ui, row_height, filtered.len(), |ui, row_range| {
+            egui::ScrollArea::vertical().auto_shrink([false, false]).show_rows(ui, row_height, filtered.len(), |ui, row_range| {
                 for idx in row_range {
                     let record = &records[filtered[idx]];
                     let (dir_icon, dir_color) = match record.direction {
@@ -93,7 +93,8 @@ impl DeelipApp {
                         CallStatus::Failed   => "Failed".into(),
                     };
 
-                    let row = ui.horizontal(|ui| {
+                    let palette = self.palette;
+                    list_row(ui, &palette, idx, |ui| {
                         ui.label(RichText::new(dir_icon).color(dir_color));
                         ui.label(short_uri(&record.remote_uri));
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -103,11 +104,10 @@ impl DeelipApp {
                             if ui.small_button("Block").clicked() {
                                 block_target = Some(record.remote_uri.clone());
                             }
-                            ui.label(RichText::new(&status_str).color(self.palette.muted));
-                            ui.label(RichText::new(format_age(record.timestamp)).color(self.palette.muted));
+                            ui.label(RichText::new(&status_str).color(palette.muted));
+                            ui.label(RichText::new(format_age(record.timestamp)).color(palette.muted));
                         });
-                    }).response;
-                    ui.painter().hline(row.rect.x_range(), row.rect.bottom(), ui.visuals().widgets.noninteractive.bg_stroke);
+                    });
                 }
             });
         }

@@ -18,6 +18,14 @@ pub struct Palette {
     pub warn: Color32,
     /// Secondary/timestamp/disabled text.
     pub muted: Color32,
+    /// Flat "card"/section surface -- one step off the window background,
+    /// used instead of `ui.group()`'s bordered box for a layered-not-boxed
+    /// look (dialer sections, in-call screen, list containers).
+    pub card: Color32,
+    /// Hovered list-row background (History/Contacts/Messages rows).
+    pub row_hover: Color32,
+    /// Thin separator line between list rows / sections.
+    pub divider: Color32,
 }
 
 impl Palette {
@@ -27,21 +35,27 @@ impl Palette {
 
     pub fn dark() -> Self {
         Self {
-            accent: Color32::from_rgb(0x4C, 0xC3, 0x8A),
-            info:   Color32::from_rgb(0x4C, 0x9E, 0xEB),
-            danger: Color32::from_rgb(0xE5, 0x48, 0x4D),
-            warn:   Color32::from_rgb(0xE8, 0xA3, 0x3D),
-            muted:  Color32::from_rgb(0x9A, 0xA0, 0xA6),
+            accent:    Color32::from_rgb(0x4C, 0xC3, 0x8A),
+            info:      Color32::from_rgb(0x4C, 0x9E, 0xEB),
+            danger:    Color32::from_rgb(0xE5, 0x48, 0x4D),
+            warn:      Color32::from_rgb(0xE8, 0xA3, 0x3D),
+            muted:     Color32::from_rgb(0x9A, 0xA0, 0xA6),
+            card:      Color32::from_rgb(0x26, 0x2A, 0x2F),
+            row_hover: Color32::from_rgb(0x32, 0x37, 0x3D),
+            divider:   Color32::from_rgb(0x38, 0x3D, 0x43),
         }
     }
 
     pub fn light() -> Self {
         Self {
-            accent: Color32::from_rgb(0x1F, 0x8B, 0x4C),
-            info:   Color32::from_rgb(0x24, 0x70, 0xC4),
-            danger: Color32::from_rgb(0xC7, 0x36, 0x2B),
-            warn:   Color32::from_rgb(0xE8, 0xA3, 0x3D),
-            muted:  Color32::from_rgb(0x6B, 0x72, 0x80),
+            accent:    Color32::from_rgb(0x1F, 0x8B, 0x4C),
+            info:      Color32::from_rgb(0x24, 0x70, 0xC4),
+            danger:    Color32::from_rgb(0xC7, 0x36, 0x2B),
+            warn:      Color32::from_rgb(0xE8, 0xA3, 0x3D),
+            muted:     Color32::from_rgb(0x6B, 0x72, 0x80),
+            card:      Color32::from_rgb(0xF2, 0xF3, 0xF5),
+            row_hover: Color32::from_rgb(0xE8, 0xEA, 0xED),
+            divider:   Color32::from_rgb(0xDF, 0xE1, 0xE4),
         }
     }
 }
@@ -54,7 +68,7 @@ pub fn apply_style(ctx: &egui::Context, visuals: &mut egui::Visuals, palette: &P
     visuals.selection.bg_fill = palette.accent;
     visuals.hyperlink_color = palette.accent;
 
-    let rounding = egui::Rounding::same(6.0);
+    let rounding = egui::Rounding::same(10.0);
     visuals.window_rounding = rounding;
     visuals.widgets.noninteractive.rounding = rounding;
     visuals.widgets.inactive.rounding = rounding;
@@ -66,4 +80,14 @@ pub fn apply_style(ctx: &egui::Context, visuals: &mut egui::Visuals, palette: &P
     style.spacing.item_spacing = egui::vec2(8.0, 6.0);
     style.spacing.button_padding = egui::vec2(10.0, 5.0);
     ctx.set_style(style);
+}
+
+/// A flat, borderless "card" surface (palette.card fill, rounded, padded) --
+/// the replacement for `ui.group()`'s bordered box everywhere this redesign
+/// wants a layered-not-boxed look.
+pub fn card_frame(palette: &Palette) -> egui::Frame {
+    egui::Frame::none()
+        .fill(palette.card)
+        .rounding(egui::Rounding::same(10.0))
+        .inner_margin(egui::Margin::same(10.0))
 }

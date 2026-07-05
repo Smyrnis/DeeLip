@@ -129,7 +129,7 @@ fn main() -> anyhow::Result<()> {
     let native_opts = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("DeeLip")
-            .with_inner_size([420.0, 500.0])
+            .with_inner_size([500.0, 500.0])
             .with_resizable(true),
         // NOTE: start-minimized is NOT implemented via `.with_visible()` here --
         // eframe's glutin backend unconditionally creates the window hidden and

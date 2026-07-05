@@ -64,6 +64,10 @@ pub struct DeelipApp {
     /// `transfer_target`/`showing_transfer` exactly.
     pub(crate) attended_target:  String,
     pub(crate) showing_attended: bool,
+    /// Whether the in-call screen's DTMF keypad is expanded -- hidden by
+    /// default so the focused-call screen stays uncluttered, matching the
+    /// redesign's "reveal on demand" treatment of secondary controls.
+    pub(crate) showing_dtmf: bool,
     /// Index into `calls` of the call being attended-transferred, set when
     /// its consultation call is dialed. `None` means no attended transfer
     /// is in progress. Cleared by `remove_call` whenever either leg ends,
@@ -301,6 +305,7 @@ impl DeelipApp {
             showing_transfer: false,
             attended_target:  String::new(),
             showing_attended: false,
+            showing_dtmf:     false,
             attended_transfer_original: None,
             in_conference: false,
             ringtone:            None,

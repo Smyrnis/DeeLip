@@ -7,6 +7,14 @@ members = [
     "crates/nat",
     "crates/ui",
 ]
+default-members = [
+    ".",
+    "crates/config",
+    "crates/sip-core",
+    "crates/media-engine",
+    "crates/nat",
+    "crates/ui",
+]
 resolver = "2"
 
 [workspace.package]

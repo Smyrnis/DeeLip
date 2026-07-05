@@ -2,7 +2,8 @@ use deelip_config::{DtmfMode, SipAccount, TransportProtocol};
 use egui::{RichText, Ui};
 
 use crate::app::DeelipApp;
-use crate::helpers::{account_label, codec_label};
+use crate::helpers::{account_label, codec_label, info_hint};
+use crate::theme;
 
 impl DeelipApp {
     pub(crate) fn show_settings(&mut self, ui: &mut Ui) {
@@ -15,22 +16,50 @@ impl DeelipApp {
 
         ui.add_space(8.0);
         egui::ScrollArea::vertical().show(ui, |ui| {
+            // ── Appearance (applies immediately) ─────────────────────────────
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Appearance").strong());
+                info_hint(ui, &palette, "Applies immediately — no restart needed.");
+            });
+            theme::card_frame(&palette).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    ui.label("Theme:");
+                    if ui.selectable_label(!self.config.dark_mode, format!("{}  Light", egui_phosphor::regular::SUN)).clicked() {
+                        self.config.dark_mode = false;
+                        self.save_config_quietly();
+                    }
+                    if ui.selectable_label(self.config.dark_mode, format!("{}  Dark", egui_phosphor::regular::MOON)).clicked() {
+                        self.config.dark_mode = true;
+                        self.save_config_quietly();
+                    }
+                });
+            });
+            ui.add_space(14.0);
+
             // ── Notifications & Ringtone (applies immediately) ──────────────
-            ui.label(RichText::new("Notifications & Ringtone").strong());
-            ui.group(|ui| {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Notifications & Ringtone").strong());
+                info_hint(ui, &palette, "Applies immediately — no restart needed.");
+            });
+            theme::card_frame(&palette).show(ui, |ui| {
+                ui.set_width(ui.available_width());
                 if ui.checkbox(&mut self.config.notifications_enabled, "Desktop notification on incoming calls").changed() {
                     self.save_config_quietly();
                 }
                 if ui.checkbox(&mut self.config.ringtone_enabled, "Ringtone (incoming) / ringback (outgoing)").changed() {
                     self.save_config_quietly();
                 }
-                ui.label(RichText::new("Applies immediately — no restart needed.").color(palette.muted).small());
             });
-            ui.add_space(10.0);
+            ui.add_space(14.0);
 
             // ── Blocklist ────────────────────────────────────────────────────
-            ui.label(RichText::new("Blocklist").strong());
-            ui.group(|ui| {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Blocklist").strong());
+                info_hint(ui, &palette, "Applies immediately — no restart needed.");
+            });
+            theme::card_frame(&palette).show(ui, |ui| {
+                ui.set_width(ui.available_width());
                 ui.horizontal(|ui| {
                     ui.add(egui::TextEdit::singleline(&mut self.blocklist_input)
                         .hint_text("number or sip:user@host")
@@ -63,29 +92,35 @@ impl DeelipApp {
                         self.save_config_quietly();
                     }
                 }
-                ui.label(RichText::new("Applies immediately — no restart needed.").color(palette.muted).small());
             });
-            ui.add_space(10.0);
+            ui.add_space(14.0);
 
             // ── Startup ───────────────────────────────────────────────────
             ui.label(RichText::new("Startup").strong());
-            ui.group(|ui| {
-                edited |= ui.checkbox(&mut self.config.start_minimized, "Start minimized (to tray)").changed();
-                ui.label(RichText::new("Restart to apply.").color(palette.muted).small());
+            theme::card_frame(&palette).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    edited |= ui.checkbox(&mut self.config.start_minimized, "Start minimized (to tray)").changed();
+                    info_hint(ui, &palette, "Restart to apply.");
+                });
                 ui.add_space(4.0);
-                if ui.checkbox(&mut self.autostart_enabled, "Start DeeLip on login").changed() {
-                    if let Err(e) = deelip_config::set_autostart(self.autostart_enabled) {
-                        tracing::error!("Failed to update autostart: {e}");
-                        self.autostart_enabled = deelip_config::is_autostart_enabled();
+                ui.horizontal(|ui| {
+                    if ui.checkbox(&mut self.autostart_enabled, "Start DeeLip on login").changed() {
+                        if let Err(e) = deelip_config::set_autostart(self.autostart_enabled) {
+                            tracing::error!("Failed to update autostart: {e}");
+                            self.autostart_enabled = deelip_config::is_autostart_enabled();
+                        }
                     }
-                }
-                ui.label(RichText::new("Applies immediately — no restart needed.").color(palette.muted).small());
+                    info_hint(ui, &palette, "Applies immediately — no restart needed.");
+                });
             });
-            ui.add_space(10.0);
+            ui.add_space(14.0);
 
             // ── Account ───────────────────────────────────────────────────
             ui.horizontal(|ui| {
                 ui.label(RichText::new("Accounts").strong());
+                info_hint(ui, &palette, "Each enabled account registers independently on its own \
+                    local SIP port (base port below, incrementing by one per additional account).");
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let can_remove = self.config.accounts.len() > 1;
                     if ui.add_enabled(can_remove, egui::Button::new("Remove")).clicked() {
@@ -115,7 +150,8 @@ impl DeelipApp {
                 });
             ui.add_space(6.0);
 
-            ui.group(|ui| {
+            theme::card_frame(&palette).show(ui, |ui| {
+                ui.set_width(ui.available_width());
                 let account = &mut self.config.accounts[self.edit_account_idx];
 
                 edited |= ui.checkbox(&mut account.enabled, "Enabled (register this account on next restart)").changed();
@@ -277,16 +313,13 @@ impl DeelipApp {
                     "Warning: no accounts are enabled — DeeLip won't be able to register on restart."
                 ).color(palette.warn));
             }
-            ui.label(RichText::new(
-                "Each enabled account registers independently on its own local SIP port \
-                 (base port below, incrementing by one per additional account)."
-            ).color(palette.muted).small());
 
-            ui.add_space(10.0);
+            ui.add_space(14.0);
 
             // ── Audio ─────────────────────────────────────────────────────
             ui.label(RichText::new("Audio").strong());
-            ui.group(|ui| {
+            theme::card_frame(&palette).show(ui, |ui| {
+                ui.set_width(ui.available_width());
                 let (input_names, output_names) = self.audio_device_cache
                     .get_or_insert_with(|| (list_device_names(true), list_device_names(false)))
                     .clone();
@@ -359,10 +392,12 @@ impl DeelipApp {
                             });
                         ui.end_row();
                     });
-                ui.label(RichText::new(
-                    "Independent of the Output device above -- lets the ringtone play on a \
-                     different device than call audio, e.g. ring on speakers, talk on a headset."
-                ).color(palette.muted).small());
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Ringing device").color(palette.muted).small());
+                    info_hint(ui, &palette, "Independent of the Output device above -- lets the \
+                        ringtone play on a different device than call audio, e.g. ring on \
+                        speakers, talk on a headset.");
+                });
 
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
@@ -386,17 +421,18 @@ impl DeelipApp {
 
                 ui.add_space(6.0);
                 edited |= ui.checkbox(&mut self.config.audio.echo_cancellation, "Echo cancellation").changed();
-                edited |= ui.checkbox(&mut self.config.recording_enabled, "Record calls").changed();
-                ui.label(RichText::new(
-                    "Recordings saved to ~/.config/deelip/recordings/"
-                ).color(palette.muted).small());
+                ui.horizontal(|ui| {
+                    edited |= ui.checkbox(&mut self.config.recording_enabled, "Record calls").changed();
+                    info_hint(ui, &palette, "Recordings saved to ~/.config/deelip/recordings/");
+                });
             });
 
-            ui.add_space(10.0);
+            ui.add_space(14.0);
 
             // ── Network ───────────────────────────────────────────────────
             ui.label(RichText::new("Network").strong());
-            ui.group(|ui| {
+            theme::card_frame(&palette).show(ui, |ui| {
+                ui.set_width(ui.available_width());
                 egui::Grid::new("settings_network_grid")
                     .num_columns(2)
                     .spacing([8.0, 4.0])
@@ -422,21 +458,25 @@ impl DeelipApp {
                         ui.end_row();
                     });
                 ui.add_space(6.0);
-                edited |= ui.checkbox(&mut self.config.ice_enabled,
-                    "Use ICE (RFC 8445) for NAT traversal, falling back to the above if it fails"
-                ).changed();
-                ui.label(RichText::new(
-                    "Takes effect on the next call placed or answered, not calls already in progress."
-                ).color(palette.muted).small());
+                ui.horizontal(|ui| {
+                    edited |= ui.checkbox(&mut self.config.ice_enabled,
+                        "Use ICE (RFC 8445) for NAT traversal, falling back to the above if it fails"
+                    ).changed();
+                    info_hint(ui, &palette, "Takes effect on the next call placed or answered, \
+                        not calls already in progress.");
+                });
             });
 
-            ui.add_space(10.0);
-            ui.group(|ui| {
+            ui.add_space(14.0);
+            ui.label(RichText::new("Global Hotkeys").strong());
+            theme::card_frame(&palette).show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                ui.label("Global Hotkeys");
-                edited |= ui.checkbox(&mut self.config.global_hotkeys_enabled,
-                    "Enable system-wide Answer/Hangup/Mute hotkeys (Linux: X11 only)"
-                ).changed();
+                ui.horizontal(|ui| {
+                    edited |= ui.checkbox(&mut self.config.global_hotkeys_enabled,
+                        "Enable system-wide Answer/Hangup/Mute hotkeys (Linux: X11 only)"
+                    ).changed();
+                    info_hint(ui, &palette, "Format: \"Ctrl+Alt+A\" style. Restart required to apply.");
+                });
                 if self.config.global_hotkeys_enabled {
                     egui::Grid::new("hotkeys_grid").num_columns(2).show(ui, |ui| {
                         ui.label("Answer:");
@@ -449,13 +489,10 @@ impl DeelipApp {
                         edited |= ui.text_edit_singleline(&mut self.config.hotkey_mute).changed();
                         ui.end_row();
                     });
-                    ui.label(RichText::new(
-                        "Format: \"Ctrl+Alt+A\" style. Restart required to apply."
-                    ).color(palette.muted).small());
                 }
             });
 
-            ui.add_space(10.0);
+            ui.add_space(14.0);
 
             if ui.button("Save").clicked() {
                 match self.config.save(&self.db) {

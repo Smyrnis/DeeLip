@@ -406,8 +406,8 @@ impl SipStack {
         to_uri:   &str,
         to_tag:   Option<&str>,
         cseq:     u32,
+        branch:   &str,
     ) -> String {
-        let branch      = crate::wire::util::new_branch();
         let server      = &self.account.server;
         let username    = &self.account.username;
         let adv_ip      = &self.advertised_ip;

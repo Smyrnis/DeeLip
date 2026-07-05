@@ -3,6 +3,7 @@ use deelip_sip::PresenceState;
 use egui::{RichText, Ui};
 
 use crate::app::{DeelipApp, Tab};
+use crate::helpers::list_row;
 
 impl DeelipApp {
     pub(crate) fn show_contacts(&mut self, ui: &mut Ui, _ctx: &egui::Context) {
@@ -48,15 +49,17 @@ impl DeelipApp {
                     ui.label(RichText::new("No contacts found.").color(self.palette.muted));
                 }
                 for (idx, name, uri, watch_presence) in &results {
-                    ui.horizontal(|ui| {
+                    let palette = self.palette;
+                    let presence = self.presence.get(uri).copied();
+                    list_row(ui, &palette, *idx, |ui| {
                         ui.label(name);
                         if *watch_presence {
-                            let color = match self.presence.get(uri) {
-                                Some(PresenceState::Available) => self.palette.accent,
-                                _ => self.palette.muted,
+                            let color = match presence {
+                                Some(PresenceState::Available) => palette.accent,
+                                _ => palette.muted,
                             };
                             ui.label(RichText::new("●").color(color))
-                                .on_hover_text(match self.presence.get(uri) {
+                                .on_hover_text(match presence {
                                     Some(PresenceState::Available) => "Available",
                                     Some(PresenceState::Offline) => "Offline",
                                     _ => "Unknown",
@@ -66,16 +69,15 @@ impl DeelipApp {
                             if ui.small_button(egui_phosphor::regular::PHONE).clicked() {
                                 call_target = Some(uri.clone());
                             }
-                            if ui.small_button(RichText::new(egui_phosphor::regular::TRASH).color(self.palette.danger)).clicked() {
+                            if ui.small_button(RichText::new(egui_phosphor::regular::TRASH).color(palette.danger)).clicked() {
                                 delete_idx = Some(*idx);
                             }
                             if ui.small_button(egui_phosphor::regular::PENCIL_SIMPLE).clicked() {
                                 edit_idx = Some(*idx);
                             }
-                            ui.label(RichText::new(uri).color(self.palette.muted));
+                            ui.label(RichText::new(uri).color(palette.muted));
                         });
                     });
-                    ui.separator();
                 }
             });
 

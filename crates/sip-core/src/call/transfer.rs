@@ -128,22 +128,19 @@ impl SipStack {
                 .as_deref()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(self.server_addr);
-            let branch     = new_branch();
-            let local_ip   = &self.local_ip;
-            let local_port = self.local_port;
             let username   = &self.account.username;
             let server     = &self.account.server;
             let display    = self.account.display_name.as_deref().unwrap_or(username);
             let local_tag  = &dialog.local_tag;
             let remote_uri = &dialog.remote_uri;
+            let remote_via = &dialog.remote_via;
             let from_tag   = dialog.remote_tag.as_deref()
                 .map(|t| format!(";tag={t}")).unwrap_or_default();
             let cseq_n = dialog.remote_cseq.unwrap_or(1);
-            let via_proto = self.via_proto();
 
             let redirect = format!(
                 "SIP/2.0 302 Moved Temporarily\r\n\
-                 Via: SIP/2.0/{via_proto} {local_ip}:{local_port};branch={branch}\r\n\
+                 Via: {remote_via}\r\n\
                  To: \"{display}\" <sip:{username}@{server}>;tag={local_tag}\r\n\
                  From: <{remote_uri}>{from_tag}\r\n\
                  Call-ID: {call_id}\r\n\
