@@ -294,6 +294,20 @@ pub struct AppConfig {
     pub hotkey_hangup: String,
     #[serde(default = "default_hotkey_mute")]
     pub hotkey_mute: String,
+
+    /// If true, a new version found at startup (see `deelip-updater`) is
+    /// downloaded and installed automatically -- only takes effect if the
+    /// running binary is a self-updatable (tar.gz/`install.sh`) install;
+    /// a system `.deb`/`.rpm` package always just shows the notification
+    /// regardless of this toggle. Off by default (opt-in, like recording/
+    /// ICE/global hotkeys above) -- applies immediately, no restart needed.
+    #[serde(default)]
+    pub auto_update_enabled: bool,
+    /// Version the user explicitly dismissed ("Skip this version") in the
+    /// update popup, so it doesn't keep nagging about the same release
+    /// every launch. Cleared implicitly once a newer version supersedes it.
+    #[serde(default)]
+    pub update_skip_version: Option<String>,
 }
 
 fn default_hotkey_answer() -> String { "Ctrl+Alt+A".into() }
@@ -321,6 +335,8 @@ impl Default for AppConfig {
             hotkey_answer: default_hotkey_answer(),
             hotkey_hangup: default_hotkey_hangup(),
             hotkey_mute:   default_hotkey_mute(),
+            auto_update_enabled: false,
+            update_skip_version: None,
         }
     }
 }
@@ -394,6 +410,8 @@ impl AppConfig {
             hotkey_answer: get("hotkey_answer").unwrap_or_else(default_hotkey_answer),
             hotkey_hangup: get("hotkey_hangup").unwrap_or_else(default_hotkey_hangup),
             hotkey_mute: get("hotkey_mute").unwrap_or_else(default_hotkey_mute),
+            auto_update_enabled: get_bool("auto_update_enabled", false),
+            update_skip_version: get("update_skip_version"),
         })
     }
 
@@ -454,6 +472,8 @@ impl AppConfig {
         db.set_setting("hotkey_answer", &self.hotkey_answer)?;
         db.set_setting("hotkey_hangup", &self.hotkey_hangup)?;
         db.set_setting("hotkey_mute", &self.hotkey_mute)?;
+        db.set_setting("auto_update_enabled", bool_to_sql(self.auto_update_enabled))?;
+        db.set_setting_opt("update_skip_version", &self.update_skip_version)?;
         Ok(())
     }
 }

@@ -4,10 +4,11 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-deelip-config = { workspace = true }
-deelip-sip    = { workspace = true }
-deelip-media  = { workspace = true }
-deelip-nat    = { workspace = true }
+deelip-config  = { workspace = true }
+deelip-sip     = { workspace = true }
+deelip-media   = { workspace = true }
+deelip-nat     = { workspace = true }
+deelip-updater = { workspace = true }
 eframe        = { workspace = true }
 egui          = { workspace = true }
 anyhow        = { workspace = true }

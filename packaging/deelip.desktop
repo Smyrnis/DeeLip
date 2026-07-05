@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=DeeLip
+Comment=Lightweight SIP softphone
+Exec=deelip
+Icon=deelip
+Terminal=false
+Categories=Network;Telephony;
+StartupNotify=true

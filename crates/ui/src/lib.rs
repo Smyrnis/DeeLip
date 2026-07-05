@@ -6,6 +6,7 @@ mod helpers;
 mod media;
 mod platform;
 mod theme;
+mod update;
 mod views;
 
 pub use app::DeelipApp;

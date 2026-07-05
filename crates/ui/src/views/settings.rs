@@ -116,6 +116,41 @@ impl DeelipApp {
             });
             ui.add_space(14.0);
 
+            // ── Updates (applies immediately) ────────────────────────────────
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Updates").strong());
+                info_hint(ui, &palette, "Applies immediately — no restart needed.");
+            });
+            theme::card_frame(&palette).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.label(RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION"))).color(palette.muted));
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    if ui.checkbox(&mut self.config.auto_update_enabled, "Automatically download and install updates").changed() {
+                        self.save_config_quietly();
+                    }
+                    info_hint(ui, &palette, "Only works for a portable (tar.gz/install.sh) install -- \
+                        .deb/.rpm installs are always updated through your package manager instead, \
+                        regardless of this toggle.");
+                });
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Check for updates now").clicked() {
+                        self.start_update_check();
+                    }
+                    let status = match &self.update_state {
+                        crate::update::UpdateState::Idle       => "Up to date (or not checked yet).".to_string(),
+                        crate::update::UpdateState::Checking    => "Checking…".to_string(),
+                        crate::update::UpdateState::Available(r) => format!("Update available: {}", r.version),
+                        crate::update::UpdateState::Downloading => "Downloading update…".to_string(),
+                        crate::update::UpdateState::Updated(v)  => format!("Updated to {v} -- restart to finish."),
+                        crate::update::UpdateState::Failed(e)   => format!("Check failed: {e}"),
+                    };
+                    ui.label(RichText::new(status).color(palette.muted).small());
+                });
+            });
+            ui.add_space(14.0);
+
             // ── Account ───────────────────────────────────────────────────
             ui.horizontal(|ui| {
                 ui.label(RichText::new("Accounts").strong());

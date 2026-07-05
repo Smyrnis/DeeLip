@@ -6,6 +6,7 @@ members = [
     "crates/media-engine",
     "crates/nat",
     "crates/ui",
+    "crates/updater",
 ]
 default-members = [
     ".",
@@ -14,6 +15,7 @@ default-members = [
     "crates/media-engine",
     "crates/nat",
     "crates/ui",
+    "crates/updater",
 ]
 resolver = "2"
 
@@ -24,64 +26,97 @@ authors = ["Smyrnis Giannis"]
 license = "MIT"
 
 [workspace.dependencies]
-anyhow             = "1"
-thiserror          = "1"
-tokio              = { version = "1", features = ["full"] }
-serde              = { version = "1", features = ["derive"] }
-toml               = "0.8"
-tracing            = "0.1"
+anyhow = "1"
+thiserror = "1"
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-dirs               = "5"
-md5                = { package = "md-5", version = "0.10" }
-serde_json         = "1"
-cpal               = "0.15"
-eframe             = "0.28"
-egui               = "0.28"
-audiopus           = "0.2"
-rustls              = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
-tokio-rustls        = { version = "0.26", default-features = false, features = ["ring", "logging", "tls12"] }
+dirs = "5"
+md5 = { package = "md-5", version = "0.10" }
+serde_json = "1"
+cpal = "0.15"
+eframe = "0.28"
+egui = "0.28"
+audiopus = "0.2"
+rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "logging", "tls12"] }
 rustls-native-certs = "0.8"
-webrtc-srtp         = "0.10"
-rand                = "0.8"
-base64              = "0.22"
-turn                = "0.17"
-webrtc-ice          = "0.17"
-webrtc-util         = "0.17"
-async-trait         = "0.1"
-fdaf-aec            = "0.1"
-tray-icon           = { version = "0.24", default-features = false, features = ["gtk"] }
-image               = "0.25"
-gtk                 = "0.18"
-hound               = "3"
-egui-phosphor       = "0.6"
-audio-codec         = "0.3"
-gsm-sys             = "0.0.2"
-oxideav-ilbc        = "0.0.7"
-oxideav-core        = "0.1"
-global-hotkey       = "0.8"
-rusqlite            = { version = "0.32", features = ["bundled"] }
+webrtc-srtp = "0.10"
+rand = "0.8"
+base64 = "0.22"
+turn = "0.17"
+webrtc-ice = "0.17"
+webrtc-util = "0.17"
+async-trait = "0.1"
+fdaf-aec = "0.1"
+tray-icon = { version = "0.24", default-features = false, features = ["gtk"] }
+image = "0.25"
+gtk = "0.18"
+hound = "3"
+egui-phosphor = "0.6"
+audio-codec = "0.3"
+gsm-sys = "0.0.2"
+oxideav-ilbc = "0.0.7"
+oxideav-core = "0.1"
+global-hotkey = "0.8"
+rusqlite = { version = "0.32", features = ["bundled"] }
+ureq = "3"
+semver = "1"
+flate2 = "1"
+tar = "0.4"
 
-deelip-config = { path = "crates/config" }
-deelip-sip    = { path = "crates/sip-core" }
-deelip-media  = { path = "crates/media-engine" }
-deelip-nat    = { path = "crates/nat" }
-deelip-ui     = { path = "crates/ui" }
+deelip-config  = { path = "crates/config" }
+deelip-sip     = { path = "crates/sip-core" }
+deelip-media   = { path = "crates/media-engine" }
+deelip-nat     = { path = "crates/nat" }
+deelip-ui      = { path = "crates/ui" }
+deelip-updater = { path = "crates/updater" }
 
 [package]
-name    = "deelip"
+name = "deelip"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+description = "Lightweight SIP softphone for Linux"
 
 [dependencies]
-deelip-config      = { workspace = true }
-deelip-sip         = { workspace = true }
-deelip-ui          = { workspace = true }
-deelip-nat         = { workspace = true }
-tokio              = { workspace = true }
-tracing            = { workspace = true }
+deelip-config = { workspace = true }
+deelip-sip = { workspace = true }
+deelip-ui = { workspace = true }
+deelip-nat = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-anyhow             = { workspace = true }
-eframe             = { workspace = true }
-egui               = { workspace = true }
+anyhow = { workspace = true }
+eframe = { workspace = true }
+egui = { workspace = true }
+
+[profile.release]
+strip = true
+
+# Packaging metadata consumed by `cargo deb` / `cargo generate-rpm`
+# (see .github/workflows/package.yml). Asset paths are relative to this
+# Cargo.toml's directory (the repo root).
+[package.metadata.deb]
+maintainer = "Smyrnis Giannis <kodosaek@gmail.com>"
+copyright = "2026, Smyrnis Giannis"
+license-file = ["LICENSE", "4"]
+extended-description = "DeeLip is a lightweight, MicroSIP-inspired SIP softphone for Linux."
+section = "comm"
+priority = "optional"
+depends = "$auto"
+assets = [
+    ["target/release/deelip", "usr/bin/", "755"],
+    ["assets/icon.png", "usr/share/icons/hicolor/64x64/apps/deelip.png", "644"],
+    ["packaging/deelip.desktop", "usr/share/applications/deelip.desktop", "644"],
+]
+
+[package.metadata.generate-rpm]
+assets = [
+    { source = "target/release/deelip", dest = "/usr/bin/deelip", mode = "755" },
+    { source = "assets/icon.png", dest = "/usr/share/icons/hicolor/64x64/apps/deelip.png", mode = "644" },
+    { source = "packaging/deelip.desktop", dest = "/usr/share/applications/deelip.desktop", mode = "644" },
+]

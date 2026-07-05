@@ -176,6 +176,13 @@ pub struct DeelipApp {
     /// Last-known presence state per watched contact, keyed by `sip_uri`
     /// (presence isn't call-scoped, so it doesn't fit any per-call state).
     pub(crate) presence: HashMap<String, PresenceState>,
+
+    /// Startup GitHub-release check / auto-update state (see `update.rs`).
+    pub(crate) update_state: crate::update::UpdateState,
+    /// Channel the background check/download thread reports back on --
+    /// re-created (old one just dropped) each time a new one is spawned,
+    /// same one-shot-channel-per-async-op idiom as elsewhere in this app.
+    pub(crate) update_rx: Option<std::sync::mpsc::Receiver<crate::update::UpdateMsg>>,
 }
 
 /// A not-yet-answered incoming call.
@@ -287,7 +294,7 @@ impl DeelipApp {
             None
         };
 
-        Self {
+        let mut app = Self {
             accounts,
             rt,
             tab:              Tab::Dialer,
@@ -337,6 +344,11 @@ impl DeelipApp {
             new_contact:      Contact::default(),
             editing_contact_idx: None,
             presence: HashMap::new(),
-        }
+            update_state: crate::update::UpdateState::Idle,
+            update_rx: None,
+        };
+
+        app.start_update_check();
+        app
     }
 }

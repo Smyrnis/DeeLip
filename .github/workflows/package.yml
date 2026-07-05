@@ -1,0 +1,122 @@
+name: Package
+
+# Builds Linux distributables and, on a version tag, attaches them to a
+# GitHub Release:
+#   - .deb   (Debian / Ubuntu and derivatives)
+#   - .rpm   (Fedora / RHEL / openSUSE and derivatives)
+#   - .AppImage (portable, runs on most distros without installing anything)
+#   - .tar.gz   (plain binary + desktop file + icon, for anything else)
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: write
+
+jobs:
+  package-linux:
+    # Older glibc than "latest" for wider compatibility with distros that
+    # aren't on the newest release yet.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential cmake pkg-config \
+            libasound2-dev libudev-dev libssl-dev \
+            libgtk-3-dev libayatana-appindicator3-dev \
+            libx11-dev libxkbcommon-dev libxi-dev libxrandr-dev \
+            libxcb1-dev libxcb-render0-dev libxcb-shm0-dev \
+            libgl1-mesa-dev libegl1-mesa-dev libwayland-dev \
+            rpm
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-binstall
+        uses: cargo-bins/cargo-binstall@main
+
+      - name: Install packaging tools
+        run: cargo binstall --no-confirm cargo-deb cargo-generate-rpm
+
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=$(grep -m1 '^version' Cargo.toml | cut -d '"' -f2)" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build release binary
+        run: cargo build --release --locked -p deelip
+
+      - name: Build .deb
+        run: cargo deb --no-build -p deelip
+
+      - name: Build .rpm
+        run: cargo generate-rpm -p .
+
+      - name: Build tar.gz
+        run: |
+          stage="deelip-${{ steps.version.outputs.version }}-x86_64-linux"
+          mkdir -p "$stage/usr/bin" "$stage/usr/share/applications" "$stage/usr/share/icons/hicolor/64x64/apps"
+          cp target/release/deelip "$stage/usr/bin/"
+          cp packaging/deelip.desktop "$stage/usr/share/applications/"
+          cp assets/icon.png "$stage/usr/share/icons/hicolor/64x64/apps/deelip.png"
+          cp install.sh "$stage/"
+          tar czf "$stage.tar.gz" "$stage"
+
+      - name: Build AppImage
+        env:
+          ARCH: x86_64
+        run: |
+          wget -q -O linuxdeploy.AppImage https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          wget -q -O appimagetool.AppImage https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x linuxdeploy.AppImage appimagetool.AppImage
+
+          mkdir -p AppDir/usr/bin
+          cp target/release/deelip AppDir/usr/bin/
+          cp packaging/deelip.desktop AppDir/
+          cp assets/icon.png AppDir/deelip.png
+
+          # GitHub Actions runners have no FUSE, so extract-and-run instead
+          # of mounting the AppImages directly.
+          ./linuxdeploy.AppImage --appimage-extract-and-run \
+            --appdir AppDir \
+            --executable AppDir/usr/bin/deelip \
+            --desktop-file AppDir/deelip.desktop \
+            --icon-file AppDir/deelip.png \
+            --output appimage
+          ./appimagetool.AppImage --appimage-extract-and-run AppDir \
+            "deelip-${{ steps.version.outputs.version }}-x86_64.AppImage"
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p dist
+          cp target/debian/*.deb dist/
+          cp target/generate-rpm/*.rpm dist/
+          cp ./*.tar.gz dist/
+          cp ./*.AppImage dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deelip-linux-packages
+          path: dist/*
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

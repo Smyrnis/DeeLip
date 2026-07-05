@@ -154,6 +154,7 @@ impl eframe::App for DeelipApp {
         self.process_tray_events(ctx);
         self.process_hotkey_events();
         self.process_notification_actions();
+        self.process_update_events();
 
         self.palette = theme::Palette::for_theme(self.config.dark_mode);
         let mut visuals = if self.config.dark_mode { egui::Visuals::dark() } else { egui::Visuals::light() };
@@ -243,6 +244,8 @@ impl eframe::App for DeelipApp {
                 crate::app::Tab::Settings => self.show_settings(ui),
             }
         });
+
+        self.show_update_popup(ctx);
 
         ctx.request_repaint_after(Duration::from_millis(50));
     }
