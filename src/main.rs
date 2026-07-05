@@ -130,7 +130,8 @@ fn main() -> anyhow::Result<()> {
         viewport: egui::ViewportBuilder::default()
             .with_title("DeeLip")
             .with_inner_size([500.0, 500.0])
-            .with_resizable(true),
+            .with_resizable(true)
+            .with_icon(load_window_icon()),
         // NOTE: start-minimized is NOT implemented via `.with_visible()` here --
         // eframe's glutin backend unconditionally creates the window hidden and
         // force-shows it after the first rendered frame regardless of what
@@ -153,4 +154,16 @@ fn main() -> anyhow::Result<()> {
     .map_err(|e| anyhow::anyhow!("eframe error: {e}"))?;
 
     Ok(())
+}
+
+/// The window/taskbar icon (distinct from the tray icon -- see
+/// `deelip_ui::tray`'s own embedded asset). egui's own docs recommend a
+/// square image "e.g. 256x256 pixels", which is exactly what's embedded here.
+fn load_window_icon() -> egui::IconData {
+    const ICON_BYTES: &[u8] = include_bytes!("../assets/icon.png");
+    let img = image::load_from_memory(ICON_BYTES)
+        .expect("assets/icon.png must be a valid image")
+        .into_rgba8();
+    let (width, height) = img.dimensions();
+    egui::IconData { rgba: img.into_raw(), width, height }
 }

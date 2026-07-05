@@ -70,10 +70,10 @@ jobs:
       - name: Build tar.gz
         run: |
           stage="deelip-${{ steps.version.outputs.version }}-x86_64-linux"
-          mkdir -p "$stage/usr/bin" "$stage/usr/share/applications" "$stage/usr/share/icons/hicolor/64x64/apps"
+          mkdir -p "$stage/usr/bin" "$stage/usr/share/applications" "$stage/usr/share/icons/hicolor/256x256/apps"
           cp target/release/deelip "$stage/usr/bin/"
           cp packaging/deelip.desktop "$stage/usr/share/applications/"
-          cp assets/icon.png "$stage/usr/share/icons/hicolor/64x64/apps/deelip.png"
+          cp assets/icon.png "$stage/usr/share/icons/hicolor/256x256/apps/deelip.png"
           cp install.sh "$stage/"
           tar czf "$stage.tar.gz" "$stage"
 

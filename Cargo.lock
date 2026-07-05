@@ -1365,6 +1365,7 @@ dependencies = [
  "deelip-ui",
  "eframe",
  "egui",
+ "image",
  "tokio",
  "tracing",
  "tracing-subscriber",

@@ -93,6 +93,7 @@ tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
 eframe = { workspace = true }
 egui = { workspace = true }
+image = { workspace = true }
 
 [profile.release]
 strip = true
@@ -110,13 +111,13 @@ priority = "optional"
 depends = "$auto"
 assets = [
     ["target/release/deelip", "usr/bin/", "755"],
-    ["assets/icon.png", "usr/share/icons/hicolor/64x64/apps/deelip.png", "644"],
+    ["assets/icon.png", "usr/share/icons/hicolor/256x256/apps/deelip.png", "644"],
     ["packaging/deelip.desktop", "usr/share/applications/deelip.desktop", "644"],
 ]
 
 [package.metadata.generate-rpm]
 assets = [
     { source = "target/release/deelip", dest = "/usr/bin/deelip", mode = "755" },
-    { source = "assets/icon.png", dest = "/usr/share/icons/hicolor/64x64/apps/deelip.png", mode = "644" },
+    { source = "assets/icon.png", dest = "/usr/share/icons/hicolor/256x256/apps/deelip.png", mode = "644" },
     { source = "packaging/deelip.desktop", dest = "/usr/share/applications/deelip.desktop", mode = "644" },
 ]

@@ -145,7 +145,7 @@ else
     echo "==> Installing to $PREFIX"
     $SUDO install -Dm755 "$stage_dir/usr/bin/deelip" "$PREFIX/bin/deelip"
     $SUDO install -Dm644 "$stage_dir/usr/share/applications/deelip.desktop" "$PREFIX/share/applications/deelip.desktop"
-    $SUDO install -Dm644 "$stage_dir/usr/share/icons/hicolor/64x64/apps/deelip.png" "$PREFIX/share/icons/hicolor/64x64/apps/deelip.png"
+    $SUDO install -Dm644 "$stage_dir/usr/share/icons/hicolor/256x256/apps/deelip.png" "$PREFIX/share/icons/hicolor/256x256/apps/deelip.png"
 
     command -v update-desktop-database >/dev/null 2>&1 && $SUDO update-desktop-database "$PREFIX/share/applications" || true
     command -v gtk-update-icon-cache >/dev/null 2>&1 && $SUDO gtk-update-icon-cache -f "$PREFIX/share/icons/hicolor" >/dev/null 2>&1 || true

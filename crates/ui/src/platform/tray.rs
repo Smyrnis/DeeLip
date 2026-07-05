@@ -35,7 +35,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use tray_icon::menu::{Menu, MenuId, MenuItem};
 use tray_icon::{Icon, TrayIconBuilder};
 
-const ICON_BYTES: &[u8] = include_bytes!("../../../../assets/icon.png");
+const ICON_BYTES: &[u8] = include_bytes!("../../../../assets/Deelip-tray.png");
 
 /// Sends an updated missed-call/unread count to the tray icon's badge —
 /// `u32::MAX` is never sent; `0` clears the badge. Safe to call from any
