@@ -75,7 +75,9 @@ pub fn parse_subscription_state(header: &str) -> (&str, Option<u32>) {
     let mut param = None;
     for part in parts {
         let part = part.trim();
-        let value = part.strip_prefix("expires=").or_else(|| part.strip_prefix("retry-after="));
+        let value = part
+            .strip_prefix("expires=")
+            .or_else(|| part.strip_prefix("retry-after="));
         if let Some(v) = value {
             if let Ok(n) = v.trim_matches('"').parse::<u32>() {
                 param = Some(n);

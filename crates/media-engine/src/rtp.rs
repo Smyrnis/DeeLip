@@ -7,15 +7,21 @@ pub const RTP_HEADER_SIZE: usize = 12;
 #[derive(Debug, Clone)]
 pub struct RtpPacket {
     pub payload_type: u8,
-    pub sequence:     u16,
-    pub timestamp:    u32,
-    pub ssrc:         u32,
-    pub marker:       bool,
-    pub payload:      Vec<u8>,
+    pub sequence: u16,
+    pub timestamp: u32,
+    pub ssrc: u32,
+    pub marker: bool,
+    pub payload: Vec<u8>,
 }
 
 impl RtpPacket {
-    pub fn new(payload_type: u8, sequence: u16, timestamp: u32, ssrc: u32, payload: Vec<u8>) -> Self {
+    pub fn new(
+        payload_type: u8,
+        sequence: u16,
+        timestamp: u32,
+        ssrc: u32,
+        payload: Vec<u8>,
+    ) -> Self {
         Self {
             payload_type,
             sequence,
@@ -49,18 +55,22 @@ impl RtpPacket {
 
     /// Decode from wire bytes.  Returns `None` on malformed input.
     pub fn decode(data: &[u8]) -> Option<Self> {
-        if data.len() < RTP_HEADER_SIZE { return None; }
+        if data.len() < RTP_HEADER_SIZE {
+            return None;
+        }
 
         let version = (data[0] >> 6) & 0x03;
-        if version != RTP_VERSION { return None; }
+        if version != RTP_VERSION {
+            return None;
+        }
 
-        let cc      = (data[0] & 0x0F) as usize; // CSRC count
-        let x_bit   = (data[0] >> 4) & 0x01;
-        let marker  = (data[1] & 0x80) != 0;
-        let pt      = data[1] & 0x7F;
-        let seq     = u16::from_be_bytes([data[2], data[3]]);
-        let ts      = u32::from_be_bytes([data[4], data[5], data[6], data[7]]);
-        let ssrc    = u32::from_be_bytes([data[8], data[9], data[10], data[11]]);
+        let cc = (data[0] & 0x0F) as usize; // CSRC count
+        let x_bit = (data[0] >> 4) & 0x01;
+        let marker = (data[1] & 0x80) != 0;
+        let pt = data[1] & 0x7F;
+        let seq = u16::from_be_bytes([data[2], data[3]]);
+        let ts = u32::from_be_bytes([data[4], data[5], data[6], data[7]]);
+        let ssrc = u32::from_be_bytes([data[8], data[9], data[10], data[11]]);
 
         // Skip CSRC list
         let mut offset = RTP_HEADER_SIZE + cc * 4;
@@ -69,15 +79,17 @@ impl RtpPacket {
             let ext_len = u16::from_be_bytes([data[offset + 2], data[offset + 3]]) as usize;
             offset += 4 + ext_len * 4;
         }
-        if offset > data.len() { return None; }
+        if offset > data.len() {
+            return None;
+        }
 
         Some(RtpPacket {
             payload_type: pt,
-            sequence:     seq,
-            timestamp:    ts,
+            sequence: seq,
+            timestamp: ts,
             ssrc,
             marker,
-            payload:      data[offset..].to_vec(),
+            payload: data[offset..].to_vec(),
         })
     }
 }
@@ -86,9 +98,9 @@ impl RtpPacket {
 
 pub struct RtpSender {
     pub payload_type: u8,
-    pub ssrc:         u32,
-    pub sequence:     u16,
-    pub timestamp:    u32,
+    pub ssrc: u32,
+    pub sequence: u16,
+    pub timestamp: u32,
     /// Timestamp increment per 20ms frame at 8000 Hz = 160 samples.
     pub ts_increment: u32,
 }
@@ -121,7 +133,7 @@ impl RtpSender {
             self.ssrc,
             payload,
         );
-        self.sequence  = self.sequence.wrapping_add(1);
+        self.sequence = self.sequence.wrapping_add(1);
         self.timestamp = self.timestamp.wrapping_add(self.ts_increment);
         pkt
     }

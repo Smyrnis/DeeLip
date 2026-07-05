@@ -11,9 +11,9 @@ pub enum MessageDirection {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
-    pub peer_uri:  String,
+    pub peer_uri: String,
     pub direction: MessageDirection,
-    pub body:      String,
+    pub body: String,
     /// Unix timestamp (seconds) when the message was sent/received.
     pub timestamp: u64,
 }
@@ -25,14 +25,14 @@ pub struct MessageLog {
 
 fn direction_to_str(d: &MessageDirection) -> &'static str {
     match d {
-        MessageDirection::Inbound  => "inbound",
+        MessageDirection::Inbound => "inbound",
         MessageDirection::Outbound => "outbound",
     }
 }
 fn direction_from_str(s: &str) -> MessageDirection {
     match s {
         "outbound" => MessageDirection::Outbound,
-        _          => MessageDirection::Inbound,
+        _ => MessageDirection::Inbound,
     }
 }
 
@@ -58,15 +58,24 @@ impl MessageLog {
     }
 
     pub fn save(&self, db: &Db) -> anyhow::Result<()> {
-        db.conn.execute("DELETE FROM messages", []).context("Clearing messages table")?;
+        db.conn
+            .execute("DELETE FROM messages", [])
+            .context("Clearing messages table")?;
         // `messages` is newest-first (see `push`); capped at 200 there too,
         // so no separate truncation needed here.
         for m in &self.messages {
-            db.conn.execute(
-                "INSERT INTO messages (peer_uri, direction, body, timestamp) \
+            db.conn
+                .execute(
+                    "INSERT INTO messages (peer_uri, direction, body, timestamp) \
                  VALUES (?1, ?2, ?3, ?4)",
-                rusqlite::params![m.peer_uri, direction_to_str(&m.direction), m.body, m.timestamp],
-            ).context("Inserting message")?;
+                    rusqlite::params![
+                        m.peer_uri,
+                        direction_to_str(&m.direction),
+                        m.body,
+                        m.timestamp
+                    ],
+                )
+                .context("Inserting message")?;
         }
         Ok(())
     }

@@ -26,7 +26,7 @@ fn transport_from_str(s: &str) -> TransportProtocol {
     match s {
         "tcp" => TransportProtocol::Tcp,
         "tls" => TransportProtocol::Tls,
-        _     => TransportProtocol::Udp,
+        _ => TransportProtocol::Udp,
     }
 }
 
@@ -56,14 +56,14 @@ fn dtmf_mode_to_str(m: DtmfMode) -> &'static str {
     match m {
         DtmfMode::Rfc2833 => "rfc2833",
         DtmfMode::SipInfo => "sipinfo",
-        DtmfMode::Inband  => "inband",
+        DtmfMode::Inband => "inband",
     }
 }
 fn dtmf_mode_from_str(s: &str) -> DtmfMode {
     match s {
         "sipinfo" => DtmfMode::SipInfo,
-        "inband"  => DtmfMode::Inband,
-        _         => DtmfMode::Rfc2833,
+        "inband" => DtmfMode::Inband,
+        _ => DtmfMode::Rfc2833,
     }
 }
 
@@ -134,10 +134,18 @@ pub struct SipAccount {
     pub mailbox: Option<String>,
 }
 
-fn default_sip_port() -> u16 { 5060 }
-fn default_true() -> bool { true }
-fn default_no_answer_timeout() -> u32 { 20 }
-fn default_auto_answer_secs() -> u32 { 3 }
+fn default_sip_port() -> u16 {
+    5060
+}
+fn default_true() -> bool {
+    true
+}
+fn default_no_answer_timeout() -> u32 {
+    20
+}
+fn default_auto_answer_secs() -> u32 {
+    3
+}
 fn default_codec_order() -> Vec<String> {
     ["opus", "g722", "pcmu", "pcma"].map(String::from).to_vec()
 }
@@ -145,13 +153,13 @@ fn default_codec_order() -> Vec<String> {
 impl Default for SipAccount {
     fn default() -> Self {
         Self {
-            username:     "your_username".into(),
-            password:     "your_password".into(),
-            server:       "your.sip.server".into(),
-            port:         5060,
+            username: "your_username".into(),
+            password: "your_password".into(),
+            server: "your.sip.server".into(),
+            port: 5060,
             display_name: Some("Your Name".into()),
-            transport:    TransportProtocol::Udp,
-            enabled:      true,
+            transport: TransportProtocol::Udp,
+            enabled: true,
             tls_insecure_skip_verify: false,
             no_answer_forward: None,
             no_answer_timeout_secs: default_no_answer_timeout(),
@@ -173,7 +181,7 @@ impl Default for SipAccount {
 pub struct AudioConfig {
     /// cpal device name to capture from; `None` uses the system default.
     /// Falls back to the default with a warning if the named device isn't found.
-    pub input_device:  Option<String>,
+    pub input_device: Option<String>,
     /// cpal device name to play back to; `None` uses the system default.
     /// Falls back to the default with a warning if the named device isn't found.
     pub output_device: Option<String>,
@@ -202,15 +210,19 @@ pub struct AudioConfig {
     pub ringtone_file: Option<String>,
 }
 
-fn default_sample_rate() -> u32 { 48_000 }
-fn default_frame_ms()    -> u32 { 20 }
+fn default_sample_rate() -> u32 {
+    48_000
+}
+fn default_frame_ms() -> u32 {
+    20
+}
 
 impl Default for AudioConfig {
     fn default() -> Self {
         Self {
-            input_device:  None,
+            input_device: None,
             output_device: None,
-            sample_rate:   default_sample_rate(),
+            sample_rate: default_sample_rate(),
             frame_size_ms: default_frame_ms(),
             echo_cancellation: false,
             ringtone_device: None,
@@ -239,7 +251,7 @@ pub struct AppConfig {
     /// Optional TURN server: when set, ALL calls relay their RTP through it
     /// (no ICE candidate negotiation — an explicit, unconditional fallback for
     /// NATs that STUN alone can't traverse), e.g. "turn.example.com:3478".
-    pub turn_server:   Option<String>,
+    pub turn_server: Option<String>,
     pub turn_username: Option<String>,
     pub turn_password: Option<String>,
 
@@ -310,31 +322,37 @@ pub struct AppConfig {
     pub update_skip_version: Option<String>,
 }
 
-fn default_hotkey_answer() -> String { "Ctrl+Alt+A".into() }
-fn default_hotkey_hangup() -> String { "Ctrl+Alt+H".into() }
-fn default_hotkey_mute()   -> String { "Ctrl+Alt+M".into() }
+fn default_hotkey_answer() -> String {
+    "Ctrl+Alt+A".into()
+}
+fn default_hotkey_hangup() -> String {
+    "Ctrl+Alt+H".into()
+}
+fn default_hotkey_mute() -> String {
+    "Ctrl+Alt+M".into()
+}
 
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            accounts:       vec![SipAccount::default()],
-            audio:          AudioConfig::default(),
+            accounts: vec![SipAccount::default()],
+            audio: AudioConfig::default(),
             local_sip_port: 5060,
-            stun_server:    Some("stun.l.google.com:19302".into()),
-            turn_server:    None,
-            turn_username:  None,
-            turn_password:  None,
-            dark_mode:              true,
+            stun_server: Some("stun.l.google.com:19302".into()),
+            turn_server: None,
+            turn_username: None,
+            turn_password: None,
+            dark_mode: true,
             notifications_enabled: true,
-            ringtone_enabled:      true,
-            recording_enabled:     false,
-            start_minimized:       false,
-            blocklist:             Vec::new(),
-            ice_enabled:           false,
+            ringtone_enabled: true,
+            recording_enabled: false,
+            start_minimized: false,
+            blocklist: Vec::new(),
+            ice_enabled: false,
             global_hotkeys_enabled: false,
             hotkey_answer: default_hotkey_answer(),
             hotkey_hangup: default_hotkey_hangup(),
-            hotkey_mute:   default_hotkey_mute(),
+            hotkey_mute: default_hotkey_mute(),
             auto_update_enabled: false,
             update_skip_version: None,
         }
@@ -344,8 +362,10 @@ impl Default for AppConfig {
 impl AppConfig {
     pub fn load(db: &Db) -> anyhow::Result<Self> {
         let get = |key: &str| db.get_setting(key);
-        let get_bool = |key: &str, default: bool| get(key).map(|v| sql_to_bool(&v)).unwrap_or(default);
-        let get_u32 = |key: &str, default: u32| get(key).and_then(|v| v.parse().ok()).unwrap_or(default);
+        let get_bool =
+            |key: &str, default: bool| get(key).map(|v| sql_to_bool(&v)).unwrap_or(default);
+        let get_u32 =
+            |key: &str, default: u32| get(key).and_then(|v| v.parse().ok()).unwrap_or(default);
 
         let mut stmt = db.conn.prepare(
             "SELECT username, password, server, port, display_name, transport, enabled, \
@@ -373,7 +393,8 @@ impl AppConfig {
                     dnd: sql_int_to_bool(row.get(10)?),
                     forward_always: row.get(11)?,
                     forward_on_busy: row.get(12)?,
-                    codec_order: serde_json::from_str(&codec_order_json).unwrap_or_else(|_| default_codec_order()),
+                    codec_order: serde_json::from_str(&codec_order_json)
+                        .unwrap_or_else(|_| default_codec_order()),
                     dtmf_mode: dtmf_mode_from_str(&dtmf_mode_str),
                     auto_answer_enabled: sql_int_to_bool(row.get(15)?),
                     auto_answer_secs: row.get(16)?,
@@ -404,7 +425,9 @@ impl AppConfig {
             ringtone_enabled: get_bool("ringtone_enabled", true),
             recording_enabled: get_bool("recording_enabled", false),
             start_minimized: get_bool("start_minimized", false),
-            blocklist: get("blocklist").and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default(),
+            blocklist: get("blocklist")
+                .and_then(|v| serde_json::from_str(&v).ok())
+                .unwrap_or_default(),
             ice_enabled: get_bool("ice_enabled", false),
             global_hotkeys_enabled: get_bool("global_hotkeys_enabled", false),
             hotkey_answer: get("hotkey_answer").unwrap_or_else(default_hotkey_answer),
@@ -416,7 +439,9 @@ impl AppConfig {
     }
 
     pub fn save(&self, db: &Db) -> anyhow::Result<()> {
-        db.conn.execute("DELETE FROM accounts", []).context("Clearing accounts table")?;
+        db.conn
+            .execute("DELETE FROM accounts", [])
+            .context("Clearing accounts table")?;
         for (i, acc) in self.accounts.iter().enumerate() {
             db.conn.execute(
                 "INSERT INTO accounts (sort_order, username, password, server, port, display_name, \
@@ -452,7 +477,10 @@ impl AppConfig {
         db.set_setting_opt("audio.output_device", &self.audio.output_device)?;
         db.set_setting("audio.sample_rate", &self.audio.sample_rate.to_string())?;
         db.set_setting("audio.frame_size_ms", &self.audio.frame_size_ms.to_string())?;
-        db.set_setting("audio.echo_cancellation", bool_to_sql(self.audio.echo_cancellation))?;
+        db.set_setting(
+            "audio.echo_cancellation",
+            bool_to_sql(self.audio.echo_cancellation),
+        )?;
         db.set_setting_opt("audio.ringtone_device", &self.audio.ringtone_device)?;
         db.set_setting_opt("audio.ringtone_file", &self.audio.ringtone_file)?;
 
@@ -462,13 +490,19 @@ impl AppConfig {
         db.set_setting_opt("turn_username", &self.turn_username)?;
         db.set_setting_opt("turn_password", &self.turn_password)?;
         db.set_setting("dark_mode", bool_to_sql(self.dark_mode))?;
-        db.set_setting("notifications_enabled", bool_to_sql(self.notifications_enabled))?;
+        db.set_setting(
+            "notifications_enabled",
+            bool_to_sql(self.notifications_enabled),
+        )?;
         db.set_setting("ringtone_enabled", bool_to_sql(self.ringtone_enabled))?;
         db.set_setting("recording_enabled", bool_to_sql(self.recording_enabled))?;
         db.set_setting("start_minimized", bool_to_sql(self.start_minimized))?;
         db.set_setting("blocklist", &serde_json::to_string(&self.blocklist)?)?;
         db.set_setting("ice_enabled", bool_to_sql(self.ice_enabled))?;
-        db.set_setting("global_hotkeys_enabled", bool_to_sql(self.global_hotkeys_enabled))?;
+        db.set_setting(
+            "global_hotkeys_enabled",
+            bool_to_sql(self.global_hotkeys_enabled),
+        )?;
         db.set_setting("hotkey_answer", &self.hotkey_answer)?;
         db.set_setting("hotkey_hangup", &self.hotkey_hangup)?;
         db.set_setting("hotkey_mute", &self.hotkey_mute)?;

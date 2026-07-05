@@ -7,12 +7,16 @@
 //! whole window for the duration on every call.
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use deelip_config::SipAccount;
 use deelip_nat::{IceConnection, IceGathered, TurnRelay};
+use webrtc_util::Conn;
 
-use crate::wire::sdp::{AudioCodec, IceAttrs, ParsedSdp, ALL_CODECS};
+use crate::call::dialog::CallMedia;
+use crate::events::CallMediaReady;
+use crate::wire::sdp::{AudioCodec, IceAttrs, ParsedSdp, SrtpParams, SrtpSession, ALL_CODECS};
 
 /// Bounded wait for ICE candidate gathering (host candidates are instant;
 /// server-reflexive/relay each cost one STUN/TURN round trip) -- generous
@@ -150,6 +154,47 @@ pub async fn try_answer_with_ice(network: &NetworkConfig, offer: &ParsedSdp) -> 
         Ok(conn) => Some((attrs, default_addr, conn)),
         Err(e) => { tracing::warn!("ICE connectivity checks failed, falling back: {e}"); None }
     }
+}
+
+/// Combine the raw negotiated pieces -- local RTP port/SRTP key, a TURN
+/// relay and/or ICE connection if either was used, the negotiated codec, and
+/// the remote's SRTP key if any -- into the two derived shapes every
+/// call-setup path ends with: `CallMedia` (kept on the `Dialog` so hold/
+/// resume can rebuild their SDP later without redoing any of this) and
+/// `CallMediaReady` (handed to `ui` via `SipEvent::CallConnected`). Shared by
+/// `accept_call`'s and the background-task result handlers for
+/// `initiate_call`/`on_response`'s answer path, so the SRTP-session/relay-
+/// selection logic isn't duplicated three ways.
+#[allow(clippy::too_many_arguments)] // each param is a distinct, meaningfully-named
+                                      // piece of one call leg's negotiated
+                                      // media state -- bundling them into a
+                                      // struct wouldn't reduce real complexity.
+pub fn resolve_call_media(
+    local_rtp:      u16,
+    local_srtp:     Option<SrtpParams>,
+    relay:          Option<TurnRelay>,
+    ice:            Option<IceConnection>,
+    codec:          AudioCodec,
+    dtmf_type:      Option<u8>,
+    remote_rtp:     SocketAddr,
+    remote_srtp:    Option<SrtpParams>,
+    account_secure: bool,
+) -> (CallMedia, CallMediaReady) {
+    let srtp_session = match (&local_srtp, &remote_srtp) {
+        (Some(local), Some(remote)) => Some(SrtpSession { local: local.clone(), remote: remote.clone() }),
+        _ => {
+            if account_secure {
+                tracing::warn!("TLS signaling active but remote SDP has no a=crypto -- falling back to plaintext RTP");
+            }
+            None
+        }
+    };
+    let relay_conn: Option<Arc<dyn Conn + Send + Sync>> = ice.as_ref().map(|c| c.conn.clone())
+        .or_else(|| relay.as_ref().map(|r| r.conn.clone()));
+
+    let media = CallMedia { local_rtp, local_srtp, relay, ice, codec, dtmf_type };
+    let ready = CallMediaReady { codec, dtmf_type, local_rtp, remote_rtp, srtp: srtp_session, relay: relay_conn };
+    (media, ready)
 }
 
 #[cfg(test)]

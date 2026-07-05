@@ -2,13 +2,18 @@ use deelip_config::{DtmfMode, SipAccount, TransportProtocol};
 use egui::{RichText, Ui};
 
 use crate::app::DeelipApp;
-use crate::helpers::{account_label, account_status_label, codec_label, device_picker, empty_state, info_hint, settings_section};
+use crate::helpers::{
+    account_label, account_status_label, codec_label, device_picker, empty_state, info_hint,
+    settings_section,
+};
 use crate::theme;
 
 impl DeelipApp {
     pub(crate) fn show_settings(&mut self, ui: &mut Ui) {
         if self.config.accounts.is_empty() {
-            self.config.accounts.push(deelip_config::SipAccount::default());
+            self.config
+                .accounts
+                .push(deelip_config::SipAccount::default());
         }
         self.edit_account_idx = self.edit_account_idx.min(self.config.accounts.len() - 1);
         let mut edited = false;
@@ -477,21 +482,27 @@ impl DeelipApp {
 fn list_device_names(input: bool) -> Vec<String> {
     use cpal::traits::{DeviceTrait, HostTrait};
     let host = cpal::default_host();
-    let devices = if input { host.input_devices() } else { host.output_devices() };
+    let devices = if input {
+        host.input_devices()
+    } else {
+        host.output_devices()
+    };
     match devices {
         Ok(devices) => devices.filter_map(|d| d.name().ok()).collect(),
-        Err(_)      => Vec::new(),
+        Err(_) => Vec::new(),
     }
 }
 
 /// Text field bound to an `Option<String>` — an empty field maps to `None`.
 fn optional_text_field(ui: &mut Ui, value: &mut Option<String>, hint: &str) -> bool {
     let mut text = value.clone().unwrap_or_default();
-    let changed = ui.add(
-        egui::TextEdit::singleline(&mut text)
-            .hint_text(hint)
-            .desired_width(f32::INFINITY),
-    ).changed();
+    let changed = ui
+        .add(
+            egui::TextEdit::singleline(&mut text)
+                .hint_text(hint)
+                .desired_width(f32::INFINITY),
+        )
+        .changed();
     if changed {
         *value = if text.is_empty() { None } else { Some(text) };
     }
@@ -501,11 +512,13 @@ fn optional_text_field(ui: &mut Ui, value: &mut Option<String>, hint: &str) -> b
 /// Masked text field bound to an `Option<String>` — an empty field maps to `None`.
 fn optional_password_field(ui: &mut Ui, value: &mut Option<String>) -> bool {
     let mut text = value.clone().unwrap_or_default();
-    let changed = ui.add(
-        egui::TextEdit::singleline(&mut text)
-            .password(true)
-            .desired_width(f32::INFINITY),
-    ).changed();
+    let changed = ui
+        .add(
+            egui::TextEdit::singleline(&mut text)
+                .password(true)
+                .desired_width(f32::INFINITY),
+        )
+        .changed();
     if changed {
         *value = if text.is_empty() { None } else { Some(text) };
     }

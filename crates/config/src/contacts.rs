@@ -6,7 +6,7 @@ use crate::Db;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Contact {
-    pub name:    String,
+    pub name: String,
     pub sip_uri: String,
     /// Subscribe to this contact's SIP presence (RFC 3856), shown as a
     /// colored dot in the Contacts tab. Off by default -- opt-in, like the
@@ -45,13 +45,22 @@ impl ContactBook {
     }
 
     pub fn save(&self, db: &Db) -> anyhow::Result<()> {
-        db.conn.execute("DELETE FROM contacts", []).context("Clearing contacts table")?;
+        db.conn
+            .execute("DELETE FROM contacts", [])
+            .context("Clearing contacts table")?;
         for c in &self.contacts {
-            db.conn.execute(
-                "INSERT INTO contacts (name, sip_uri, watch_presence, presence_account) \
+            db.conn
+                .execute(
+                    "INSERT INTO contacts (name, sip_uri, watch_presence, presence_account) \
                  VALUES (?1, ?2, ?3, ?4)",
-                rusqlite::params![c.name, c.sip_uri, bool_to_sql(c.watch_presence), c.presence_account],
-            ).with_context(|| format!("Inserting contact {}", c.name))?;
+                    rusqlite::params![
+                        c.name,
+                        c.sip_uri,
+                        bool_to_sql(c.watch_presence),
+                        c.presence_account
+                    ],
+                )
+                .with_context(|| format!("Inserting contact {}", c.name))?;
         }
         Ok(())
     }
@@ -63,7 +72,11 @@ impl ContactBook {
         self.contacts
             .iter()
             .enumerate()
-            .filter(|(_, c)| q.is_empty() || c.name.to_lowercase().contains(&q) || c.sip_uri.to_lowercase().contains(&q))
+            .filter(|(_, c)| {
+                q.is_empty()
+                    || c.name.to_lowercase().contains(&q)
+                    || c.sip_uri.to_lowercase().contains(&q)
+            })
             .collect()
     }
 }

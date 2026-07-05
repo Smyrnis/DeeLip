@@ -24,7 +24,8 @@ pub fn install_fonts(ctx: &egui::Context) {
         "cantarell".into(),
         egui::FontData::from_static(include_bytes!("../../../assets/Cantarell-VF.otf")),
     );
-    fonts.families
+    fonts
+        .families
         .entry(egui::FontFamily::Proportional)
         .or_default()
         .insert(0, "cantarell".into());

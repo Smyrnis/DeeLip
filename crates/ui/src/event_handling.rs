@@ -46,7 +46,11 @@ impl DeelipApp {
                 // match on; `pending_outbound` doesn't (there's at most one
                 // in flight, and its `call_id` isn't known until the far end
                 // answers) so it's the fallback once accept is ruled out.
-                if self.pending_accept.as_ref().is_some_and(|p| p.call_id == call_id) {
+                if self
+                    .pending_accept
+                    .as_ref()
+                    .is_some_and(|p| p.call_id == call_id)
+                {
                     let pending = self.pending_accept.take().unwrap();
                     // Free the audio device for the new call if another one
                     // is focused -- deferred until here (accept actually
@@ -55,13 +59,19 @@ impl DeelipApp {
                     // call's media.
                     if let Some(cur) = self.focused_call {
                         self.send_hold(cur);
-                        if let Some(engine) = self.media.take() { self.rt.block_on(engine.stop()); }
+                        if let Some(engine) = self.media.take() {
+                            self.rt.block_on(engine.stop());
+                        }
                         self.focused_call = None;
                     }
                     let slot = CallSlot {
-                        account, call_id, remote_uri: pending.remote_uri.clone(),
-                        direction: CallDirection::Inbound, start_time: pending.start_time,
-                        is_held: false, media,
+                        account,
+                        call_id,
+                        remote_uri: pending.remote_uri.clone(),
+                        direction: CallDirection::Inbound,
+                        start_time: pending.start_time,
+                        is_held: false,
+                        media,
                     };
                     self.calls.push(slot);
                     let idx = self.calls.len() - 1;
@@ -69,9 +79,13 @@ impl DeelipApp {
                     self.start_media(idx);
                 } else if let Some(out) = self.pending_outbound.take() {
                     let slot = CallSlot {
-                        account, call_id, remote_uri: out.remote_uri.clone(),
-                        direction: CallDirection::Outbound, start_time: out.start_time,
-                        is_held: false, media,
+                        account,
+                        call_id,
+                        remote_uri: out.remote_uri.clone(),
+                        direction: CallDirection::Outbound,
+                        start_time: out.start_time,
+                        is_held: false,
+                        media,
                     };
                     self.calls.push(slot);
                     let idx = self.calls.len() - 1;
@@ -83,9 +97,19 @@ impl DeelipApp {
             }
             SipEvent::IncomingCall { call_id, from } => {
                 let caller = extract_user_part(&from);
-                if self.config.blocklist.iter().any(|entry| extract_user_part(entry) == caller) {
+                if self
+                    .config
+                    .blocklist
+                    .iter()
+                    .any(|entry| extract_user_part(entry) == caller)
+                {
                     self.accounts[account].handle.reject_call(&call_id);
-                    self.record_history(from, CallDirection::Inbound, unix_now(), CallStatus::Rejected);
+                    self.record_history(
+                        from,
+                        CallDirection::Inbound,
+                        unix_now(),
+                        CallStatus::Rejected,
+                    );
                     return;
                 }
                 let acc = &self.accounts[account].account;
@@ -96,21 +120,40 @@ impl DeelipApp {
                 if dnd {
                     tracing::debug!(call_id, %from, "DND active, rejecting incoming call");
                     self.accounts[account].handle.reject_call(&call_id);
-                    self.record_history(from, CallDirection::Inbound, unix_now(), CallStatus::Rejected);
+                    self.record_history(
+                        from,
+                        CallDirection::Inbound,
+                        unix_now(),
+                        CallStatus::Rejected,
+                    );
                     return;
                 }
                 if let Some(target) = forward_always {
                     let target = normalize_target(&target, &server);
-                    self.accounts[account].handle.redirect_call(&call_id, target);
-                    self.record_history(from, CallDirection::Inbound, unix_now(), CallStatus::Missed);
+                    self.accounts[account]
+                        .handle
+                        .redirect_call(&call_id, target);
+                    self.record_history(
+                        from,
+                        CallDirection::Inbound,
+                        unix_now(),
+                        CallStatus::Missed,
+                    );
                     return;
                 }
                 let waiting = !self.calls.is_empty();
                 if waiting {
                     if let Some(target) = forward_on_busy {
                         let target = normalize_target(&target, &server);
-                        self.accounts[account].handle.redirect_call(&call_id, target);
-                        self.record_history(from, CallDirection::Inbound, unix_now(), CallStatus::Missed);
+                        self.accounts[account]
+                            .handle
+                            .redirect_call(&call_id, target);
+                        self.record_history(
+                            from,
+                            CallDirection::Inbound,
+                            unix_now(),
+                            CallStatus::Missed,
+                        );
                         return;
                     }
                 }
@@ -137,23 +180,35 @@ impl DeelipApp {
                     format!("Incoming from {}", short_uri(&from))
                 };
                 let acc = &self.accounts[account].account;
-                let forward = acc.no_answer_forward.clone()
-                    .filter(|s| !s.is_empty())
-                    .map(|target| {
-                        let target = normalize_target(&target, &acc.server);
-                        (unix_now() + acc.no_answer_timeout_secs as u64, target)
-                    });
-                let auto_answer_at = acc.auto_answer_enabled
+                let forward =
+                    acc.no_answer_forward
+                        .clone()
+                        .filter(|s| !s.is_empty())
+                        .map(|target| {
+                            let target = normalize_target(&target, &acc.server);
+                            (unix_now() + acc.no_answer_timeout_secs as u64, target)
+                        });
+                let auto_answer_at = acc
+                    .auto_answer_enabled
                     .then(|| unix_now() + acc.auto_answer_secs as u64);
                 self.pending_call = Some(PendingCall {
-                    account, call_id, from, start_time: unix_now(), forward, auto_answer_at,
+                    account,
+                    call_id,
+                    from,
+                    start_time: unix_now(),
+                    forward,
+                    auto_answer_at,
                 });
             }
             SipEvent::CallEnded { call_id } => {
                 self.on_call_terminated(&call_id, None);
                 tracing::debug!(call_id, "Call ended normally");
             }
-            SipEvent::CallFailed { call_id, code, reason } => {
+            SipEvent::CallFailed {
+                call_id,
+                code,
+                reason,
+            } => {
                 self.on_call_terminated(&call_id, Some((code, reason)));
             }
             SipEvent::CallHeld { call_id } => {
@@ -233,7 +288,11 @@ impl DeelipApp {
             }
             SipEvent::MessageSendResult { to, ok, reason } => {
                 if !ok {
-                    self.status_line = format!("Message to {} failed: {}", short_uri(&to), reason.unwrap_or_default());
+                    self.status_line = format!(
+                        "Message to {} failed: {}",
+                        short_uri(&to),
+                        reason.unwrap_or_default()
+                    );
                 }
             }
         }
@@ -245,8 +304,17 @@ impl DeelipApp {
     /// with no extra clicks.
     pub(crate) fn resolve_presence_account(&self, contact: &Contact) -> Option<usize> {
         match &contact.presence_account {
-            Some(username) => self.accounts.iter().position(|a| &a.account.username == username),
-            None => if self.accounts.is_empty() { None } else { Some(0) },
+            Some(username) => self
+                .accounts
+                .iter()
+                .position(|a| &a.account.username == username),
+            None => {
+                if self.accounts.is_empty() {
+                    None
+                } else {
+                    Some(0)
+                }
+            }
         }
     }
 
@@ -262,7 +330,12 @@ impl DeelipApp {
         let new_dnd = !self.accounts[idx].account.dnd;
         self.accounts[idx].account.dnd = new_dnd;
         let username = self.accounts[idx].account.username.clone();
-        if let Some(cfg_acc) = self.config.accounts.iter_mut().find(|a| a.username == username) {
+        if let Some(cfg_acc) = self
+            .config
+            .accounts
+            .iter_mut()
+            .find(|a| a.username == username)
+        {
             cfg_acc.dnd = new_dnd;
         }
         self.save_config_quietly();
@@ -272,7 +345,10 @@ impl DeelipApp {
     /// called once that account has actually registered (subscribing before
     /// then would just hit the same 401/407 retry path unnecessarily).
     pub(crate) fn subscribe_account_contacts(&mut self, account: usize) {
-        let targets: Vec<String> = self.contacts.contacts.iter()
+        let targets: Vec<String> = self
+            .contacts
+            .contacts
+            .iter()
             .filter(|c| c.watch_presence && self.resolve_presence_account(c) == Some(account))
             .map(|c| c.sip_uri.clone())
             .collect();
@@ -286,7 +362,9 @@ impl DeelipApp {
     /// reasoning as `subscribe_account_contacts`.
     pub(crate) fn subscribe_account_mwi(&mut self, account: usize) {
         let acc = &self.accounts[account].account;
-        let Some(mailbox) = acc.mailbox.clone().filter(|s| !s.is_empty()) else { return };
+        let Some(mailbox) = acc.mailbox.clone().filter(|s| !s.is_empty()) else {
+            return;
+        };
         let uri = normalize_target(&mailbox, &acc.server);
         self.accounts[account].handle.subscribe_mwi(uri);
     }
@@ -297,7 +375,12 @@ impl DeelipApp {
     pub(crate) fn on_call_terminated(&mut self, call_id: &str, failure: Option<(u16, String)>) {
         if let Some(pending) = self.pending_call.take() {
             if pending.call_id == call_id {
-                self.record_history(pending.from, CallDirection::Inbound, pending.start_time, CallStatus::Missed);
+                self.record_history(
+                    pending.from,
+                    CallDirection::Inbound,
+                    pending.start_time,
+                    CallStatus::Missed,
+                );
                 self.refresh_call_status();
                 return;
             }
@@ -311,7 +394,12 @@ impl DeelipApp {
                 if let Some((code, reason)) = &failure {
                     self.status_line = format!("Call failed ({code}): {reason}");
                 }
-                self.record_history(pending.remote_uri, CallDirection::Inbound, pending.start_time, CallStatus::Rejected);
+                self.record_history(
+                    pending.remote_uri,
+                    CallDirection::Inbound,
+                    pending.start_time,
+                    CallStatus::Rejected,
+                );
                 self.refresh_call_status();
                 return;
             }
@@ -339,7 +427,12 @@ impl DeelipApp {
             if let Some((code, reason)) = &failure {
                 self.status_line = format!("Call failed ({code}): {reason}");
             }
-            self.record_history(out.remote_uri, CallDirection::Outbound, out.start_time, CallStatus::Failed);
+            self.record_history(
+                out.remote_uri,
+                CallDirection::Outbound,
+                out.start_time,
+                CallStatus::Failed,
+            );
             if failure.is_none() {
                 self.refresh_call_status();
             }
@@ -359,17 +452,19 @@ impl DeelipApp {
     pub(crate) fn remove_call(&mut self, idx: usize) -> CallSlot {
         let was_conference = self.in_conference;
         if was_conference || self.focused_call == Some(idx) {
-            if let Some(engine) = self.media.take() { self.rt.block_on(engine.stop()); }
+            if let Some(engine) = self.media.take() {
+                self.rt.block_on(engine.stop());
+            }
         }
         if was_conference {
-            self.focused_call  = None;
+            self.focused_call = None;
             self.in_conference = false;
         }
         let slot = self.calls.remove(idx);
         self.focused_call = match self.focused_call {
             Some(f) if f == idx => None,
-            Some(f) if f > idx  => Some(f - 1),
-            other               => other,
+            Some(f) if f > idx => Some(f - 1),
+            other => other,
         };
         // Either call ending invalidates a pending attended transfer --
         // both legs must still exist for Complete Transfer to make sense.
@@ -399,27 +494,45 @@ impl DeelipApp {
     /// during that time. Call after any registration change or whenever
     /// `selected_account` changes (e.g. the dialer's account picker).
     pub(crate) fn refresh_idle_status(&mut self) {
-        if !self.calls.is_empty() || self.pending_call.is_some() { return; }
+        if !self.calls.is_empty() || self.pending_call.is_some() {
+            return;
+        }
         match self.accounts.get(self.selected_account) {
             Some(acc) => {
-                self.reg_ok       = acc.reg_ok;
-                self.status_line  = if acc.reg_ok { "Ready".into() } else { "Not registered".into() };
+                self.reg_ok = acc.reg_ok;
+                self.status_line = if acc.reg_ok {
+                    "Ready".into()
+                } else {
+                    "Not registered".into()
+                };
             }
             None => {
-                self.reg_ok      = false;
+                self.reg_ok = false;
                 self.status_line = "No accounts configured".into();
             }
         }
     }
 
-    pub(crate) fn record_history(&mut self, remote_uri: String, direction: CallDirection, start_time: u64, status: CallStatus) {
+    pub(crate) fn record_history(
+        &mut self,
+        remote_uri: String,
+        direction: CallDirection,
+        start_time: u64,
+        status: CallStatus,
+    ) {
         let duration = if matches!(status, CallStatus::Answered) {
             (unix_now().saturating_sub(start_time)) as u32
         } else {
             0
         };
         let is_missed = status == CallStatus::Missed;
-        let record = CallRecord { remote_uri, direction, timestamp: start_time, duration_secs: duration, status };
+        let record = CallRecord {
+            remote_uri,
+            direction,
+            timestamp: start_time,
+            duration_secs: duration,
+            status,
+        };
         self.history.push(record);
         let _ = self.history.save(&self.db);
         if is_missed {

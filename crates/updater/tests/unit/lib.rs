@@ -51,7 +51,9 @@ fn build_fixture_archive(archive_path: &std::path::Path, contents: &[u8]) {
     header.set_size(contents.len() as u64);
     header.set_mode(0o755);
     header.set_cksum();
-    builder.append_data(&mut header, "usr/bin/deelip", contents).unwrap();
+    builder
+        .append_data(&mut header, "usr/bin/deelip", contents)
+        .unwrap();
     builder.into_inner().unwrap().finish().unwrap();
 }
 
@@ -72,7 +74,10 @@ fn install_from_archive_swaps_in_the_new_binary() {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let mode = std::fs::metadata(&current_exe).unwrap().permissions().mode();
+        let mode = std::fs::metadata(&current_exe)
+            .unwrap()
+            .permissions()
+            .mode();
         assert_eq!(mode & 0o777, 0o755);
     }
 }
@@ -90,14 +95,18 @@ fn install_from_archive_errors_when_binary_missing_from_tarball() {
     header.set_size(5);
     header.set_mode(0o644);
     header.set_cksum();
-    builder.append_data(&mut header, "usr/share/doc/deelip/copyright", &b"hello"[..]).unwrap();
+    builder
+        .append_data(&mut header, "usr/share/doc/deelip/copyright", &b"hello"[..])
+        .unwrap();
     builder.into_inner().unwrap().finish().unwrap();
 
     let current_exe = dir.path().join("deelip");
     std::fs::write(&current_exe, b"old binary bytes").unwrap();
 
     let err = install_from_archive(&archive_path, &current_exe).unwrap_err();
-    assert!(err.to_string().contains("did not contain the deelip binary"));
+    assert!(err
+        .to_string()
+        .contains("did not contain the deelip binary"));
     // The old binary must be left untouched on failure.
     assert_eq!(std::fs::read(&current_exe).unwrap(), b"old binary bytes");
 }

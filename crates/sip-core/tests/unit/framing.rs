@@ -25,7 +25,7 @@ fn waits_for_full_body_across_partial_reads() {
 #[test]
 fn drains_pipelined_messages_in_order() {
     let mut framer = MessageFramer::new();
-    let first  = b"OPTIONS sip:a SIP/2.0\r\nContent-Length: 0\r\n\r\n".to_vec();
+    let first = b"OPTIONS sip:a SIP/2.0\r\nContent-Length: 0\r\n\r\n".to_vec();
     let second = b"OPTIONS sip:b SIP/2.0\r\nContent-Length: 3\r\n\r\nabc".to_vec();
 
     let mut combined = first.clone();

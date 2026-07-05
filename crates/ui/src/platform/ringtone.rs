@@ -38,7 +38,11 @@ impl Ringtone {
     /// consulted only for `RingKind::Incoming`; falls back to the synthesized
     /// cadence if unset or it fails to load/decode (a bad ringtone file
     /// should never mean a silently-missed call).
-    pub fn start(kind: RingKind, device_name: Option<&str>, ringtone_file: Option<&str>) -> anyhow::Result<Self> {
+    pub fn start(
+        kind: RingKind,
+        device_name: Option<&str>,
+        ringtone_file: Option<&str>,
+    ) -> anyhow::Result<Self> {
         let (stream, handle) = open_stream(device_name)?;
 
         let sink = Sink::try_new(&handle)?;
@@ -48,15 +52,23 @@ impl Ringtone {
                     Ok(source) => {
                         sink.append(source);
                         sink.play();
-                        return Ok(Self { _stream: stream, sink });
+                        return Ok(Self {
+                            _stream: stream,
+                            sink,
+                        });
                     }
-                    Err(e) => tracing::warn!("Custom ringtone {path} failed to load ({e}), using built-in tone"),
+                    Err(e) => tracing::warn!(
+                        "Custom ringtone {path} failed to load ({e}), using built-in tone"
+                    ),
                 }
             }
         }
         sink.append(RingSource::new(kind));
         sink.play();
-        Ok(Self { _stream: stream, sink })
+        Ok(Self {
+            _stream: stream,
+            sink,
+        })
     }
 }
 
@@ -65,7 +77,9 @@ impl Ringtone {
 /// before this device-selection option existed.
 fn open_stream(device_name: Option<&str>) -> anyhow::Result<(OutputStream, OutputStreamHandle)> {
     if let Some(name) = device_name {
-        let found = cpal::default_host().output_devices().ok()
+        let found = cpal::default_host()
+            .output_devices()
+            .ok()
             .and_then(|mut devices| devices.find(|d| d.name().is_ok_and(|n| n == name)));
         if let Some(device) = found {
             return Ok(OutputStream::try_from_device(&device)?);
@@ -93,11 +107,11 @@ impl Drop for Ringtone {
 /// Infinite generated cadence: a two-tone chord for `on_samples`, then
 /// silence for the rest of `period_samples`, repeating forever.
 struct RingSource {
-    sample_rate:    u32,
-    on_samples:     usize,
+    sample_rate: u32,
+    on_samples: usize,
     period_samples: usize,
-    freqs:          (f32, f32),
-    phase:          usize,
+    freqs: (f32, f32),
+    phase: usize,
 }
 
 impl RingSource {
@@ -109,7 +123,7 @@ impl RingSource {
         };
         Self {
             sample_rate,
-            on_samples:     (on_secs * sample_rate as f32) as usize,
+            on_samples: (on_secs * sample_rate as f32) as usize,
             period_samples: (period_secs * sample_rate as f32) as usize,
             freqs,
             phase: 0,
@@ -135,8 +149,16 @@ impl Iterator for RingSource {
 }
 
 impl Source for RingSource {
-    fn current_frame_len(&self) -> Option<usize> { None }
-    fn channels(&self) -> u16 { 1 }
-    fn sample_rate(&self) -> u32 { self.sample_rate }
-    fn total_duration(&self) -> Option<Duration> { None }
+    fn current_frame_len(&self) -> Option<usize> {
+        None
+    }
+    fn channels(&self) -> u16 {
+        1
+    }
+    fn sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
+    fn total_duration(&self) -> Option<Duration> {
+        None
+    }
 }

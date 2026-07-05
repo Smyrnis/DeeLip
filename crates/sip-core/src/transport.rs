@@ -29,9 +29,10 @@ impl SipTransport {
     ) -> anyhow::Result<Self> {
         match proto {
             TransportProtocol::Tls => {
-                let conn = TlsConn::connect(bind_addr, server_addr, server_name, insecure_skip_verify)
-                    .await
-                    .context("Connecting SIP-over-TLS transport")?;
+                let conn =
+                    TlsConn::connect(bind_addr, server_addr, server_name, insecure_skip_verify)
+                        .await
+                        .context("Connecting SIP-over-TLS transport")?;
                 Ok(Self::Tls(conn))
             }
             // Plain TCP (no TLS) is not implemented; fall back to UDP semantics.
@@ -54,7 +55,10 @@ impl SipTransport {
     /// funnels through the one persistent connection to the server.
     pub async fn send(&self, data: &[u8], to: SocketAddr) -> anyhow::Result<()> {
         match self {
-            Self::Udp(s) => { s.send_to(data, to).await?; Ok(()) }
+            Self::Udp(s) => {
+                s.send_to(data, to).await?;
+                Ok(())
+            }
             Self::Tls(t) => t.send(data).await,
         }
     }
@@ -78,16 +82,16 @@ impl SipTransport {
 
 pub struct TlsConn {
     server_addr: SocketAddr,
-    local_addr:  SocketAddr,
+    local_addr: SocketAddr,
     write: Mutex<WriteHalf<TlsStream<tokio::net::TcpStream>>>,
-    read:  Mutex<(ReadHalf<TlsStream<tokio::net::TcpStream>>, MessageFramer)>,
+    read: Mutex<(ReadHalf<TlsStream<tokio::net::TcpStream>>, MessageFramer)>,
 }
 
 impl TlsConn {
     async fn connect(
-        bind_addr:            SocketAddr,
-        server_addr:          SocketAddr,
-        server_name:          &str,
+        bind_addr: SocketAddr,
+        server_addr: SocketAddr,
+        server_name: &str,
         insecure_skip_verify: bool,
     ) -> anyhow::Result<Self> {
         // rustls 0.23 requires an explicit process-wide crypto provider; idempotent.
@@ -116,13 +120,23 @@ impl TlsConn {
         let name = rustls::pki_types::ServerName::try_from(server_name.to_string())
             .context("Invalid TLS server name")?;
 
-        let socket = if bind_addr.is_ipv4() { TcpSocket::new_v4()? } else { TcpSocket::new_v6()? };
+        let socket = if bind_addr.is_ipv4() {
+            TcpSocket::new_v4()?
+        } else {
+            TcpSocket::new_v6()?
+        };
         socket.set_reuseaddr(true)?;
         socket.bind(bind_addr).context("Binding TCP socket")?;
-        let tcp = socket.connect(server_addr).await.context("Connecting TCP")?;
+        let tcp = socket
+            .connect(server_addr)
+            .await
+            .context("Connecting TCP")?;
         let local_addr = tcp.local_addr()?;
 
-        let tls_stream = connector.connect(name, tcp).await.context("TLS handshake")?;
+        let tls_stream = connector
+            .connect(name, tcp)
+            .await
+            .context("TLS handshake")?;
         debug!("SIP transport (TLS) connected to {server_addr} (local {local_addr})");
 
         let (read_half, write_half) = split(tls_stream);
@@ -130,7 +144,7 @@ impl TlsConn {
             server_addr,
             local_addr,
             write: Mutex::new(write_half),
-            read:  Mutex::new((read_half, MessageFramer::new())),
+            read: Mutex::new((read_half, MessageFramer::new())),
         })
     }
 
@@ -168,7 +182,8 @@ struct NoCertVerification {
 impl NoCertVerification {
     fn new() -> Self {
         Self {
-            supported_algs: rustls::crypto::ring::default_provider().signature_verification_algorithms,
+            supported_algs: rustls::crypto::ring::default_provider()
+                .signature_verification_algorithms,
         }
     }
 }

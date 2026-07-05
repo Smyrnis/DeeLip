@@ -20,21 +20,29 @@ impl SipStack {
             _ => return,
         };
 
-        let cseq   = dialog.next_local_cseq();
+        let cseq = dialog.next_local_cseq();
         let branch = new_branch();
 
-        let server     = self.account.server.clone();
-        let username   = self.account.username.clone();
-        let display    = self.account.display_name.clone().unwrap_or_else(|| username.clone());
-        let adv_ip     = self.advertised_ip.clone();
-        let local_ip   = self.local_ip.clone();
+        let server = self.account.server.clone();
+        let username = self.account.username.clone();
+        let display = self
+            .account
+            .display_name
+            .clone()
+            .unwrap_or_else(|| username.clone());
+        let adv_ip = self.advertised_ip.clone();
+        let local_ip = self.local_ip.clone();
         let local_port = self.local_port;
-        let call_id_s  = dialog.call_id.clone();
-        let from_tag   = dialog.local_tag.clone();
-        let to_uri     = dialog.remote_uri.clone();
-        let to_tag     = dialog.remote_tag.as_deref()
-            .map(|t| format!(";tag={t}")).unwrap_or_default();
-        let contact: SocketAddr = dialog.remote_contact
+        let call_id_s = dialog.call_id.clone();
+        let from_tag = dialog.local_tag.clone();
+        let to_uri = dialog.remote_uri.clone();
+        let to_tag = dialog
+            .remote_tag
+            .as_deref()
+            .map(|t| format!(";tag={t}"))
+            .unwrap_or_default();
+        let contact: SocketAddr = dialog
+            .remote_contact
             .as_deref()
             .and_then(|s| s.parse().ok())
             .unwrap_or(self.server_addr);
@@ -65,7 +73,9 @@ impl SipStack {
     /// header shape exactly, differing only in the `Refer-To` value.
     pub(crate) async fn attended_transfer(&mut self, call_id: &str, consultation_call_id: &str) {
         let (target, replaces) = {
-            let Some(consult) = self.dialogs.get(consultation_call_id) else { return };
+            let Some(consult) = self.dialogs.get(consultation_call_id) else {
+                return;
+            };
             let replaces = format!(
                 "{};to-tag={};from-tag={}",
                 consult.call_id,
@@ -81,21 +91,29 @@ impl SipStack {
             _ => return,
         };
 
-        let cseq   = dialog.next_local_cseq();
+        let cseq = dialog.next_local_cseq();
         let branch = new_branch();
 
-        let server     = self.account.server.clone();
-        let username   = self.account.username.clone();
-        let display    = self.account.display_name.clone().unwrap_or_else(|| username.clone());
-        let adv_ip     = self.advertised_ip.clone();
-        let local_ip   = self.local_ip.clone();
+        let server = self.account.server.clone();
+        let username = self.account.username.clone();
+        let display = self
+            .account
+            .display_name
+            .clone()
+            .unwrap_or_else(|| username.clone());
+        let adv_ip = self.advertised_ip.clone();
+        let local_ip = self.local_ip.clone();
         let local_port = self.local_port;
-        let call_id_s  = dialog.call_id.clone();
-        let from_tag   = dialog.local_tag.clone();
-        let to_uri     = dialog.remote_uri.clone();
-        let to_tag     = dialog.remote_tag.as_deref()
-            .map(|t| format!(";tag={t}")).unwrap_or_default();
-        let contact: SocketAddr = dialog.remote_contact
+        let call_id_s = dialog.call_id.clone();
+        let from_tag = dialog.local_tag.clone();
+        let to_uri = dialog.remote_uri.clone();
+        let to_tag = dialog
+            .remote_tag
+            .as_deref()
+            .map(|t| format!(";tag={t}"))
+            .unwrap_or_default();
+        let contact: SocketAddr = dialog
+            .remote_contact
             .as_deref()
             .and_then(|s| s.parse().ok())
             .unwrap_or(self.server_addr);
@@ -124,18 +142,22 @@ impl SipStack {
     /// no-answer-forward timeout; removes the dialog like `reject_call` does.
     pub(crate) async fn redirect_call(&mut self, call_id: &str, target: &str) {
         if let Some(dialog) = self.dialogs.remove(call_id) {
-            let contact: SocketAddr = dialog.remote_contact
+            let contact: SocketAddr = dialog
+                .remote_contact
                 .as_deref()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(self.server_addr);
-            let username   = &self.account.username;
-            let server     = &self.account.server;
-            let display    = self.account.display_name.as_deref().unwrap_or(username);
-            let local_tag  = &dialog.local_tag;
+            let username = &self.account.username;
+            let server = &self.account.server;
+            let display = self.account.display_name.as_deref().unwrap_or(username);
+            let local_tag = &dialog.local_tag;
             let remote_uri = &dialog.remote_uri;
             let remote_via = &dialog.remote_via;
-            let from_tag   = dialog.remote_tag.as_deref()
-                .map(|t| format!(";tag={t}")).unwrap_or_default();
+            let from_tag = dialog
+                .remote_tag
+                .as_deref()
+                .map(|t| format!(";tag={t}"))
+                .unwrap_or_default();
             let cseq_n = dialog.remote_cseq.unwrap_or(1);
 
             let redirect = format!(

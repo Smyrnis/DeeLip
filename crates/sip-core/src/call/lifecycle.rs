@@ -1,17 +1,18 @@
 use std::net::SocketAddr;
-use std::sync::Arc;
 
 use tracing::{debug, error};
-use webrtc_util::Conn;
 
 use crate::{
-    call::dialog::{CallMedia, Dialog, DialogState, PendingOfferMedia},
+    call::dialog::{Dialog, DialogState, PendingOfferMedia},
     call::media_setup,
-    client::SipStack,
-    events::{CallMediaReady, SipEvent},
+    client::{SipStack, StackEvent},
+    events::SipEvent,
     wire::auth::build_challenge_response,
     wire::message::{SipMessage, SipMethod},
-    wire::sdp::{build_answer, build_hold_offer, build_offer, build_resume_offer, parse_sdp, IceAttrs, SrtpParams, SrtpSession},
+    wire::sdp::{
+        build_answer, build_hold_offer, build_offer, build_resume_offer, parse_sdp, IceAttrs,
+        SrtpParams,
+    },
     wire::util::{new_branch, new_call_id, new_tag, parse_tag, parse_uri},
 };
 
@@ -20,77 +21,156 @@ impl SipStack {
 
     /// `attempt_ice` lets the caller opt this specific call out of ICE even
     /// when it's enabled globally (see `SipCommand::MakeCall`'s doc comment).
+    ///
+    /// Only allocates the local RTP port and kicks off STUN/TURN/ICE
+    /// resolution on a background task -- see `StackEvent`'s doc comment for
+    /// why that can't just be `.await`ed inline here. The INVITE itself isn't
+    /// built or sent until that task reports back via `on_outgoing_offer_ready`.
     pub(crate) async fn initiate_call(&mut self, to: &str, attempt_ice: bool) {
-        let call_id  = new_call_id(&self.local_ip);
+        let call_id = new_call_id(&self.local_ip);
         let from_tag = new_tag();
-        let branch   = new_branch();
+        let branch = new_branch();
 
         let local_rtp = match deelip_nat::alloc_rtp_port() {
             Ok(p) => p,
             Err(e) => {
                 error!("Failed to allocate local RTP port: {e}");
                 let _ = self.event_tx.send(SipEvent::CallFailed {
-                    call_id, code: 0, reason: "Local RTP port allocation failed".into(),
+                    call_id,
+                    code: 0,
+                    reason: "Local RTP port allocation failed".into(),
                 });
                 return;
             }
         };
-        let mut relay = None;
-        let ice_gathered = if attempt_ice { media_setup::try_gather_ice(&self.network, true).await } else { None };
-        let ice_attrs = ice_gathered.as_ref().map(|g| {
-            IceAttrs { ufrag: g.local_ufrag.clone(), pwd: g.local_pwd.clone(), candidates: g.candidates.clone() }
+
+        let network = self.network.clone();
+        let account = self.account.clone();
+        let advertised_ip = self.advertised_ip.clone();
+        let internal_tx = self.internal_tx.clone();
+        let to = to.to_string();
+        tokio::spawn(async move {
+            let mut relay = None;
+            let ice_gathered = if attempt_ice {
+                media_setup::try_gather_ice(&network, true).await
+            } else {
+                None
+            };
+            let ice_attrs = ice_gathered.as_ref().map(|g| IceAttrs {
+                ufrag: g.local_ufrag.clone(),
+                pwd: g.local_pwd.clone(),
+                candidates: g.candidates.clone(),
+            });
+            // Same reasoning as the pre-move code this replaced: the plain
+            // c=/m= fallback address is deliberately never the ICE agent's
+            // own gathered candidate socket -- that only becomes usable once
+            // the answer confirms the far end also speaks ICE
+            // (`on_outgoing_connected`), and if it doesn't, the ICE agent
+            // (and that socket) is simply dropped. Advertising it here and
+            // binding an unrelated `local_rtp` on connect would leave the far
+            // end sending RTP to a socket nothing is listening on.
+            let (rtp_ip, rtp_port) =
+                media_setup::resolve_rtp_endpoint(&network, &advertised_ip, local_rtp, &mut relay)
+                    .await;
+
+            let account_secure = account.transport == deelip_config::TransportProtocol::Tls;
+            let srtp = if account_secure {
+                Some(SrtpParams::generate())
+            } else {
+                None
+            };
+            let codecs = media_setup::account_codecs(&account);
+            let local_sdp = build_offer(
+                &rtp_ip,
+                rtp_port,
+                srtp.as_ref(),
+                &codecs,
+                ice_attrs.as_ref(),
+            );
+
+            let _ = internal_tx.send(StackEvent::OutgoingOfferReady {
+                call_id,
+                from_tag,
+                branch,
+                to,
+                local_sdp,
+                pending_offer: PendingOfferMedia {
+                    local_rtp,
+                    local_srtp: srtp,
+                    relay,
+                },
+                ice_gathered,
+            });
         });
-        // Same reasoning as the pre-move code this replaced: the plain c=/m=
-        // fallback address is deliberately never the ICE agent's own
-        // gathered candidate socket -- that only becomes usable once the
-        // answer confirms the far end also speaks ICE (`on_response`'s
-        // `Act::Connected` handling), and if it doesn't, the ICE agent (and
-        // that socket) is simply dropped. Advertising it here and binding an
-        // unrelated `local_rtp` on connect would leave the far end sending
-        // RTP to a socket nothing is listening on.
-        let (rtp_ip, rtp_port) = media_setup::resolve_rtp_endpoint(&self.network, &self.advertised_ip, local_rtp, &mut relay).await;
+    }
 
-        let account_secure = self.account.transport == deelip_config::TransportProtocol::Tls;
-        let srtp = if account_secure { Some(SrtpParams::generate()) } else { None };
-        let codecs = media_setup::account_codecs(&self.account);
-        let sdp = build_offer(&rtp_ip, rtp_port, srtp.as_ref(), &codecs, ice_attrs.as_ref());
+    /// Finish placing an outgoing call once `initiate_call`'s background
+    /// offer resolution completes: build and send the actual INVITE, then
+    /// insert the dialog. Runs back on `run()`'s own task (via `StackEvent`),
+    /// so it can freely touch `self.dialogs`/`self.transport` again.
+    pub(crate) async fn on_outgoing_offer_ready(&mut self, ev: StackEvent) {
+        let StackEvent::OutgoingOfferReady {
+            call_id,
+            from_tag,
+            branch,
+            to,
+            local_sdp,
+            pending_offer,
+            ice_gathered,
+        } = ev
+        else {
+            unreachable!("caller already matched this variant")
+        };
 
-        let mut dialog = Dialog::new_outgoing(call_id.clone(), from_tag.clone(), to.to_string());
-        dialog.local_sdp     = Some(sdp.clone());
+        let mut dialog = Dialog::new_outgoing(call_id.clone(), from_tag.clone(), to.clone());
+        dialog.local_sdp = Some(local_sdp.clone());
         dialog.invite_branch = branch.clone();
-        dialog.ice_gathered  = ice_gathered;
-        dialog.pending_offer = Some(PendingOfferMedia { local_rtp, local_srtp: srtp, relay });
+        dialog.ice_gathered = ice_gathered;
+        dialog.pending_offer = Some(pending_offer);
 
-        let msg = self.build_invite(&dialog.call_id, &dialog.local_tag, dialog.local_cseq, to, &sdp, None, &branch);
+        let msg = self.build_invite(
+            &dialog.call_id,
+            &dialog.local_tag,
+            dialog.local_cseq,
+            &to,
+            &local_sdp,
+            None,
+            &branch,
+        );
         debug!("→ INVITE {to}");
         if let Err(e) = self.transport.send(msg.as_bytes(), self.server_addr).await {
             error!("Failed to send INVITE: {e}");
+            let _ = self.event_tx.send(SipEvent::CallFailed {
+                call_id,
+                code: 0,
+                reason: format!("Failed to send INVITE: {e}"),
+            });
             return;
         }
         self.dialogs.insert(call_id, dialog);
     }
 
     #[allow(clippy::too_many_arguments)] // each param is a distinct, meaningfully-named
-                                          // piece of an INVITE's identity; bundling them
-                                          // into a struct wouldn't reduce real complexity here.
+                                         // piece of an INVITE's identity; bundling them
+                                         // into a struct wouldn't reduce real complexity here.
     fn build_invite(
         &self,
-        call_id:  &str,
+        call_id: &str,
         from_tag: &str,
-        cseq:     u32,
-        to:       &str,
-        sdp:      &str,
-        auth:     Option<&str>,
-        branch:   &str,
+        cseq: u32,
+        to: &str,
+        sdp: &str,
+        auth: Option<&str>,
+        branch: &str,
     ) -> String {
-        let server     = &self.account.server;
-        let username   = &self.account.username;
-        let adv_ip     = &self.advertised_ip;
-        let local_ip   = &self.local_ip;
+        let server = &self.account.server;
+        let username = &self.account.username;
+        let adv_ip = &self.advertised_ip;
+        let local_ip = &self.local_ip;
         let local_port = self.local_port;
-        let display    = self.account.display_name.as_deref().unwrap_or(username);
-        let body_len   = sdp.len();
-        let via_proto  = self.via_proto();
+        let display = self.account.display_name.as_deref().unwrap_or(username);
+        let body_len = sdp.len();
+        let via_proto = self.via_proto();
         let contact_transport = self.contact_transport_param();
 
         let mut msg = format!(
@@ -105,7 +185,10 @@ impl SipStack {
              Content-Type: application/sdp\r\n\
              User-Agent: DeeLip/0.1.0\r\n"
         );
-        if let Some(a) = auth { msg.push_str(a); msg.push_str("\r\n"); }
+        if let Some(a) = auth {
+            msg.push_str(a);
+            msg.push_str("\r\n");
+        }
         msg.push_str(&format!("Content-Length: {body_len}\r\n\r\n{sdp}"));
         msg
     }
@@ -121,7 +204,7 @@ impl SipStack {
         let Some(media) = &dialog.media else { return };
         let (rtp_ip, rtp_port) = match &media.relay {
             Some(r) => (r.relayed_addr.ip().to_string(), r.relayed_addr.port()),
-            None    => (advertised_ip, media.local_rtp),
+            None => (advertised_ip, media.local_rtp),
         };
         let local_sdp = if hold {
             build_hold_offer(&rtp_ip, rtp_port, media.codec, media.local_srtp.as_ref())
@@ -130,28 +213,36 @@ impl SipStack {
         };
         let local_sdp = local_sdp.as_str();
 
-        let cseq   = dialog.next_local_cseq();
+        let cseq = dialog.next_local_cseq();
         let branch = new_branch();
 
-        let server     = self.account.server.clone();
-        let username   = self.account.username.clone();
-        let display    = self.account.display_name.clone().unwrap_or_else(|| username.clone());
-        let adv_ip     = self.advertised_ip.clone();
-        let local_ip   = self.local_ip.clone();
+        let server = self.account.server.clone();
+        let username = self.account.username.clone();
+        let display = self
+            .account
+            .display_name
+            .clone()
+            .unwrap_or_else(|| username.clone());
+        let adv_ip = self.advertised_ip.clone();
+        let local_ip = self.local_ip.clone();
         let local_port = self.local_port;
-        let call_id_s  = dialog.call_id.clone();
-        let from_tag   = dialog.local_tag.clone();
-        let to_uri     = dialog.remote_uri.clone();
-        let to_tag     = dialog.remote_tag.as_deref()
-            .map(|t| format!(";tag={t}")).unwrap_or_default();
-        let contact: SocketAddr = dialog.remote_contact
+        let call_id_s = dialog.call_id.clone();
+        let from_tag = dialog.local_tag.clone();
+        let to_uri = dialog.remote_uri.clone();
+        let to_tag = dialog
+            .remote_tag
+            .as_deref()
+            .map(|t| format!(";tag={t}"))
+            .unwrap_or_default();
+        let contact: SocketAddr = dialog
+            .remote_contact
             .as_deref()
             .and_then(|s| s.parse().ok())
             .unwrap_or(self.server_addr);
         let body_len = local_sdp.len();
 
         dialog.hold_pending = Some(hold);
-        dialog.local_sdp    = Some(local_sdp.to_string());
+        dialog.local_sdp = Some(local_sdp.to_string());
         let via_proto = self.via_proto();
         let contact_transport = self.contact_transport_param();
 
@@ -183,21 +274,29 @@ impl SipStack {
             _ => return,
         };
 
-        let cseq   = dialog.next_local_cseq();
+        let cseq = dialog.next_local_cseq();
         let branch = new_branch();
 
-        let server     = self.account.server.clone();
-        let username   = self.account.username.clone();
-        let display    = self.account.display_name.clone().unwrap_or_else(|| username.clone());
-        let adv_ip     = self.advertised_ip.clone();
-        let local_ip   = self.local_ip.clone();
+        let server = self.account.server.clone();
+        let username = self.account.username.clone();
+        let display = self
+            .account
+            .display_name
+            .clone()
+            .unwrap_or_else(|| username.clone());
+        let adv_ip = self.advertised_ip.clone();
+        let local_ip = self.local_ip.clone();
         let local_port = self.local_port;
-        let call_id_s  = dialog.call_id.clone();
-        let from_tag   = dialog.local_tag.clone();
-        let to_uri     = dialog.remote_uri.clone();
-        let to_tag     = dialog.remote_tag.as_deref()
-            .map(|t| format!(";tag={t}")).unwrap_or_default();
-        let contact: SocketAddr = dialog.remote_contact
+        let call_id_s = dialog.call_id.clone();
+        let from_tag = dialog.local_tag.clone();
+        let to_uri = dialog.remote_uri.clone();
+        let to_tag = dialog
+            .remote_tag
+            .as_deref()
+            .map(|t| format!(";tag={t}"))
+            .unwrap_or_default();
+        let contact: SocketAddr = dialog
+            .remote_contact
             .as_deref()
             .and_then(|s| s.parse().ok())
             .unwrap_or(self.server_addr);
@@ -228,9 +327,11 @@ impl SipStack {
     pub(crate) async fn on_response(&mut self, msg: SipMessage, status: u16, _from: SocketAddr) {
         let call_id = match msg.call_id() {
             Some(id) => id.to_string(),
-            None     => return,
+            None => return,
         };
-        if call_id == self.reg_call_id { return; }
+        if call_id == self.reg_call_id {
+            return;
+        }
 
         // REFER responses (blind transfer) don't follow the INVITE/BYE 200
         // convention (success is 202 Accepted) — handle by CSeq method
@@ -239,7 +340,10 @@ impl SipStack {
             let ev = if status < 300 {
                 SipEvent::TransferAccepted { call_id }
             } else {
-                SipEvent::TransferFailed { call_id, reason: format!("{status}") }
+                SipEvent::TransferFailed {
+                    call_id,
+                    reason: format!("{status}"),
+                }
             };
             let _ = self.event_tx.send(ev);
             return;
@@ -251,7 +355,8 @@ impl SipStack {
         // / `self.mwi_subscriptions`, whichever map this call-id belongs to.
         if matches!(msg.cseq(), Some((_, SipMethod::Subscribe))) {
             if self.subscriptions.contains_key(&call_id) {
-                self.on_presence_subscribe_response(msg, status, call_id).await;
+                self.on_presence_subscribe_response(msg, status, call_id)
+                    .await;
             } else if self.mwi_subscriptions.contains_key(&call_id) {
                 self.on_mwi_subscribe_response(msg, status, call_id).await;
             }
@@ -269,22 +374,41 @@ impl SipStack {
             Nothing,
             Ringing,
             Connected {
-                call_id: String, remote_sdp: String,
-                pending_offer: Option<PendingOfferMedia>, ice_gathered: Option<deelip_nat::IceGathered>,
-                ack_cid: String, ack_from_tag: String,
-                ack_to_uri: String, ack_to_tag: Option<String>, ack_cseq: u32,
+                call_id: String,
+                remote_sdp: String,
+                pending_offer: Option<PendingOfferMedia>,
+                ice_gathered: Option<deelip_nat::IceGathered>,
+                ack_cid: String,
+                ack_from_tag: String,
+                ack_to_uri: String,
+                ack_to_tag: Option<String>,
+                ack_cseq: u32,
             },
             ReInviteAck {
-                call_id: String, hold: bool,
-                ack_cid: String, ack_from_tag: String,
-                ack_to_uri: String, ack_to_tag: Option<String>, ack_cseq: u32,
+                call_id: String,
+                hold: bool,
+                ack_cid: String,
+                ack_from_tag: String,
+                ack_to_uri: String,
+                ack_to_tag: Option<String>,
+                ack_cseq: u32,
             },
             ByeOk(String),
-            Failed { call_id: String, code: u16, reason: String },
+            Failed {
+                call_id: String,
+                code: u16,
+                reason: String,
+            },
             InviteChallenged {
-                call_id: String, to_uri: String, local_sdp: String, challenge_raw: String,
-                ack_cid: String, ack_from_tag: String,
-                ack_to_uri: String, ack_to_tag: Option<String>, ack_cseq: u32,
+                call_id: String,
+                to_uri: String,
+                local_sdp: String,
+                challenge_raw: String,
+                ack_cid: String,
+                ack_from_tag: String,
+                ack_to_uri: String,
+                ack_to_tag: Option<String>,
+                ack_cseq: u32,
             },
         }
 
@@ -307,21 +431,20 @@ impl SipStack {
                             match dialog.state {
                                 DialogState::Calling | DialogState::Ringing => {
                                     // Initial call connected
-                                    dialog.state      = DialogState::Confirmed;
+                                    dialog.state = DialogState::Confirmed;
                                     dialog.remote_tag = parse_tag(msg.header("To").unwrap_or(""));
-                                    dialog.remote_sdp = Some(
-                                        String::from_utf8_lossy(&msg.body).into_owned(),
-                                    );
+                                    dialog.remote_sdp =
+                                        Some(String::from_utf8_lossy(&msg.body).into_owned());
                                     Act::Connected {
-                                        call_id:      dialog.call_id.clone(),
-                                        remote_sdp:   dialog.remote_sdp.clone().unwrap_or_default(),
+                                        call_id: dialog.call_id.clone(),
+                                        remote_sdp: dialog.remote_sdp.clone().unwrap_or_default(),
                                         pending_offer: dialog.pending_offer.take(),
-                                        ice_gathered:  dialog.ice_gathered.take(),
-                                        ack_cid:      dialog.call_id.clone(),
+                                        ice_gathered: dialog.ice_gathered.take(),
+                                        ack_cid: dialog.call_id.clone(),
                                         ack_from_tag: dialog.local_tag.clone(),
-                                        ack_to_uri:   dialog.remote_uri.clone(),
-                                        ack_to_tag:   dialog.remote_tag.clone(),
-                                        ack_cseq:     cseq_n,
+                                        ack_to_uri: dialog.remote_uri.clone(),
+                                        ack_to_tag: dialog.remote_tag.clone(),
+                                        ack_cseq: cseq_n,
                                     }
                                 }
                                 DialogState::Confirmed => {
@@ -329,13 +452,13 @@ impl SipStack {
                                     let hold = dialog.hold_pending.take().unwrap_or(true);
                                     dialog.is_held = hold;
                                     Act::ReInviteAck {
-                                        call_id:      dialog.call_id.clone(),
+                                        call_id: dialog.call_id.clone(),
                                         hold,
-                                        ack_cid:      dialog.call_id.clone(),
+                                        ack_cid: dialog.call_id.clone(),
                                         ack_from_tag: dialog.local_tag.clone(),
-                                        ack_to_uri:   dialog.remote_uri.clone(),
-                                        ack_to_tag:   dialog.remote_tag.clone(),
-                                        ack_cseq:     cseq_n,
+                                        ack_to_uri: dialog.remote_uri.clone(),
+                                        ack_to_tag: dialog.remote_tag.clone(),
+                                        ack_cseq: cseq_n,
                                     }
                                 }
                                 _ => Act::Nothing,
@@ -351,41 +474,72 @@ impl SipStack {
                 100 => Act::Nothing,
                 401 | 407 if dialog.state == DialogState::Calling && !dialog.auth_retried => {
                     let Some((cseq_n, SipMethod::Invite)) = msg.cseq() else {
-                        break 'blk Act::Failed { call_id: call_id.clone(), code: status, reason: "Unauthorized".into() };
+                        break 'blk Act::Failed {
+                            call_id: call_id.clone(),
+                            code: status,
+                            reason: "Unauthorized".into(),
+                        };
                     };
-                    let hdr_name = if status == 407 { "Proxy-Authenticate" } else { "WWW-Authenticate" };
+                    let hdr_name = if status == 407 {
+                        "Proxy-Authenticate"
+                    } else {
+                        "WWW-Authenticate"
+                    };
                     let Some(challenge_raw) = msg.header(hdr_name).map(str::to_string) else {
-                        break 'blk Act::Failed { call_id: call_id.clone(), code: status, reason: "Missing auth challenge".into() };
+                        break 'blk Act::Failed {
+                            call_id: call_id.clone(),
+                            code: status,
+                            reason: "Missing auth challenge".into(),
+                        };
                     };
                     dialog.auth_retried = true;
                     Act::InviteChallenged {
-                        call_id:      dialog.call_id.clone(),
-                        to_uri:       dialog.remote_uri.clone(),
-                        local_sdp:    dialog.local_sdp.clone().unwrap_or_default(),
+                        call_id: dialog.call_id.clone(),
+                        to_uri: dialog.remote_uri.clone(),
+                        local_sdp: dialog.local_sdp.clone().unwrap_or_default(),
                         challenge_raw,
-                        ack_cid:      dialog.call_id.clone(),
+                        ack_cid: dialog.call_id.clone(),
                         ack_from_tag: dialog.local_tag.clone(),
-                        ack_to_uri:   dialog.remote_uri.clone(),
-                        ack_to_tag:   dialog.remote_tag.clone(),
-                        ack_cseq:     cseq_n,
+                        ack_to_uri: dialog.remote_uri.clone(),
+                        ack_to_tag: dialog.remote_tag.clone(),
+                        ack_cseq: cseq_n,
                     }
                 }
                 c if c >= 300 => Act::Failed {
                     call_id: call_id.clone(),
-                    code:    c,
-                    reason:  msg.reason_phrase().unwrap_or("").to_string(),
+                    code: c,
+                    reason: msg.reason_phrase().unwrap_or("").to_string(),
                 },
                 _ => Act::Nothing,
             }
         }; // mutable borrow of self.dialogs released here
 
         match act {
-            Act::Nothing  => {}
-            Act::Ringing  => { let _ = self.event_tx.send(SipEvent::CallRinging { call_id }); }
-            Act::Connected { call_id, remote_sdp, pending_offer, ice_gathered, ack_cid, ack_from_tag, ack_to_uri, ack_to_tag, ack_cseq } => {
+            Act::Nothing => {}
+            Act::Ringing => {
+                let _ = self.event_tx.send(SipEvent::CallRinging { call_id });
+            }
+            Act::Connected {
+                call_id,
+                remote_sdp,
+                pending_offer,
+                ice_gathered,
+                ack_cid,
+                ack_from_tag,
+                ack_to_uri,
+                ack_to_tag,
+                ack_cseq,
+            } => {
                 // A 2xx ACK is a new transaction in its own right (RFC 3261
                 // §13.2.2.4) -- unlike a non-2xx ACK, it gets a fresh branch.
-                let ack = self.build_ack(&ack_cid, &ack_from_tag, &ack_to_uri, ack_to_tag.as_deref(), ack_cseq, &new_branch());
+                let ack = self.build_ack(
+                    &ack_cid,
+                    &ack_from_tag,
+                    &ack_to_uri,
+                    ack_to_tag.as_deref(),
+                    ack_cseq,
+                    &new_branch(),
+                );
                 let _ = self.transport.send(ack.as_bytes(), self.server_addr).await;
 
                 let codecs = media_setup::account_codecs(&self.account);
@@ -400,45 +554,63 @@ impl SipStack {
                     self.hang_up(&call_id).await;
                     self.dialogs.remove(&call_id);
                     let _ = self.event_tx.send(SipEvent::CallFailed {
-                        call_id, code: 0, reason: "No compatible codec in answer".into(),
+                        call_id,
+                        code: 0,
+                        reason: "No compatible codec in answer".into(),
                     });
                     return;
                 };
-                let Some(PendingOfferMedia { local_rtp, local_srtp, mut relay }) = pending_offer else {
+                let Some(PendingOfferMedia {
+                    local_rtp,
+                    local_srtp,
+                    relay,
+                }) = pending_offer
+                else {
                     debug!(call_id, "Connected with no pending offer media -- dropping");
                     return;
                 };
-                let ice_conn = media_setup::finish_ice_connect(ice_gathered, true, &parsed).await;
 
-                let account_secure = self.account.transport == deelip_config::TransportProtocol::Tls;
-                let srtp_session = match (&local_srtp, &parsed.srtp) {
-                    (Some(local), Some(remote)) => Some(SrtpSession { local: local.clone(), remote: remote.clone() }),
-                    _ => {
-                        if account_secure {
-                            tracing::warn!("TLS signaling active but remote SDP has no a=crypto -- falling back to plaintext RTP");
-                        }
-                        None
-                    }
-                };
-                let relay_conn: Option<Arc<dyn Conn + Send + Sync>> = ice_conn.as_ref().map(|c| c.conn.clone())
-                    .or_else(|| relay.as_ref().map(|r| r.conn.clone()));
-
-                if let Some(dialog) = self.dialogs.get_mut(&call_id) {
-                    dialog.media = Some(CallMedia {
-                        local_rtp, local_srtp, relay: relay.take(), ice: ice_conn, codec: parsed.codec, dtmf_type: parsed.dtmf_type,
+                // ICE connectivity checks (RFC 8445) are real network I/O,
+                // same reasoning as `initiate_call`/`accept_call` -- defer to
+                // a background task rather than blocking this whole account's
+                // event loop on `finish_ice_connect`'s multi-second timeout.
+                let internal_tx = self.internal_tx.clone();
+                let remote_rtp = parsed.rtp_addr;
+                let remote_srtp = parsed.srtp.clone();
+                let codec = parsed.codec;
+                let dtmf_type = parsed.dtmf_type;
+                tokio::spawn(async move {
+                    let ice = media_setup::finish_ice_connect(ice_gathered, true, &parsed).await;
+                    let _ = internal_tx.send(StackEvent::OutgoingConnected {
+                        call_id,
+                        local_rtp,
+                        local_srtp,
+                        relay,
+                        ice,
+                        codec,
+                        dtmf_type,
+                        remote_rtp,
+                        remote_srtp,
                     });
-                }
-
-                let _ = self.event_tx.send(SipEvent::CallConnected {
-                    call_id,
-                    media: CallMediaReady {
-                        codec: parsed.codec, dtmf_type: parsed.dtmf_type, local_rtp,
-                        remote_rtp: parsed.rtp_addr, srtp: srtp_session, relay: relay_conn,
-                    },
                 });
             }
-            Act::ReInviteAck { call_id, hold, ack_cid, ack_from_tag, ack_to_uri, ack_to_tag, ack_cseq } => {
-                let ack = self.build_ack(&ack_cid, &ack_from_tag, &ack_to_uri, ack_to_tag.as_deref(), ack_cseq, &new_branch());
+            Act::ReInviteAck {
+                call_id,
+                hold,
+                ack_cid,
+                ack_from_tag,
+                ack_to_uri,
+                ack_to_tag,
+                ack_cseq,
+            } => {
+                let ack = self.build_ack(
+                    &ack_cid,
+                    &ack_from_tag,
+                    &ack_to_uri,
+                    ack_to_tag.as_deref(),
+                    ack_cseq,
+                    &new_branch(),
+                );
                 let _ = self.transport.send(ack.as_bytes(), self.server_addr).await;
                 let ev = if hold {
                     SipEvent::CallHeld { call_id }
@@ -451,42 +623,127 @@ impl SipStack {
                 self.dialogs.remove(&id);
                 let _ = self.event_tx.send(SipEvent::CallEnded { call_id: id });
             }
-            Act::Failed { call_id, code, reason } => {
+            Act::Failed {
+                call_id,
+                code,
+                reason,
+            } => {
                 self.dialogs.remove(&call_id);
-                let _ = self.event_tx.send(SipEvent::CallFailed { call_id, code, reason });
+                let _ = self.event_tx.send(SipEvent::CallFailed {
+                    call_id,
+                    code,
+                    reason,
+                });
             }
             Act::InviteChallenged {
-                call_id, to_uri, local_sdp, challenge_raw,
-                ack_cid, ack_from_tag, ack_to_uri, ack_to_tag, ack_cseq,
+                call_id,
+                to_uri,
+                local_sdp,
+                challenge_raw,
+                ack_cid,
+                ack_from_tag,
+                ack_to_uri,
+                ack_to_tag,
+                ack_cseq,
             } => {
                 // ACK to a non-2xx response must reuse the *original*
                 // INVITE's branch (RFC 3261 §17.1.1.3), unlike a 2xx ACK
                 // which is a new transaction with its own fresh branch.
-                let Some(invite_branch) = self.dialogs.get(&call_id).map(|d| d.invite_branch.clone()) else { return };
-                let ack = self.build_ack(&ack_cid, &ack_from_tag, &ack_to_uri, ack_to_tag.as_deref(), ack_cseq, &invite_branch);
+                let Some(invite_branch) =
+                    self.dialogs.get(&call_id).map(|d| d.invite_branch.clone())
+                else {
+                    return;
+                };
+                let ack = self.build_ack(
+                    &ack_cid,
+                    &ack_from_tag,
+                    &ack_to_uri,
+                    ack_to_tag.as_deref(),
+                    ack_cseq,
+                    &invite_branch,
+                );
                 let _ = self.transport.send(ack.as_bytes(), self.server_addr).await;
 
                 let Some(auth) = build_challenge_response(
-                    &self.account.username, &self.account.password, "INVITE", &to_uri, &challenge_raw,
+                    &self.account.username,
+                    &self.account.password,
+                    "INVITE",
+                    &to_uri,
+                    &challenge_raw,
                 ) else {
                     self.dialogs.remove(&call_id);
                     let _ = self.event_tx.send(SipEvent::CallFailed {
-                        call_id, code: 401, reason: "Bad auth challenge".into(),
+                        call_id,
+                        code: 401,
+                        reason: "Bad auth challenge".into(),
                     });
                     return;
                 };
 
-                let Some(dialog) = self.dialogs.get_mut(&call_id) else { return; };
-                let cseq   = dialog.next_local_cseq();
+                let Some(dialog) = self.dialogs.get_mut(&call_id) else {
+                    return;
+                };
+                let cseq = dialog.next_local_cseq();
                 let branch = new_branch();
                 dialog.invite_branch = branch.clone();
-                let dialog_call_id  = dialog.call_id.clone();
+                let dialog_call_id = dialog.call_id.clone();
                 let dialog_from_tag = dialog.local_tag.clone();
-                let msg = self.build_invite(&dialog_call_id, &dialog_from_tag, cseq, &to_uri, &local_sdp, Some(&auth), &branch);
+                let msg = self.build_invite(
+                    &dialog_call_id,
+                    &dialog_from_tag,
+                    cseq,
+                    &to_uri,
+                    &local_sdp,
+                    Some(&auth),
+                    &branch,
+                );
                 debug!("→ INVITE {to_uri} (authenticated)");
                 let _ = self.transport.send(msg.as_bytes(), self.server_addr).await;
             }
         }
+    }
+
+    /// Finish connecting an outgoing call once `on_response`'s background
+    /// ICE-connect resolution completes: fold the result into `CallMedia`/
+    /// `CallMediaReady` and emit `CallConnected`. A no-op if the dialog is
+    /// already gone (hung up, CANCELed, or failed some other way while this
+    /// was resolving in the background) -- there's nothing left to connect.
+    pub(crate) async fn on_outgoing_connected(&mut self, ev: StackEvent) {
+        let StackEvent::OutgoingConnected {
+            call_id,
+            local_rtp,
+            local_srtp,
+            relay,
+            ice,
+            codec,
+            dtmf_type,
+            remote_rtp,
+            remote_srtp,
+        } = ev
+        else {
+            unreachable!("caller already matched this variant")
+        };
+
+        if !self.dialogs.contains_key(&call_id) {
+            return;
+        }
+        let account_secure = self.account.transport == deelip_config::TransportProtocol::Tls;
+        let (media, ready) = media_setup::resolve_call_media(
+            local_rtp,
+            local_srtp,
+            relay,
+            ice,
+            codec,
+            dtmf_type,
+            remote_rtp,
+            remote_srtp,
+            account_secure,
+        );
+        self.dialogs.get_mut(&call_id).expect("checked above").media = Some(media);
+        let _ = self.event_tx.send(SipEvent::CallConnected {
+            call_id,
+            media: ready,
+        });
     }
 
     // ── Incoming INVITE ───────────────────────────────────────────────────────
@@ -494,7 +751,7 @@ impl SipStack {
     pub(crate) async fn on_invite(&mut self, msg: SipMessage, from: SocketAddr) {
         let call_id = match msg.call_id() {
             Some(id) => id.to_string(),
-            None     => return,
+            None => return,
         };
 
         // re-INVITE on existing confirmed dialog
@@ -515,55 +772,72 @@ impl SipStack {
             let ok = self.build_response_with_body(&msg, 200, "OK", &local_tag, &local_sdp);
             let _ = self.transport.send(ok.as_bytes(), from).await;
             let ev = if is_sendonly {
-                SipEvent::RemoteHeld   { call_id: call_id.clone() }
+                SipEvent::RemoteHeld {
+                    call_id: call_id.clone(),
+                }
             } else {
-                SipEvent::RemoteResumed { call_id: call_id.clone() }
+                SipEvent::RemoteResumed {
+                    call_id: call_id.clone(),
+                }
             };
             let _ = self.event_tx.send(ev);
             return;
         }
 
         // Fresh INVITE
-        let from_hdr  = msg.header("From").unwrap_or("").to_string();
-        let from_uri  = parse_uri(&from_hdr).unwrap_or_else(|| from_hdr.clone());
-        let from_tag  = parse_tag(&from_hdr).unwrap_or_default();
+        let from_hdr = msg.header("From").unwrap_or("").to_string();
+        let from_uri = parse_uri(&from_hdr).unwrap_or_else(|| from_hdr.clone());
+        let from_tag = parse_tag(&from_hdr).unwrap_or_default();
         let (cseq_n, _) = msg.cseq().unwrap_or((1, SipMethod::Invite));
         let remote_sdp = String::from_utf8_lossy(&msg.body).into_owned();
         let remote_via = msg.header("Via").unwrap_or("").to_string();
-        let local_tag  = new_tag();
+        let local_tag = new_tag();
 
         debug!("← INVITE from {from_uri} ({from})");
-        let trying  = self.build_response(&msg, 100, "Trying",  &local_tag, "");
+        let trying = self.build_response(&msg, 100, "Trying", &local_tag, "");
         let ringing = self.build_response(&msg, 180, "Ringing", &local_tag, "");
-        let _ = self.transport.send(trying.as_bytes(),  from).await;
+        let _ = self.transport.send(trying.as_bytes(), from).await;
         let _ = self.transport.send(ringing.as_bytes(), from).await;
 
         let mut dialog = Dialog::new_incoming(
-            call_id.clone(), local_tag, from_uri.clone(),
-            from_tag, cseq_n, remote_sdp.clone(), remote_via,
+            call_id.clone(),
+            local_tag,
+            from_uri.clone(),
+            from_tag,
+            cseq_n,
+            remote_sdp.clone(),
+            remote_via,
         );
         dialog.remote_contact = Some(from.to_string());
         self.dialogs.insert(call_id.clone(), dialog);
 
-        let _ = self.event_tx.send(SipEvent::IncomingCall { call_id, from: from_uri });
+        let _ = self.event_tx.send(SipEvent::IncomingCall {
+            call_id,
+            from: from_uri,
+        });
     }
 
-    /// Build our SDP answer (codec/SRTP/ICE/TURN resolution, all internal
-    /// now -- see `media_setup`), send the 200 OK, and emit
-    /// `SipEvent::CallConnected` once media is ready. Declines with 486 (via
-    /// `reject_call`) and emits `SipEvent::CallFailed` instead if no
-    /// mutually-acceptable codec is found or a local RTP port can't be
-    /// allocated -- either way the caller (`ui`) only ever finds out via
-    /// events, since this command is fire-and-forget.
+    /// Check codec compatibility and allocate a local RTP port -- both fast,
+    /// local operations -- then kick off STUN/TURN/ICE resolution for our
+    /// answer on a background task (see `StackEvent`'s doc comment for why).
+    /// Declines with 486 (via `reject_call`) and emits `SipEvent::CallFailed`
+    /// immediately if no mutually-acceptable codec is found or a local RTP
+    /// port can't be allocated; otherwise the 200 OK isn't sent and
+    /// `SipEvent::CallConnected` isn't emitted until the background task
+    /// reports back via `on_incoming_answer_ready`.
     pub(crate) async fn accept_call(&mut self, call_id: &str) {
-        let Some(dialog) = self.dialogs.get(call_id) else { return };
+        let Some(dialog) = self.dialogs.get(call_id) else {
+            return;
+        };
         let remote_sdp = dialog.remote_sdp.clone().unwrap_or_default();
 
         let codecs = media_setup::account_codecs(&self.account);
         let Some(parsed) = parse_sdp(&remote_sdp, &codecs) else {
             self.reject_call(call_id).await;
             let _ = self.event_tx.send(SipEvent::CallFailed {
-                call_id: call_id.to_string(), code: 488, reason: "No compatible codec".into(),
+                call_id: call_id.to_string(),
+                code: 488,
+                reason: "No compatible codec".into(),
             });
             return;
         };
@@ -574,49 +848,112 @@ impl SipStack {
                 error!("Failed to allocate local RTP port: {e}");
                 self.reject_call(call_id).await;
                 let _ = self.event_tx.send(SipEvent::CallFailed {
-                    call_id: call_id.to_string(), code: 0, reason: "Local RTP port allocation failed".into(),
+                    call_id: call_id.to_string(),
+                    code: 0,
+                    reason: "Local RTP port allocation failed".into(),
                 });
                 return;
             }
         };
 
-        let mut relay = None;
-        let ice_result = media_setup::try_answer_with_ice(&self.network, &parsed).await;
-        let (rtp_ip, rtp_port, ice_attrs, ice_conn) = match ice_result {
-            Some((attrs, addr, conn)) => (addr.ip().to_string(), addr.port(), Some(attrs), Some(conn)),
-            None => {
-                let (ip, port) = media_setup::resolve_rtp_endpoint(&self.network, &self.advertised_ip, local_rtp, &mut relay).await;
-                (ip, port, None, None)
-            }
+        let network = self.network.clone();
+        let advertised_ip = self.advertised_ip.clone();
+        let account_secure = self.account.transport == deelip_config::TransportProtocol::Tls;
+        let internal_tx = self.internal_tx.clone();
+        let call_id = call_id.to_string();
+        tokio::spawn(async move {
+            let mut relay = None;
+            let ice_result = media_setup::try_answer_with_ice(&network, &parsed).await;
+            let (rtp_ip, rtp_port, ice_attrs, ice) = match ice_result {
+                Some((attrs, addr, conn)) => {
+                    (addr.ip().to_string(), addr.port(), Some(attrs), Some(conn))
+                }
+                None => {
+                    let (ip, port) = media_setup::resolve_rtp_endpoint(
+                        &network,
+                        &advertised_ip,
+                        local_rtp,
+                        &mut relay,
+                    )
+                    .await;
+                    (ip, port, None, None)
+                }
+            };
+
+            let local_srtp = if account_secure {
+                Some(SrtpParams::generate())
+            } else {
+                None
+            };
+            let local_sdp = build_answer(
+                &rtp_ip,
+                rtp_port,
+                parsed.codec,
+                local_srtp.as_ref(),
+                ice_attrs.as_ref(),
+            );
+
+            let _ = internal_tx.send(StackEvent::IncomingAnswerReady {
+                call_id,
+                parsed,
+                local_sdp,
+                local_rtp,
+                local_srtp,
+                relay,
+                ice,
+            });
+        });
+    }
+
+    /// Finish accepting an incoming call once `accept_call`'s background
+    /// answer resolution completes: send the 200 OK, fold the result into
+    /// `CallMedia`/`CallMediaReady`, and emit `CallConnected`. A no-op if the
+    /// dialog is already gone (CANCELed/hung-up while this was resolving) --
+    /// there's nothing left to answer.
+    pub(crate) async fn on_incoming_answer_ready(&mut self, ev: StackEvent) {
+        let StackEvent::IncomingAnswerReady {
+            call_id,
+            parsed,
+            local_sdp,
+            local_rtp,
+            local_srtp,
+            relay,
+            ice,
+        } = ev
+        else {
+            unreachable!("caller already matched this variant")
         };
 
-        let account_secure = self.account.transport == deelip_config::TransportProtocol::Tls;
-        let local_srtp = if account_secure { Some(SrtpParams::generate()) } else { None };
-        let local_sdp = build_answer(&rtp_ip, rtp_port, parsed.codec, local_srtp.as_ref(), ice_attrs.as_ref());
-
         let contact_transport = self.contact_transport_param();
-        let Some(dialog) = self.dialogs.get_mut(call_id) else { return };
+        let Some(dialog) = self.dialogs.get_mut(&call_id) else {
+            return;
+        };
 
-        let contact: SocketAddr = dialog.remote_contact
+        let contact: SocketAddr = dialog
+            .remote_contact
             .as_deref()
             .and_then(|s| s.parse().ok())
             .unwrap_or(self.server_addr);
 
-        let cseq_n       = dialog.remote_cseq.unwrap_or(1);
-        let call_id_str  = dialog.call_id.clone();
-        let local_tag    = dialog.local_tag.clone();
-        let remote_tag   = dialog.remote_tag.clone();
-        let remote_uri   = dialog.remote_uri.clone();
-        let remote_via   = dialog.remote_via.clone();
-        let adv_ip       = self.advertised_ip.clone();
-        let local_port   = self.local_port;
-        let username     = self.account.username.clone();
-        let server       = self.account.server.clone();
-        let display      = self.account.display_name.clone()
+        let cseq_n = dialog.remote_cseq.unwrap_or(1);
+        let call_id_str = dialog.call_id.clone();
+        let local_tag = dialog.local_tag.clone();
+        let remote_tag = dialog.remote_tag.clone();
+        let remote_uri = dialog.remote_uri.clone();
+        let remote_via = dialog.remote_via.clone();
+        let adv_ip = self.advertised_ip.clone();
+        let local_port = self.local_port;
+        let username = self.account.username.clone();
+        let server = self.account.server.clone();
+        let display = self
+            .account
+            .display_name
+            .clone()
             .unwrap_or_else(|| username.clone());
-        let body_len     = local_sdp.len();
+        let body_len = local_sdp.len();
 
-        let from_tag_part = remote_tag.as_deref()
+        let from_tag_part = remote_tag
+            .as_deref()
             .map(|t| format!(";tag={t}"))
             .unwrap_or_default();
 
@@ -636,48 +973,51 @@ impl SipStack {
 
         let _ = self.transport.send(ok_msg.as_bytes(), contact).await;
 
-        let srtp_session = match (&local_srtp, &parsed.srtp) {
-            (Some(local), Some(remote)) => Some(SrtpSession { local: local.clone(), remote: remote.clone() }),
-            _ => {
-                if account_secure {
-                    tracing::warn!("TLS signaling active but remote SDP has no a=crypto -- falling back to plaintext RTP");
-                }
-                None
-            }
-        };
-        let relay_conn: Option<Arc<dyn Conn + Send + Sync>> = ice_conn.as_ref().map(|c| c.conn.clone())
-            .or_else(|| relay.as_ref().map(|r| r.conn.clone()));
+        let account_secure = self.account.transport == deelip_config::TransportProtocol::Tls;
+        let (media, ready) = media_setup::resolve_call_media(
+            local_rtp,
+            local_srtp,
+            relay,
+            ice,
+            parsed.codec,
+            parsed.dtmf_type,
+            parsed.rtp_addr,
+            parsed.srtp,
+            account_secure,
+        );
 
-        let dialog = self.dialogs.get_mut(call_id).expect("dialog present -- checked above, nothing removes it in between");
-        dialog.state     = DialogState::Confirmed;
+        let dialog = self
+            .dialogs
+            .get_mut(&call_id)
+            .expect("dialog present -- checked above, nothing removes it in between");
+        dialog.state = DialogState::Confirmed;
         dialog.local_sdp = Some(local_sdp);
-        dialog.media = Some(CallMedia {
-            local_rtp, local_srtp, relay, ice: ice_conn, codec: parsed.codec, dtmf_type: parsed.dtmf_type,
-        });
+        dialog.media = Some(media);
 
         let _ = self.event_tx.send(SipEvent::CallConnected {
-            call_id: call_id.to_string(),
-            media: CallMediaReady {
-                codec: parsed.codec, dtmf_type: parsed.dtmf_type, local_rtp,
-                remote_rtp: parsed.rtp_addr, srtp: srtp_session, relay: relay_conn,
-            },
+            call_id,
+            media: ready,
         });
     }
 
     pub(crate) async fn reject_call(&mut self, call_id: &str) {
         if let Some(dialog) = self.dialogs.remove(call_id) {
-            let contact: SocketAddr = dialog.remote_contact
+            let contact: SocketAddr = dialog
+                .remote_contact
                 .as_deref()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(self.server_addr);
-            let username   = &self.account.username;
-            let server     = &self.account.server;
-            let display    = self.account.display_name.as_deref().unwrap_or(username);
-            let local_tag  = &dialog.local_tag;
+            let username = &self.account.username;
+            let server = &self.account.server;
+            let display = self.account.display_name.as_deref().unwrap_or(username);
+            let local_tag = &dialog.local_tag;
             let remote_uri = &dialog.remote_uri;
             let remote_via = &dialog.remote_via;
-            let from_tag   = dialog.remote_tag.as_deref()
-                .map(|t| format!(";tag={t}")).unwrap_or_default();
+            let from_tag = dialog
+                .remote_tag
+                .as_deref()
+                .map(|t| format!(";tag={t}"))
+                .unwrap_or_default();
             let cseq_n = dialog.remote_cseq.unwrap_or(1);
 
             let decline = format!(
@@ -699,24 +1039,32 @@ impl SipStack {
     pub(crate) async fn hang_up(&mut self, call_id: &str) {
         let dialog = match self.dialogs.get_mut(call_id) {
             Some(d) => d,
-            None    => return,
+            None => return,
         };
 
-        dialog.state   = DialogState::Terminating;
-        let cseq       = dialog.next_local_cseq();
-        let branch     = new_branch();
-        let server     = self.account.server.clone();
-        let username   = self.account.username.clone();
-        let display    = self.account.display_name.clone().unwrap_or_else(|| username.clone());
-        let local_ip   = self.local_ip.clone();
-        let adv_ip     = self.advertised_ip.clone();
+        dialog.state = DialogState::Terminating;
+        let cseq = dialog.next_local_cseq();
+        let branch = new_branch();
+        let server = self.account.server.clone();
+        let username = self.account.username.clone();
+        let display = self
+            .account
+            .display_name
+            .clone()
+            .unwrap_or_else(|| username.clone());
+        let local_ip = self.local_ip.clone();
+        let adv_ip = self.advertised_ip.clone();
         let local_port = self.local_port;
-        let call_id_s  = dialog.call_id.clone();
-        let from_tag   = dialog.local_tag.clone();
-        let to_uri     = dialog.remote_uri.clone();
-        let to_tag     = dialog.remote_tag.as_deref()
-            .map(|t| format!(";tag={t}")).unwrap_or_default();
-        let contact: SocketAddr = dialog.remote_contact
+        let call_id_s = dialog.call_id.clone();
+        let from_tag = dialog.local_tag.clone();
+        let to_uri = dialog.remote_uri.clone();
+        let to_tag = dialog
+            .remote_tag
+            .as_deref()
+            .map(|t| format!(";tag={t}"))
+            .unwrap_or_default();
+        let contact: SocketAddr = dialog
+            .remote_contact
             .as_deref()
             .and_then(|s| s.parse().ok())
             .unwrap_or(self.server_addr);
@@ -743,7 +1091,7 @@ impl SipStack {
     pub(crate) async fn on_bye(&mut self, msg: SipMessage, from: SocketAddr) {
         let call_id = match msg.call_id() {
             Some(id) => id.to_string(),
-            None     => return,
+            None => return,
         };
         debug!("← BYE {call_id}");
         let ok = self.build_response(&msg, 200, "OK", "", "");

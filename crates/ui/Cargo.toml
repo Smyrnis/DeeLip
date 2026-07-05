@@ -1,23 +1,23 @@
 [package]
-name    = "deelip-ui"
+name = "deelip-ui"
 version.workspace = true
 edition.workspace = true
 
 [dependencies]
-deelip-config  = { workspace = true }
-deelip-sip     = { workspace = true }
-deelip-media   = { workspace = true }
-deelip-nat     = { workspace = true }
+deelip-config = { workspace = true }
+deelip-sip = { workspace = true }
+deelip-media = { workspace = true }
+deelip-nat = { workspace = true }
 deelip-updater = { workspace = true }
-eframe        = { workspace = true }
-egui          = { workspace = true }
-anyhow        = { workspace = true }
-tracing       = { workspace = true }
-tokio         = { workspace = true }
-tray-icon     = { workspace = true }
-image         = { workspace = true }
-gtk           = { workspace = true }
-cpal          = { workspace = true }
+eframe = { workspace = true }
+egui = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true }
+tray-icon = { workspace = true }
+image = { workspace = true }
+gtk = { workspace = true }
+cpal = { workspace = true }
 notify-rust = "4.18.0"
 rodio = { version = "0.19", default-features = false, features = ["wav"] }
 rfd = "0.17.2"

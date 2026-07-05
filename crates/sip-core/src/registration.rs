@@ -21,7 +21,7 @@ impl SipStack {
             }
             Some(401) | Some(407) => {}
             Some(c) => return Err(anyhow::anyhow!("REGISTER rejected: {c}")),
-            None    => return Err(anyhow::anyhow!("Expected response")),
+            None => return Err(anyhow::anyhow!("Expected response")),
         }
 
         let hdr_name = if resp.status_code() == Some(407) {
@@ -36,8 +36,13 @@ impl SipStack {
 
         let uri = format!("sip:{}", self.account.server);
         let auth = build_challenge_response(
-            &self.account.username, &self.account.password, "REGISTER", &uri, &www_auth,
-        ).ok_or_else(|| anyhow::anyhow!("Bad challenge: {www_auth}"))?;
+            &self.account.username,
+            &self.account.password,
+            "REGISTER",
+            &uri,
+            &www_auth,
+        )
+        .ok_or_else(|| anyhow::anyhow!("Bad challenge: {www_auth}"))?;
 
         self.send_register(Some(&auth)).await?;
         let resp2 = self.recv_reg_response().await?;
@@ -47,22 +52,22 @@ impl SipStack {
                 Ok(extract_expires(&resp2).unwrap_or(REG_EXPIRES))
             }
             Some(c) => Err(anyhow::anyhow!("REGISTER rejected: {c}")),
-            None    => Err(anyhow::anyhow!("Expected response")),
+            None => Err(anyhow::anyhow!("Expected response")),
         }
     }
 
     async fn send_register(&self, auth: Option<&str>) -> anyhow::Result<()> {
-        let cseq       = self.reg_cseq.fetch_add(1, Ordering::SeqCst);
-        let branch     = new_branch();
-        let server     = &self.account.server;
-        let username   = &self.account.username;
-        let adv_ip     = &self.advertised_ip;
-        let local_ip   = &self.local_ip;
+        let cseq = self.reg_cseq.fetch_add(1, Ordering::SeqCst);
+        let branch = new_branch();
+        let server = &self.account.server;
+        let username = &self.account.username;
+        let adv_ip = &self.advertised_ip;
+        let local_ip = &self.local_ip;
         let local_port = self.local_port;
-        let call_id    = &self.reg_call_id;
-        let from_tag   = &self.reg_from_tag;
-        let display    = self.account.display_name.as_deref().unwrap_or(username);
-        let via_proto  = self.via_proto();
+        let call_id = &self.reg_call_id;
+        let from_tag = &self.reg_from_tag;
+        let display = self.account.display_name.as_deref().unwrap_or(username);
+        let via_proto = self.via_proto();
         let contact_transport = self.contact_transport_param();
 
         let mut msg = format!(
@@ -77,11 +82,16 @@ impl SipStack {
              Expires: {REG_EXPIRES}\r\n\
              User-Agent: DeeLip/0.1.0\r\n"
         );
-        if let Some(a) = auth { msg.push_str(a); msg.push_str("\r\n"); }
+        if let Some(a) = auth {
+            msg.push_str(a);
+            msg.push_str("\r\n");
+        }
         msg.push_str("Content-Length: 0\r\n\r\n");
 
         debug!("→ REGISTER");
-        self.transport.send(msg.as_bytes(), self.server_addr).await
+        self.transport
+            .send(msg.as_bytes(), self.server_addr)
+            .await
             .context("Sending REGISTER")
     }
 
@@ -95,9 +105,14 @@ impl SipStack {
 
             let msg = match SipMessage::parse(&data) {
                 Some(m) => m,
-                None    => { warn!("Unparsable datagram during REGISTER"); continue; }
+                None => {
+                    warn!("Unparsable datagram during REGISTER");
+                    continue;
+                }
             };
-            if matches!(msg.status_code(), Some(c) if c < 200) { continue; }
+            if matches!(msg.status_code(), Some(c) if c < 200) {
+                continue;
+            }
             if msg.method().is_some() {
                 debug!("Ignoring request during REGISTER");
                 continue;

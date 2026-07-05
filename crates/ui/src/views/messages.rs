@@ -14,34 +14,52 @@ impl DeelipApp {
             // Same `show_rows` virtualization + single-widget-per-row divider
             // approach as History (`views/history.rs`) -- same shape of
             // problem, a capped append-mostly list.
-            let row_height = ui.spacing().interact_size.y.max(ui.text_style_height(&egui::TextStyle::Body))
+            let row_height = ui
+                .spacing()
+                .interact_size
+                .y
+                .max(ui.text_style_height(&egui::TextStyle::Body))
                 + ui.spacing().item_spacing.y;
             let count = self.messages.messages.len();
             let mut reply_target: Option<String> = None;
-            egui::ScrollArea::vertical().max_height(280.0).show_rows(ui, row_height, count, |ui, row_range| {
-                for idx in row_range {
-                    let m = &self.messages.messages[idx];
-                    let (icon, color) = match m.direction {
-                        MessageDirection::Inbound  => (egui_phosphor::regular::ARROW_DOWN_LEFT, self.palette.info),
-                        MessageDirection::Outbound => (egui_phosphor::regular::ARROW_UP_RIGHT, self.palette.accent),
-                    };
-                    let peer_uri = m.peer_uri.clone();
-                    let body = m.body.clone();
-                    let uri = m.peer_uri.clone();
-                    let direction = m.direction.clone();
-                    let palette = self.palette;
-                    list_row(ui, &palette, idx, |ui| {
-                        ui.label(RichText::new(icon).color(color));
-                        ui.label(short_uri(&uri));
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if direction == MessageDirection::Inbound && ui.small_button("Reply").clicked() {
-                                reply_target = Some(peer_uri.clone());
+            egui::ScrollArea::vertical().max_height(280.0).show_rows(
+                ui,
+                row_height,
+                count,
+                |ui, row_range| {
+                    for idx in row_range {
+                        let m = &self.messages.messages[idx];
+                        let (icon, color) = match m.direction {
+                            MessageDirection::Inbound => {
+                                (egui_phosphor::regular::ARROW_DOWN_LEFT, self.palette.info)
                             }
-                            ui.label(RichText::new(&body).color(palette.muted));
+                            MessageDirection::Outbound => {
+                                (egui_phosphor::regular::ARROW_UP_RIGHT, self.palette.accent)
+                            }
+                        };
+                        let peer_uri = m.peer_uri.clone();
+                        let body = m.body.clone();
+                        let uri = m.peer_uri.clone();
+                        let direction = m.direction.clone();
+                        let palette = self.palette;
+                        list_row(ui, &palette, idx, |ui| {
+                            ui.label(RichText::new(icon).color(color));
+                            ui.label(short_uri(&uri));
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if direction == MessageDirection::Inbound
+                                        && ui.small_button("Reply").clicked()
+                                    {
+                                        reply_target = Some(peer_uri.clone());
+                                    }
+                                    ui.label(RichText::new(&body).color(palette.muted));
+                                },
+                            );
                         });
-                    });
-                }
-            });
+                    }
+                },
+            );
             if let Some(peer) = reply_target {
                 self.message_to = short_uri(&peer);
             }
@@ -53,27 +71,36 @@ impl DeelipApp {
         ui.add_space(4.0);
         ui.horizontal(|ui| {
             ui.label("To:");
-            ui.add(egui::TextEdit::singleline(&mut self.message_to)
-                .hint_text("sip:bob@example.com")
-                .desired_width(f32::INFINITY));
+            ui.add(
+                egui::TextEdit::singleline(&mut self.message_to)
+                    .hint_text("sip:bob@example.com")
+                    .desired_width(f32::INFINITY),
+            );
         });
         ui.add_space(4.0);
-        ui.add(egui::TextEdit::multiline(&mut self.message_body)
-            .desired_rows(3)
-            .hint_text("Message text")
-            .desired_width(f32::INFINITY));
+        ui.add(
+            egui::TextEdit::multiline(&mut self.message_body)
+                .desired_rows(3)
+                .hint_text("Message text")
+                .desired_width(f32::INFINITY),
+        );
         ui.add_space(4.0);
         let can_send = !self.message_to.trim().is_empty()
             && !self.message_body.trim().is_empty()
             && self.reg_ok
             && self.selected_account_idx().is_some();
-        if ui.add_enabled(can_send, egui::Button::new("Send")).clicked() {
+        if ui
+            .add_enabled(can_send, egui::Button::new("Send"))
+            .clicked()
+        {
             self.do_send_message();
         }
     }
 
     fn do_send_message(&mut self) {
-        let Some(acc) = self.selected_account_idx() else { return };
+        let Some(acc) = self.selected_account_idx() else {
+            return;
+        };
         let domain = self.accounts[acc].handle.domain.clone();
         let to = normalize_target(self.message_to.trim(), &domain);
         let body = self.message_body.trim().to_string();

@@ -24,7 +24,9 @@ use crate::codec::{
     decode_pcma, decode_pcmu, encode_pcma, encode_pcmu, G722Decoder, G722Encoder, GsmDecoder,
     GsmEncoder, IlbcDecoder, IlbcEncoder, OpusDecoder, OpusEncoder,
 };
-use crate::dtmf::{build_dtmf_burst, char_to_event, dtmf_tone_frame, DTMF_PAYLOAD_TYPE, INBAND_FRAME_COUNT};
+use crate::dtmf::{
+    build_dtmf_burst, char_to_event, dtmf_tone_frame, DTMF_PAYLOAD_TYPE, INBAND_FRAME_COUNT,
+};
 use crate::rtp::{RtpPacket, RtpSender};
 
 type WavWriter = hound::WavWriter<BufWriter<File>>;
@@ -33,7 +35,13 @@ type WavWriter = hound::WavWriter<BufWriter<File>>;
 /// contain `@` and other characters not safe verbatim in a filename).
 fn sanitize_filename(s: &str) -> String {
     s.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
@@ -63,8 +71,11 @@ fn open_recorder(call_id: &str) -> anyhow::Result<WavWriter> {
 fn ts_increment_for(codec: AudioCodec) -> u32 {
     match codec {
         AudioCodec::Opus => 960,
-        AudioCodec::Pcmu | AudioCodec::Pcma | AudioCodec::G722
-            | AudioCodec::Gsm | AudioCodec::Ilbc => 160,
+        AudioCodec::Pcmu
+        | AudioCodec::Pcma
+        | AudioCodec::G722
+        | AudioCodec::Gsm
+        | AudioCodec::Ilbc => 160,
     }
 }
 
@@ -80,8 +91,12 @@ enum RtpSocket {
 impl RtpSocket {
     async fn send_to(&self, buf: &[u8], addr: SocketAddr) -> anyhow::Result<()> {
         match self {
-            Self::Direct(s) => { s.send_to(buf, addr).await?; }
-            Self::Relay(c)  => { c.send_to(buf, addr).await?; }
+            Self::Direct(s) => {
+                s.send_to(buf, addr).await?;
+            }
+            Self::Relay(c) => {
+                c.send_to(buf, addr).await?;
+            }
         }
         Ok(())
     }
@@ -89,7 +104,7 @@ impl RtpSocket {
     async fn recv_from(&self, buf: &mut [u8]) -> anyhow::Result<(usize, SocketAddr)> {
         match self {
             Self::Direct(s) => Ok(s.recv_from(buf).await?),
-            Self::Relay(c)  => Ok(c.recv_from(buf).await?),
+            Self::Relay(c) => Ok(c.recv_from(buf).await?),
         }
     }
 }
@@ -100,11 +115,11 @@ impl RtpSocket {
 /// new to allocate); the two legs may have negotiated different codecs.
 pub struct ConferenceLeg {
     pub local_rtp_port: u16,
-    pub remote_rtp:     SocketAddr,
-    pub codec:          AudioCodec,
-    pub dtmf_pt:        Option<u8>,
-    pub srtp:           Option<SrtpSession>,
-    pub relay:          Option<Arc<dyn Conn + Send + Sync>>,
+    pub remote_rtp: SocketAddr,
+    pub codec: AudioCodec,
+    pub dtmf_pt: Option<u8>,
+    pub srtp: Option<SrtpSession>,
+    pub relay: Option<Arc<dyn Conn + Send + Sync>>,
 }
 
 // ── Call statistics ───────────────────────────────────────────────────────────
@@ -115,15 +130,15 @@ pub struct ConferenceLeg {
 /// what most softphones show without a full RTCP implementation).
 #[derive(Debug, Clone, Default)]
 pub struct LegStats {
-    pub packets_sent:     u64,
-    pub bytes_sent:       u64,
+    pub packets_sent: u64,
+    pub bytes_sent: u64,
     pub packets_received: u64,
-    pub bytes_received:   u64,
+    pub bytes_received: u64,
     /// Best-effort count of missing RTP sequence numbers on the receive
     /// side (gaps > 1000 are treated as reordering/restart noise, not loss).
-    pub packets_lost:     u64,
+    pub packets_lost: u64,
     /// RFC 3550 §6.4.1 interarrival jitter estimate, in milliseconds.
-    pub jitter_ms:        f64,
+    pub jitter_ms: f64,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -140,9 +155,9 @@ type SharedStats = Arc<Mutex<CallStatsSnapshot>>;
 /// task ever touches it.
 #[derive(Default)]
 struct JitterTracker {
-    last_seq:     Option<u16>,
+    last_seq: Option<u16>,
     last_arrival: Option<Instant>,
-    last_rtp_ts:  Option<u32>,
+    last_rtp_ts: Option<u32>,
 }
 
 impl JitterTracker {
@@ -163,7 +178,8 @@ impl JitterTracker {
         let now = Instant::now();
         if let (Some(prev_arrival), Some(prev_ts)) = (self.last_arrival, self.last_rtp_ts) {
             let arrival_diff_ms = now.duration_since(prev_arrival).as_secs_f64() * 1000.0;
-            let rtp_diff_ms = (pkt.timestamp as i64 - prev_ts as i64).unsigned_abs() as f64 / clock_hz * 1000.0;
+            let rtp_diff_ms =
+                (pkt.timestamp as i64 - prev_ts as i64).unsigned_abs() as f64 / clock_hz * 1000.0;
             let d = (arrival_diff_ms - rtp_diff_ms).abs();
             stats.jitter_ms += (d - stats.jitter_ms) / 16.0;
         }
@@ -178,8 +194,11 @@ impl JitterTracker {
 fn clock_hz_for(codec: AudioCodec) -> f64 {
     match codec {
         AudioCodec::Opus => 48000.0,
-        AudioCodec::Pcmu | AudioCodec::Pcma | AudioCodec::G722
-            | AudioCodec::Gsm | AudioCodec::Ilbc => 8000.0,
+        AudioCodec::Pcmu
+        | AudioCodec::Pcma
+        | AudioCodec::G722
+        | AudioCodec::Gsm
+        | AudioCodec::Ilbc => 8000.0,
     }
 }
 
@@ -188,22 +207,22 @@ fn clock_hz_for(codec: AudioCodec) -> f64 {
 /// Manages the audio ↔ RTP pipeline for a single active call, optionally
 /// bridging a second RTP leg for a 3-way conference (see `ConferenceLeg`).
 pub struct MediaEngine {
-    _audio:     AudioStreams,
-    send_task:  tokio::task::JoinHandle<()>,
-    recv_task:  tokio::task::JoinHandle<()>,
+    _audio: AudioStreams,
+    send_task: tokio::task::JoinHandle<()>,
+    recv_task: tokio::task::JoinHandle<()>,
     /// Only `Some` when started with a `second_leg` (conference mode).
     recv_task2: Option<tokio::task::JoinHandle<()>>,
-    stop_tx:    watch::Sender<bool>,
-    dtmf_tx:    mpsc::UnboundedSender<char>,
+    stop_tx: watch::Sender<bool>,
+    dtmf_tx: mpsc::UnboundedSender<char>,
     inband_dtmf_tx: mpsc::UnboundedSender<char>,
-    muted:      Arc<AtomicBool>,
+    muted: Arc<AtomicBool>,
     /// Owned by `MediaEngine` itself (not just captured by the send task's
     /// closure) so `stop()` can finalize it deterministically from the
     /// synchronous caller side — `stop()` aborts both tasks without awaiting
     /// them, so anything only reachable from inside a task would be subject
     /// to a cancellation race and might never run its cleanup.
     recorder: Arc<Mutex<Option<WavWriter>>>,
-    stats:    SharedStats,
+    stats: SharedStats,
 }
 
 impl MediaEngine {
@@ -229,17 +248,17 @@ impl MediaEngine {
     #[allow(clippy::too_many_arguments)]
     pub async fn start(
         local_rtp_port: u16,
-        remote_rtp:     SocketAddr,
-        codec:          AudioCodec,
-        dtmf_pt:        Option<u8>,
-        srtp:           Option<SrtpSession>,
-        relay:          Option<Arc<dyn Conn + Send + Sync>>,
+        remote_rtp: SocketAddr,
+        codec: AudioCodec,
+        dtmf_pt: Option<u8>,
+        srtp: Option<SrtpSession>,
+        relay: Option<Arc<dyn Conn + Send + Sync>>,
         echo_cancellation: bool,
-        input_device:   Option<&str>,
-        output_device:  Option<&str>,
+        input_device: Option<&str>,
+        output_device: Option<&str>,
         recording_enabled: bool,
-        call_id:        &str,
-        second_leg:     Option<ConferenceLeg>,
+        call_id: &str,
+        second_leg: Option<ConferenceLeg>,
     ) -> anyhow::Result<Self> {
         let (audio_streams, mut cap_rx, hw_playback_tx, echo_ref) =
             open_streams(input_device, output_device, echo_cancellation)
@@ -261,18 +280,38 @@ impl MediaEngine {
         });
 
         let dtmf_payload_type = dtmf_pt.unwrap_or(DTMF_PAYLOAD_TYPE);
-        let payload_type      = codec.payload_type();
+        let payload_type = codec.payload_type();
 
         // Per RFC 4568, each side's a=crypto line declares the key THAT SIDE uses to
         // encrypt what it sends; the peer decrypts with that same key. So we encrypt
         // outgoing traffic with our OWN declared (local) key, and decrypt incoming
         // traffic with the REMOTE's declared key.
-        let mut encrypt_ctx: Option<SrtpContext> = srtp.as_ref().map(|s| {
-            SrtpContext::new(&s.local.key, &s.local.salt, ProtectionProfile::Aes128CmHmacSha1_80, None, None)
-        }).transpose().context("Creating SRTP encrypt context")?;
-        let mut decrypt_ctx: Option<SrtpContext> = srtp.as_ref().map(|s| {
-            SrtpContext::new(&s.remote.key, &s.remote.salt, ProtectionProfile::Aes128CmHmacSha1_80, Some(srtp_replay_protection(64)), None)
-        }).transpose().context("Creating SRTP decrypt context")?;
+        let mut encrypt_ctx: Option<SrtpContext> = srtp
+            .as_ref()
+            .map(|s| {
+                SrtpContext::new(
+                    &s.local.key,
+                    &s.local.salt,
+                    ProtectionProfile::Aes128CmHmacSha1_80,
+                    None,
+                    None,
+                )
+            })
+            .transpose()
+            .context("Creating SRTP encrypt context")?;
+        let mut decrypt_ctx: Option<SrtpContext> = srtp
+            .as_ref()
+            .map(|s| {
+                SrtpContext::new(
+                    &s.remote.key,
+                    &s.remote.salt,
+                    ProtectionProfile::Aes128CmHmacSha1_80,
+                    Some(srtp_replay_protection(64)),
+                    None,
+                )
+            })
+            .transpose()
+            .context("Creating SRTP decrypt context")?;
 
         // ── Leg 2 (conference), if present ────────────────────────────────────
         let mut leg2_socket: Option<Arc<RtpSocket>> = None;
@@ -290,17 +329,42 @@ impl MediaEngine {
                         .with_context(|| format!("Binding RTP on :{}", leg.local_rtp_port))?,
                 ),
             });
-            leg2_encrypt_ctx = leg.srtp.as_ref().map(|s| {
-                SrtpContext::new(&s.local.key, &s.local.salt, ProtectionProfile::Aes128CmHmacSha1_80, None, None)
-            }).transpose().context("Creating leg2 SRTP encrypt context")?;
-            leg2_decrypt_ctx = leg.srtp.as_ref().map(|s| {
-                SrtpContext::new(&s.remote.key, &s.remote.salt, ProtectionProfile::Aes128CmHmacSha1_80, Some(srtp_replay_protection(64)), None)
-            }).transpose().context("Creating leg2 SRTP decrypt context")?;
-            leg2_socket  = Some(socket2);
-            leg2_remote  = Some(leg.remote_rtp);
-            leg2_codec   = Some(leg.codec);
+            leg2_encrypt_ctx = leg
+                .srtp
+                .as_ref()
+                .map(|s| {
+                    SrtpContext::new(
+                        &s.local.key,
+                        &s.local.salt,
+                        ProtectionProfile::Aes128CmHmacSha1_80,
+                        None,
+                        None,
+                    )
+                })
+                .transpose()
+                .context("Creating leg2 SRTP encrypt context")?;
+            leg2_decrypt_ctx = leg
+                .srtp
+                .as_ref()
+                .map(|s| {
+                    SrtpContext::new(
+                        &s.remote.key,
+                        &s.remote.salt,
+                        ProtectionProfile::Aes128CmHmacSha1_80,
+                        Some(srtp_replay_protection(64)),
+                        None,
+                    )
+                })
+                .transpose()
+                .context("Creating leg2 SRTP decrypt context")?;
+            leg2_socket = Some(socket2);
+            leg2_remote = Some(leg.remote_rtp);
+            leg2_codec = Some(leg.codec);
             leg2_dtmf_pt = Some(leg.dtmf_pt.unwrap_or(DTMF_PAYLOAD_TYPE));
-            debug!("Conference mode: leg1={remote_rtp} ({codec:?}), leg2={} ({:?})", leg.remote_rtp, leg.codec);
+            debug!(
+                "Conference mode: leg1={remote_rtp} ({codec:?}), leg2={} ({:?})",
+                leg.remote_rtp, leg.codec
+            );
         }
 
         // Per-leg decode buffers, mixed together (if leg2 present) once per
@@ -309,46 +373,59 @@ impl MediaEngine {
         // buffer drained with nothing to mix, functionally identical to the
         // old direct recv-task-to-playback push.
         let leg1_buf: PlaybackTx = Arc::new(Mutex::new(VecDeque::new()));
-        let leg2_buf: Option<PlaybackTx> = second_leg.as_ref().map(|_| Arc::new(Mutex::new(VecDeque::new())));
+        let leg2_buf: Option<PlaybackTx> = second_leg
+            .as_ref()
+            .map(|_| Arc::new(Mutex::new(VecDeque::new())));
 
-        let (stop_tx, stop_rx)   = watch::channel(false);
+        let (stop_tx, stop_rx) = watch::channel(false);
         let mut stop_send = stop_rx.clone();
         let mut stop_recv = stop_rx;
 
         let (dtmf_tx, mut dtmf_rx) = mpsc::unbounded_channel::<char>();
         let (inband_dtmf_tx, mut inband_dtmf_rx) = mpsc::unbounded_channel::<char>();
 
-        let recorder: Arc<Mutex<Option<WavWriter>>> = Arc::new(Mutex::new(
-            if recording_enabled {
-                match open_recorder(call_id) {
-                    Ok(w) => Some(w),
-                    Err(e) => { error!("Failed to start call recording: {e}"); None }
+        let recorder: Arc<Mutex<Option<WavWriter>>> = Arc::new(Mutex::new(if recording_enabled {
+            match open_recorder(call_id) {
+                Ok(w) => Some(w),
+                Err(e) => {
+                    error!("Failed to start call recording: {e}");
+                    None
                 }
-            } else {
-                None
             }
-        ));
+        } else {
+            None
+        }));
 
         // ── Send task ─────────────────────────────────────────────────────────
-        let send_sock    = socket.clone();
-        let send_sock2   = leg2_socket.clone();
+        let send_sock = socket.clone();
+        let send_sock2 = leg2_socket.clone();
         let mut rtp_send = RtpSender::new(payload_type, ts_increment_for(codec));
-        let dtmf_ssrc    = rtp_send.ssrc;
+        let dtmf_ssrc = rtp_send.ssrc;
         let mut dtmf_seq = 0u16;
         let mut opus_enc = if codec == AudioCodec::Opus {
             Some(OpusEncoder::new().context("Creating Opus encoder")?)
         } else {
             None
         };
-        let mut g722_enc = if codec == AudioCodec::G722 { Some(G722Encoder::new()) } else { None };
-        let mut gsm_enc  = if codec == AudioCodec::Gsm  { Some(GsmEncoder::new()) } else { None };
+        let mut g722_enc = if codec == AudioCodec::G722 {
+            Some(G722Encoder::new())
+        } else {
+            None
+        };
+        let mut gsm_enc = if codec == AudioCodec::Gsm {
+            Some(GsmEncoder::new())
+        } else {
+            None
+        };
         let mut ilbc_enc = if codec == AudioCodec::Ilbc {
             Some(IlbcEncoder::new().context("Creating iLBC encoder")?)
         } else {
             None
         };
         let mut opus_enc2 = match leg2_codec {
-            Some(AudioCodec::Opus) => Some(OpusEncoder::new().context("Creating Opus encoder (leg2)")?),
+            Some(AudioCodec::Opus) => {
+                Some(OpusEncoder::new().context("Creating Opus encoder (leg2)")?)
+            }
             _ => None,
         };
         let mut g722_enc2 = match leg2_codec {
@@ -360,11 +437,14 @@ impl MediaEngine {
             _ => None,
         };
         let mut ilbc_enc2 = match leg2_codec {
-            Some(AudioCodec::Ilbc) => Some(IlbcEncoder::new().context("Creating iLBC encoder (leg2)")?),
+            Some(AudioCodec::Ilbc) => {
+                Some(IlbcEncoder::new().context("Creating iLBC encoder (leg2)")?)
+            }
             _ => None,
         };
-        let mut rtp_send2 = leg2_codec.map(|c| RtpSender::new(c.payload_type(), ts_increment_for(c)));
-        let dtmf_ssrc2    = rtp_send2.as_ref().map(|r| r.ssrc);
+        let mut rtp_send2 =
+            leg2_codec.map(|c| RtpSender::new(c.payload_type(), ts_increment_for(c)));
+        let dtmf_ssrc2 = rtp_send2.as_ref().map(|r| r.ssrc);
         let mut dtmf_seq2 = 0u16;
 
         let mut echo_canceller = echo_ref.as_ref().map(|_| EchoCanceller::new());
@@ -543,8 +623,16 @@ impl MediaEngine {
         } else {
             None
         };
-        let mut g722_dec = if codec == AudioCodec::G722 { Some(G722Decoder::new()) } else { None };
-        let mut gsm_dec  = if codec == AudioCodec::Gsm  { Some(GsmDecoder::new()) } else { None };
+        let mut g722_dec = if codec == AudioCodec::G722 {
+            Some(G722Decoder::new())
+        } else {
+            None
+        };
+        let mut gsm_dec = if codec == AudioCodec::Gsm {
+            Some(GsmDecoder::new())
+        } else {
+            None
+        };
         let mut ilbc_dec = if codec == AudioCodec::Ilbc {
             Some(IlbcDecoder::new().context("Creating iLBC decoder")?)
         } else {
@@ -608,15 +696,23 @@ impl MediaEngine {
             } else {
                 None
             };
-            let mut g722_dec2 = if leg.codec == AudioCodec::G722 { Some(G722Decoder::new()) } else { None };
-            let mut gsm_dec2  = if leg.codec == AudioCodec::Gsm  { Some(GsmDecoder::new()) } else { None };
+            let mut g722_dec2 = if leg.codec == AudioCodec::G722 {
+                Some(G722Decoder::new())
+            } else {
+                None
+            };
+            let mut gsm_dec2 = if leg.codec == AudioCodec::Gsm {
+                Some(GsmDecoder::new())
+            } else {
+                None
+            };
             let mut ilbc_dec2 = if leg.codec == AudioCodec::Ilbc {
                 Some(IlbcDecoder::new().context("Creating iLBC decoder (leg2)")?)
             } else {
                 None
             };
-            let codec2   = leg.codec;
-            let pt2      = leg2_dtmf_pt.unwrap();
+            let codec2 = leg.codec;
+            let pt2 = leg2_dtmf_pt.unwrap();
             let mut decrypt_ctx2 = leg2_decrypt_ctx;
             let leg2_buf_recv = leg2_buf.clone().unwrap();
             let mut stop_recv2 = stop_tx.subscribe();
@@ -673,8 +769,16 @@ impl MediaEngine {
         };
 
         Ok(Self {
-            _audio: audio_streams, send_task, recv_task, recv_task2, stop_tx,
-            dtmf_tx, inband_dtmf_tx, muted, recorder, stats,
+            _audio: audio_streams,
+            send_task,
+            recv_task,
+            recv_task2,
+            stop_tx,
+            dtmf_tx,
+            inband_dtmf_tx,
+            muted,
+            recorder,
+            stats,
         })
     }
 
@@ -745,7 +849,9 @@ fn push_to_jitter(jitter: &PlaybackTx, pcm: &[i16]) {
     let max = FRAME_SAMPLES * 50; // cap at 1 second
     let mut buf = jitter.lock().unwrap();
     for &s in pcm {
-        if buf.len() < max { buf.push_back(s); }
+        if buf.len() < max {
+            buf.push_back(s);
+        }
     }
 }
 
@@ -754,7 +860,9 @@ fn push_to_jitter(jitter: &PlaybackTx, pcm: &[i16]) {
 /// cadence (same idiom as `write_recording`'s near/far pairing).
 fn drain_leg(buf: &PlaybackTx) -> Vec<i16> {
     let mut b = buf.lock().unwrap();
-    (0..FRAME_SAMPLES).map(|_| b.pop_front().unwrap_or(0)).collect()
+    (0..FRAME_SAMPLES)
+        .map(|_| b.pop_front().unwrap_or(0))
+        .collect()
 }
 
 /// Sum two PCM frames sample-by-sample, halving each first so two
@@ -762,7 +870,8 @@ fn drain_leg(buf: &PlaybackTx) -> Vec<i16> {
 /// announcement at a different natural level) can't clip and don't have
 /// one leg drown out the other by default, then clamping to `i16` range.
 fn mix_frames(a: &[i16], b: &[i16]) -> Vec<i16> {
-    a.iter().zip(b.iter())
+    a.iter()
+        .zip(b.iter())
         .map(|(&x, &y)| {
             let mixed = (x as i32) / 2 + (y as i32) / 2;
             mixed.clamp(i16::MIN as i32, i16::MAX as i32) as i16

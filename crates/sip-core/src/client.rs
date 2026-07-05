@@ -9,9 +9,10 @@ use tokio::time::{interval, Duration, Instant, sleep_until};
 use tracing::{debug, error, info};
 
 use deelip_config::{SipAccount, TransportProtocol};
+use deelip_nat::{IceConnection, IceGathered, TurnRelay};
 
 use crate::{
-    call::dialog::Dialog,
+    call::dialog::{Dialog, PendingOfferMedia},
     call::media_setup::NetworkConfig,
     events::{SipCommand, SipEvent},
     handle::SipHandle,
@@ -19,6 +20,7 @@ use crate::{
     subscription::presence::PresenceSubscription,
     transport::SipTransport,
     wire::message::{SipMessage, SipMethod, SipStartLine},
+    wire::sdp::{AudioCodec, ParsedSdp, SrtpParams},
     wire::util::local_ip_for,
 };
 
@@ -32,6 +34,54 @@ pub(crate) const PRESENCE_EVENT: &str = "presence";
 pub(crate) const PRESENCE_ACCEPT: &str = "application/pidf+xml";
 pub(crate) const MWI_EVENT: &str = "message-summary";
 pub(crate) const MWI_ACCEPT: &str = "application/simple-message-summary";
+
+// ── Background call-setup results ─────────────────────────────────────────────
+
+/// STUN/TURN/ICE resolution (`media_setup::try_gather_ice`/`try_answer_with_ice`/
+/// `resolve_rtp_endpoint`/`finish_ice_connect`) is real network I/O bounded by
+/// a multi-second timeout -- running it inline inside `initiate_call`/
+/// `accept_call`/`on_response` would block this account's *entire* event loop
+/// (every other call's BYE/hold-resume, incoming messages, re-registration)
+/// for that whole time, since `run()`'s `select!` fully awaits one branch
+/// before looping back. Each of those three call sites instead spawns the
+/// resolution as its own task and reports the result back here, so `run()`
+/// picks it up as just another `select!` branch (`internal_rx`) alongside
+/// everything else, instead of awaiting it inline.
+pub(crate) enum StackEvent {
+    /// `initiate_call`'s offer is ready to send as the actual INVITE.
+    OutgoingOfferReady {
+        call_id:       String,
+        from_tag:      String,
+        branch:        String,
+        to:            String,
+        local_sdp:     String,
+        pending_offer: PendingOfferMedia,
+        ice_gathered:  Option<IceGathered>,
+    },
+    /// `accept_call`'s answer is ready to send as the 200 OK.
+    IncomingAnswerReady {
+        call_id:    String,
+        parsed:     ParsedSdp,
+        local_sdp:  String,
+        local_rtp:  u16,
+        local_srtp: Option<SrtpParams>,
+        relay:      Option<TurnRelay>,
+        ice:        Option<IceConnection>,
+    },
+    /// The offerer side's ICE connectivity checks (`on_response`'s answer
+    /// handling) finished -- media is now fully resolved for an outgoing call.
+    OutgoingConnected {
+        call_id:     String,
+        local_rtp:   u16,
+        local_srtp:  Option<SrtpParams>,
+        relay:       Option<TurnRelay>,
+        ice:         Option<IceConnection>,
+        codec:       AudioCodec,
+        dtmf_type:   Option<u8>,
+        remote_rtp:  SocketAddr,
+        remote_srtp: Option<SrtpParams>,
+    },
+}
 
 // ── SIP Stack ─────────────────────────────────────────────────────────────────
 
@@ -57,6 +107,12 @@ pub struct SipStack {
     pub(crate) pending_messages: HashMap<String, crate::message_method::PendingMessage>,
     pub(crate) event_tx: mpsc::UnboundedSender<SipEvent>,
     pub(crate) cmd_rx:   mpsc::UnboundedReceiver<SipCommand>,
+
+    /// See `StackEvent`'s doc comment -- `internal_tx` is cloned into each
+    /// background call-setup task; `internal_rx` is polled by `run()`'s own
+    /// `select!` loop, right alongside `cmd_rx`/`transport.recv()`.
+    pub(crate) internal_tx: mpsc::UnboundedSender<StackEvent>,
+    internal_rx: mpsc::UnboundedReceiver<StackEvent>,
 }
 
 /// The command-receiving half survives across a reconnect (it's tied to the
@@ -83,6 +139,7 @@ impl SipStack {
 
         let reg_call_id  = crate::wire::util::new_call_id(&local_ip);
         let reg_from_tag = crate::wire::util::new_tag();
+        let (internal_tx, internal_rx) = mpsc::unbounded_channel();
 
         Ok(Self {
             transport,
@@ -101,6 +158,8 @@ impl SipStack {
             pending_messages: HashMap::new(),
             event_tx,
             cmd_rx,
+            internal_tx,
+            internal_rx,
         })
     }
 
@@ -280,7 +339,21 @@ impl SipStack {
                 Some(cmd) = self.cmd_rx.recv() => {
                     self.handle_command(cmd).await;
                 }
+                Some(ev) = self.internal_rx.recv() => {
+                    self.handle_stack_event(ev).await;
+                }
             }
+        }
+    }
+
+    /// Dispatch a completed background call-setup result -- see
+    /// `StackEvent`'s doc comment. Handlers live in `call::lifecycle`
+    /// alongside the rest of the call-establishment logic they finish.
+    async fn handle_stack_event(&mut self, ev: StackEvent) {
+        match ev {
+            ev @ StackEvent::OutgoingOfferReady { .. }  => self.on_outgoing_offer_ready(ev).await,
+            ev @ StackEvent::IncomingAnswerReady { .. } => self.on_incoming_answer_ready(ev).await,
+            ev @ StackEvent::OutgoingConnected { .. }   => self.on_outgoing_connected(ev).await,
         }
     }
 

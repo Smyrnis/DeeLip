@@ -9,12 +9,9 @@ use deelip_ui::DeelipApp;
 fn main() -> anyhow::Result<()> {
     // ── Logging ───────────────────────────────────────────────────────────────
     tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new(
-                    "deelip=debug,deelip_sip=debug,deelip_media=debug,deelip_nat=info",
-                )),
-        )
+        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+            EnvFilter::new("deelip=debug,deelip_sip=debug,deelip_media=debug,deelip_nat=info")
+        }))
         .init();
 
     tracing::info!("DeeLip v{}", env!("CARGO_PKG_VERSION"));
@@ -27,7 +24,12 @@ fn main() -> anyhow::Result<()> {
     let db = Db::open_default().context("Opening database")?;
     let config = AppConfig::load(&db).context("Loading config")?;
 
-    let enabled_accounts: Vec<_> = config.accounts.iter().filter(|a| a.enabled).cloned().collect();
+    let enabled_accounts: Vec<_> = config
+        .accounts
+        .iter()
+        .filter(|a| a.enabled)
+        .cloned()
+        .collect();
     let had_enabled_accounts = !enabled_accounts.is_empty();
     if !had_enabled_accounts {
         // No hand-editable config file to point the user at anymore -- the
@@ -67,11 +69,11 @@ fn main() -> anyhow::Result<()> {
     // STUN/TURN/ICE resolution now happen inside `SipStack` itself, see
     // `deelip_sip::media_setup`).
     let network = deelip_sip::media_setup::NetworkConfig {
-        stun_server:   config.stun_server.clone(),
-        turn_server:   config.turn_server.clone(),
+        stun_server: config.stun_server.clone(),
+        turn_server: config.turn_server.clone(),
         turn_username: config.turn_username.clone().unwrap_or_default(),
         turn_password: config.turn_password.clone().unwrap_or_default(),
-        ice_enabled:   config.ice_enabled,
+        ice_enabled: config.ice_enabled,
     };
 
     // Each enabled account gets its own independent stack (own transport,
@@ -83,8 +85,13 @@ fn main() -> anyhow::Result<()> {
     let mut account_handles = Vec::new();
     for (i, account) in enabled_accounts.into_iter().enumerate() {
         let local_port = config.local_sip_port + i as u16;
-        let username   = account.username.clone();
-        match rt.block_on(SipStack::spawn(account.clone(), network.clone(), local_port, external_ip.clone())) {
+        let username = account.username.clone();
+        match rt.block_on(SipStack::spawn(
+            account.clone(),
+            network.clone(),
+            local_port,
+            external_ip.clone(),
+        )) {
             Ok(handle) => account_handles.push((account, handle)),
             Err(e) => warn!("Account {username} failed to start ({e}), skipping"),
         }
@@ -107,13 +114,18 @@ fn main() -> anyhow::Result<()> {
     // ── eframe (main thread) ──────────────────────────────────────────────────
     let tray = match deelip_ui::tray::spawn_tray_icon() {
         Ok((tray_ids, badge_tx)) => {
-            let ctx_slot: deelip_ui::tray::CtxSlot = std::sync::Arc::new(std::sync::Mutex::new(None));
+            let ctx_slot: deelip_ui::tray::CtxSlot =
+                std::sync::Arc::new(std::sync::Mutex::new(None));
             let quit_state = deelip_ui::tray::QuitState {
                 calls: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
                 pending: std::sync::Arc::new(std::sync::Mutex::new(None)),
                 rt: rt.handle().clone(),
             };
-            deelip_ui::tray::spawn_tray_event_handlers(tray_ids, ctx_slot.clone(), quit_state.clone());
+            deelip_ui::tray::spawn_tray_event_handlers(
+                tray_ids,
+                ctx_slot.clone(),
+                quit_state.clone(),
+            );
             Some((ctx_slot, quit_state, badge_tx))
         }
         Err(e) => {
@@ -136,7 +148,7 @@ fn main() -> anyhow::Result<()> {
     std::env::remove_var("WAYLAND_DISPLAY");
 
     let rt_handle = rt.handle().clone();
-    let app       = DeelipApp::new(account_handles, rt_handle, config, db, tray);
+    let app = DeelipApp::new(account_handles, rt_handle, config, db, tray);
 
     let native_opts = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -177,5 +189,9 @@ fn load_window_icon() -> egui::IconData {
         .expect("assets/icon.png must be a valid image")
         .into_rgba8();
     let (width, height) = img.dimensions();
-    egui::IconData { rgba: img.into_raw(), width, height }
+    egui::IconData {
+        rgba: img.into_raw(),
+        width,
+        height,
+    }
 }

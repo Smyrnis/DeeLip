@@ -3,7 +3,11 @@ use super::*;
 fn ulaw_error_pct(original: i16, decoded: i16) -> f32 {
     let err = (original as i32 - decoded as i32).abs() as f32;
     let mag = original.unsigned_abs() as f32;
-    if mag < 1.0 { err } else { err / mag * 100.0 }
+    if mag < 1.0 {
+        err
+    } else {
+        err / mag * 100.0
+    }
 }
 
 #[test]
@@ -11,7 +15,10 @@ fn ulaw_roundtrip() {
     for &sample in &[0i16, 100, 1000, 10000, -100, -1000, -10000] {
         let decoded = ulaw_to_pcm(pcm_to_ulaw(sample));
         let err_pct = ulaw_error_pct(sample, decoded);
-        assert!(err_pct < 5.0, "μ-law roundtrip: sample={sample}, decoded={decoded}, err={err_pct:.1}%");
+        assert!(
+            err_pct < 5.0,
+            "μ-law roundtrip: sample={sample}, decoded={decoded}, err={err_pct:.1}%"
+        );
     }
     // At full scale, clipping adds error; up to 2% is within G.711 spec
     let clip_decoded = ulaw_to_pcm(pcm_to_ulaw(i16::MAX));
@@ -25,7 +32,10 @@ fn alaw_roundtrip() {
         let err = (sample as i32 - decoded as i32).abs();
         let mag = sample.unsigned_abs() as i32;
         let err_pct = if mag > 0 { err * 100 / mag } else { err };
-        assert!(err_pct < 10, "A-law roundtrip: sample={sample}, decoded={decoded}, err={err}");
+        assert!(
+            err_pct < 10,
+            "A-law roundtrip: sample={sample}, decoded={decoded}, err={err}"
+        );
     }
 }
 
@@ -46,7 +56,10 @@ fn opus_roundtrip() {
         .collect();
 
     let encoded = encoder.encode(&frame);
-    assert!(!encoded.is_empty(), "Opus should produce a non-empty packet");
+    assert!(
+        !encoded.is_empty(),
+        "Opus should produce a non-empty packet"
+    );
     assert!(encoded.len() <= OPUS_MAX_PACKET);
 
     let decoded = decoder.decode(&encoded);
@@ -64,17 +77,24 @@ fn g722_roundtrip() {
         .collect();
 
     let encoded = encoder.encode(&frame);
-    assert!(!encoded.is_empty(), "G722 should produce a non-empty packet");
+    assert!(
+        !encoded.is_empty(),
+        "G722 should produce a non-empty packet"
+    );
 
     let decoded = decoder.decode(&encoded);
-    assert!(!decoded.is_empty(), "G722 should decode back to a non-empty PCM frame");
+    assert!(
+        !decoded.is_empty(),
+        "G722 should decode back to a non-empty PCM frame"
+    );
     // The 8k->16k->8k resample round trip isn't guaranteed to preserve
     // the exact sample count frame-for-frame (polyphase filter delay) --
     // just stay in the right ballpark of the original frame size.
     let expected = crate::audio::FRAME_SAMPLES;
     assert!(
         decoded.len() > expected / 2 && decoded.len() < expected * 2,
-        "decoded length {} far from expected ~{expected}", decoded.len(),
+        "decoded length {} far from expected ~{expected}",
+        decoded.len(),
     );
 }
 
@@ -90,7 +110,11 @@ fn gsm_roundtrip() {
     let mut decoder = GsmDecoder::new();
 
     let encoded = encoder.encode(&test_tone());
-    assert_eq!(encoded.len(), 33, "GSM full-rate frames are always 33 bytes");
+    assert_eq!(
+        encoded.len(),
+        33,
+        "GSM full-rate frames are always 33 bytes"
+    );
 
     let decoded = decoder.decode(&encoded);
     assert_eq!(decoded.len(), crate::audio::FRAME_SAMPLES);

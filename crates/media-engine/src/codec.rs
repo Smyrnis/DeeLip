@@ -9,28 +9,27 @@ const ULAW_CLIP: i32 = 32_635;
 
 // Maps (pcm + bias) >> 7 (0-255) to exponent (0-7)
 static ULAW_EXP: [i32; 256] = [
-    0,0,1,1,2,2,2,2,3,3,3,3,3,3,3,3,
-    4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,
-    5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,
-    5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,
-    6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,
-    6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,
-    6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,
-    6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,
-    7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,
-    7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,
-    7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,
-    7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,
-    7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,
-    7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,
-    7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,
-    7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,
+    0, 0, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+    5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
+    6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6,
+    6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6,
+    7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
+    7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
+    7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
+    7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
 ];
 
 pub fn pcm_to_ulaw(pcm: i16) -> u8 {
     let mut s = pcm as i32;
-    let sign = if s < 0 { s = -s; 0x80u8 } else { 0u8 };
-    if s > ULAW_CLIP { s = ULAW_CLIP; }
+    let sign = if s < 0 {
+        s = -s;
+        0x80u8
+    } else {
+        0u8
+    };
+    if s > ULAW_CLIP {
+        s = ULAW_CLIP;
+    }
     s += ULAW_BIAS;
     let exp = ULAW_EXP[((s >> 7) & 0xFF) as usize];
     let mant = ((s >> (exp + 3)) & 0x0F) as u8;
@@ -40,10 +39,14 @@ pub fn pcm_to_ulaw(pcm: i16) -> u8 {
 pub fn ulaw_to_pcm(ulaw: u8) -> i16 {
     let u = !ulaw;
     let sign = u & 0x80;
-    let exp  = ((u >> 4) & 0x07) as i32;
+    let exp = ((u >> 4) & 0x07) as i32;
     let mant = (u & 0x0F) as i32;
     let s = (((mant << 3) + ULAW_BIAS) << exp) - ULAW_BIAS;
-    if sign != 0 { -(s as i16) } else { s as i16 }
+    if sign != 0 {
+        -(s as i16)
+    } else {
+        s as i16
+    }
 }
 
 // ── PCMA (A-law) ──────────────────────────────────────────────────────────────
@@ -60,13 +63,15 @@ pub fn pcm_to_alaw(pcm: i16) -> u8 {
     };
 
     // Clip to 12-bit magnitude
-    if s > 4095 { s = 4095; }
+    if s > 4095 {
+        s = 4095;
+    }
 
     // Find segment and encode mantissa
     let aval: u8 = if s < 32 {
-        (s >> 1) as u8                               // seg 0: step 2
+        (s >> 1) as u8 // seg 0: step 2
     } else if s < 64 {
-        0x10 | ((s - 32) >> 1) as u8                // seg 1: step 2
+        0x10 | ((s - 32) >> 1) as u8 // seg 1: step 2
     } else {
         let seg = (31u32 - (s as u32).leading_zeros()) as u8 - 4; // = floor(log2(s)) - 4
         (seg << 4) | ((s >> seg as i32) & 0x0F) as u8
@@ -76,9 +81,9 @@ pub fn pcm_to_alaw(pcm: i16) -> u8 {
 }
 
 pub fn alaw_to_pcm(alaw: u8) -> i16 {
-    let a    = alaw ^ 0x55;
+    let a = alaw ^ 0x55;
     let mant = (a & 0x0F) as i32;
-    let seg  = (a >> 4) & 0x07;
+    let seg = (a >> 4) & 0x07;
 
     let s = match seg {
         0 => mant * 2 + 1,
@@ -88,15 +93,27 @@ pub fn alaw_to_pcm(alaw: u8) -> i16 {
 
     // Scale back to 16-bit
     let s = (s << 3) as i16;
-    if a & 0x80 != 0 { s } else { -s }
+    if a & 0x80 != 0 {
+        s
+    } else {
+        -s
+    }
 }
 
 // ── Batch helpers ─────────────────────────────────────────────────────────────
 
-pub fn encode_pcmu(pcm: &[i16]) -> Vec<u8> { pcm.iter().map(|&s| pcm_to_ulaw(s)).collect() }
-pub fn decode_pcmu(raw: &[u8])  -> Vec<i16> { raw.iter().map(|&b| ulaw_to_pcm(b)).collect() }
-pub fn encode_pcma(pcm: &[i16]) -> Vec<u8>  { pcm.iter().map(|&s| pcm_to_alaw(s)).collect() }
-pub fn decode_pcma(raw: &[u8])  -> Vec<i16> { raw.iter().map(|&b| alaw_to_pcm(b)).collect() }
+pub fn encode_pcmu(pcm: &[i16]) -> Vec<u8> {
+    pcm.iter().map(|&s| pcm_to_ulaw(s)).collect()
+}
+pub fn decode_pcmu(raw: &[u8]) -> Vec<i16> {
+    raw.iter().map(|&b| ulaw_to_pcm(b)).collect()
+}
+pub fn encode_pcma(pcm: &[i16]) -> Vec<u8> {
+    pcm.iter().map(|&s| pcm_to_alaw(s)).collect()
+}
+pub fn decode_pcma(raw: &[u8]) -> Vec<i16> {
+    raw.iter().map(|&b| alaw_to_pcm(b)).collect()
+}
 
 // ── Opus ──────────────────────────────────────────────────────────────────────
 //
@@ -124,7 +141,10 @@ impl OpusEncoder {
         let mut out = [0u8; OPUS_MAX_PACKET];
         match self.0.encode(pcm, &mut out) {
             Ok(len) => out[..len].to_vec(),
-            Err(e) => { tracing::error!("Opus encode failed: {e}"); Vec::new() }
+            Err(e) => {
+                tracing::error!("Opus encode failed: {e}");
+                Vec::new()
+            }
         }
     }
 }
@@ -141,7 +161,10 @@ impl OpusDecoder {
         let mut out = [0i16; crate::audio::FRAME_SAMPLES];
         match self.0.decode(Some(payload), &mut out[..], false) {
             Ok(len) => out[..len].to_vec(),
-            Err(e) => { tracing::error!("Opus decode failed: {e}"); Vec::new() }
+            Err(e) => {
+                tracing::error!("Opus decode failed: {e}");
+                Vec::new()
+            }
         }
     }
 }
@@ -163,10 +186,10 @@ use audio_codec::g722::{G722Decoder as RawG722Decoder, G722Encoder as RawG722Enc
 use audio_codec::{Decoder as _, Encoder as _, Resampler};
 
 const G722_NARROWBAND_HZ: usize = crate::audio::SAMPLE_RATE as usize;
-const G722_WIDEBAND_HZ:   usize = 16_000;
+const G722_WIDEBAND_HZ: usize = 16_000;
 
 pub struct G722Encoder {
-    codec:     RawG722Encoder,
+    codec: RawG722Encoder,
     resampler: Resampler,
 }
 
@@ -179,7 +202,7 @@ impl Default for G722Encoder {
 impl G722Encoder {
     pub fn new() -> Self {
         Self {
-            codec:     RawG722Encoder::new(),
+            codec: RawG722Encoder::new(),
             resampler: Resampler::new(G722_NARROWBAND_HZ, G722_WIDEBAND_HZ),
         }
     }
@@ -191,7 +214,7 @@ impl G722Encoder {
 }
 
 pub struct G722Decoder {
-    codec:     RawG722Decoder,
+    codec: RawG722Decoder,
     resampler: Resampler,
 }
 
@@ -204,7 +227,7 @@ impl Default for G722Decoder {
 impl G722Decoder {
     pub fn new() -> Self {
         Self {
-            codec:     RawG722Decoder::new(),
+            codec: RawG722Decoder::new(),
             resampler: Resampler::new(G722_WIDEBAND_HZ, G722_NARROWBAND_HZ),
         }
     }
@@ -237,7 +260,9 @@ pub struct GsmEncoder(gsm_sys::Gsm);
 unsafe impl Send for GsmEncoder {}
 
 impl Default for GsmEncoder {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl GsmEncoder {
@@ -275,7 +300,9 @@ pub struct GsmDecoder(gsm_sys::Gsm);
 unsafe impl Send for GsmDecoder {}
 
 impl Default for GsmDecoder {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl GsmDecoder {
@@ -285,16 +312,18 @@ impl GsmDecoder {
 
     pub fn decode(&mut self, payload: &[u8]) -> Vec<i16> {
         if payload.len() != 33 {
-            tracing::error!("GSM decode: expected a 33-byte frame, got {}", payload.len());
+            tracing::error!(
+                "GSM decode: expected a 33-byte frame, got {}",
+                payload.len()
+            );
             return Vec::new();
         }
         let mut out = [0i16; crate::audio::FRAME_SAMPLES];
         // Safety: `gsm_decode` reads exactly 33 bytes from `arg2` (checked
         // above) and writes exactly 160 `GsmSignal` samples to `arg3`,
         // which `out` is sized to hold.
-        let rc = unsafe {
-            gsm_sys::gsm_decode(self.0, payload.as_ptr() as *mut _, out.as_mut_ptr())
-        };
+        let rc =
+            unsafe { gsm_sys::gsm_decode(self.0, payload.as_ptr() as *mut _, out.as_mut_ptr()) };
         if rc != 0 {
             tracing::error!("GSM decode failed (rc={rc})");
             return Vec::new();
@@ -336,7 +365,11 @@ fn pcm_to_audio_frame(pcm: &[i16]) -> Frame {
     for &s in pcm {
         bytes.extend_from_slice(&s.to_le_bytes());
     }
-    Frame::Audio(AudioFrame { samples: pcm.len() as u32, pts: Some(0), data: vec![bytes] })
+    Frame::Audio(AudioFrame {
+        samples: pcm.len() as u32,
+        pts: Some(0),
+        data: vec![bytes],
+    })
 }
 
 pub struct IlbcEncoder(Box<dyn OxEncoder>);
@@ -357,7 +390,10 @@ impl IlbcEncoder {
         // accumulated into a full frame yet -- can't happen when called
         // with exactly one 160-sample frame at a time, as `engine.rs` does,
         // but treated as "nothing to send yet" rather than a hard error.
-        self.0.receive_packet().map(|pkt| pkt.data).unwrap_or_default()
+        self.0
+            .receive_packet()
+            .map(|pkt| pkt.data)
+            .unwrap_or_default()
     }
 }
 
@@ -371,17 +407,31 @@ impl IlbcDecoder {
     }
 
     pub fn decode(&mut self, payload: &[u8]) -> Vec<i16> {
-        let pkt = Packet::new(0, TimeBase::new(1, crate::audio::SAMPLE_RATE as i64), payload.to_vec());
+        let pkt = Packet::new(
+            0,
+            TimeBase::new(1, crate::audio::SAMPLE_RATE as i64),
+            payload.to_vec(),
+        );
         if let Err(e) = self.0.send_packet(&pkt) {
             tracing::error!("iLBC decode (send_packet) failed: {e}");
             return Vec::new();
         }
         match self.0.receive_frame() {
-            Ok(Frame::Audio(af)) => af.data.first()
-                .map(|bytes| bytes.chunks_exact(2).map(|c| i16::from_le_bytes([c[0], c[1]])).collect())
+            Ok(Frame::Audio(af)) => af
+                .data
+                .first()
+                .map(|bytes| {
+                    bytes
+                        .chunks_exact(2)
+                        .map(|c| i16::from_le_bytes([c[0], c[1]]))
+                        .collect()
+                })
                 .unwrap_or_default(),
             Ok(_) => Vec::new(),
-            Err(e) => { tracing::error!("iLBC decode (receive_frame) failed: {e}"); Vec::new() }
+            Err(e) => {
+                tracing::error!("iLBC decode (receive_frame) failed: {e}");
+                Vec::new()
+            }
         }
     }
 }

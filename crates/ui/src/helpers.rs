@@ -28,7 +28,11 @@ pub(crate) fn status_bar(ui: &mut Ui, palette: &Palette, text: &str, ok: bool, h
 /// extra `item_spacing.y` gap that per-row height estimates (needed for
 /// `show_rows` virtualization) can't represent.
 pub(crate) fn list_row_divider(ui: &Ui, palette: &Palette, row_rect: egui::Rect) {
-    ui.painter().hline(row_rect.x_range(), row_rect.bottom(), egui::Stroke::new(1.0, palette.divider));
+    ui.painter().hline(
+        row_rect.x_range(),
+        row_rect.bottom(),
+        egui::Stroke::new(1.0, palette.divider),
+    );
 }
 
 /// Render one list row: `add_contents` inside a single `ui.horizontal`, with
@@ -46,11 +50,22 @@ pub(crate) fn list_row_divider(ui: &Ui, palette: &Palette, row_rect: egui::Rect)
 /// is a lookup by that id into a per-frame hovered-id set, so with colliding
 /// ids, hovering one row marked *every* row hovered simultaneously. Wrapping
 /// in `ui.push_id` salts the id per row so only the actual hovered row lights up.
-pub(crate) fn list_row(ui: &mut Ui, palette: &Palette, id_source: impl std::hash::Hash, add_contents: impl FnOnce(&mut Ui)) {
+pub(crate) fn list_row(
+    ui: &mut Ui,
+    palette: &Palette,
+    id_source: impl std::hash::Hash,
+    add_contents: impl FnOnce(&mut Ui),
+) {
     let bg_idx = ui.painter().add(egui::Shape::Noop);
-    let row = ui.push_id(id_source, |ui| ui.horizontal(add_contents)).inner.response;
+    let row = ui
+        .push_id(id_source, |ui| ui.horizontal(add_contents))
+        .inner
+        .response;
     if row.hovered() {
-        ui.painter().set(bg_idx, egui::Shape::rect_filled(row.rect, 0.0, palette.row_hover));
+        ui.painter().set(
+            bg_idx,
+            egui::Shape::rect_filled(row.rect, 0.0, palette.row_hover),
+        );
     }
     list_row_divider(ui, palette, row.rect);
 }
@@ -130,7 +145,12 @@ pub(crate) fn empty_state(ui: &mut Ui, palette: &Palette, text: &str) {
 /// export-failure handling) on error. Shared by History's CSV export and
 /// Contacts' CSV/vCard export, which each hand-rolled the same
 /// dialog+write+log-on-error sequence.
-pub(crate) fn save_text_file(default_name: &str, filter_name: &str, filter_ext: &str, content: String) {
+pub(crate) fn save_text_file(
+    default_name: &str,
+    filter_name: &str,
+    filter_ext: &str,
+    content: String,
+) {
     let Some(path) = rfd::FileDialog::new()
         .set_file_name(default_name)
         .add_filter(filter_name, &[filter_ext])
@@ -148,12 +168,37 @@ pub(crate) fn save_text_file(default_name: &str, filter_name: &str, filter_ext: 
 /// as one `LayoutJob` -- so account pickers read the same "online" green as
 /// the main status bar's dot instead of an uncolored `●`/`○` character
 /// baked into a plain string.
-pub(crate) fn account_status_label(ui: &Ui, palette: &Palette, reg_ok: bool, label: &str) -> egui::text::LayoutJob {
+pub(crate) fn account_status_label(
+    ui: &Ui,
+    palette: &Palette,
+    reg_ok: bool,
+    label: &str,
+) -> egui::text::LayoutJob {
     let font_id = egui::TextStyle::Body.resolve(ui.style());
-    let dot_color = if reg_ok { palette.accent } else { palette.muted };
+    let dot_color = if reg_ok {
+        palette.accent
+    } else {
+        palette.muted
+    };
     let mut job = egui::text::LayoutJob::default();
-    job.append("● ", 0.0, egui::TextFormat { font_id: font_id.clone(), color: dot_color, ..Default::default() });
-    job.append(label, 0.0, egui::TextFormat { font_id, color: ui.visuals().text_color(), ..Default::default() });
+    job.append(
+        "● ",
+        0.0,
+        egui::TextFormat {
+            font_id: font_id.clone(),
+            color: dot_color,
+            ..Default::default()
+        },
+    );
+    job.append(
+        label,
+        0.0,
+        egui::TextFormat {
+            font_id,
+            color: ui.visuals().text_color(),
+            ..Default::default()
+        },
+    );
     job
 }
 
@@ -162,7 +207,12 @@ pub(crate) fn account_status_label(ui: &Ui, palette: &Palette, reg_ok: bool, lab
 /// keypad and the in-call DTMF keypad, which were previously two near-identical
 /// plain-square-button loops.
 pub(crate) fn phone_keypad(ui: &mut Ui, palette: Palette, mut on_press: impl FnMut(char)) {
-    const ROWS: [[char; 3]; 4] = [['1', '2', '3'], ['4', '5', '6'], ['7', '8', '9'], ['*', '0', '#']];
+    const ROWS: [[char; 3]; 4] = [
+        ['1', '2', '3'],
+        ['4', '5', '6'],
+        ['7', '8', '9'],
+        ['*', '0', '#'],
+    ];
     ui.vertical_centered(|ui| {
         for row in ROWS {
             ui.horizontal(|ui| {
@@ -179,18 +229,28 @@ pub(crate) fn phone_keypad(ui: &mut Ui, palette: Palette, mut on_press: impl FnM
 }
 
 fn keypad_button_text(digit: char, palette: Palette) -> egui::text::LayoutJob {
-    let mut job = egui::text::LayoutJob { halign: egui::Align::Center, ..Default::default() };
+    let mut job = egui::text::LayoutJob {
+        halign: egui::Align::Center,
+        ..Default::default()
+    };
     job.append(
         &digit.to_string(),
         0.0,
-        egui::TextFormat { font_id: egui::FontId::proportional(20.0), ..Default::default() },
+        egui::TextFormat {
+            font_id: egui::FontId::proportional(20.0),
+            ..Default::default()
+        },
     );
     let letters = digit_letters(digit);
     if !letters.is_empty() {
         job.append(
             &format!("\n{letters}"),
             0.0,
-            egui::TextFormat { font_id: egui::FontId::proportional(9.0), color: palette.muted, ..Default::default() },
+            egui::TextFormat {
+                font_id: egui::FontId::proportional(9.0),
+                color: palette.muted,
+                ..Default::default()
+            },
         );
     }
     job
@@ -198,8 +258,14 @@ fn keypad_button_text(digit: char, palette: Palette) -> egui::text::LayoutJob {
 
 fn digit_letters(digit: char) -> &'static str {
     match digit {
-        '2' => "ABC", '3' => "DEF", '4' => "GHI", '5' => "JKL", '6' => "MNO",
-        '7' => "PQRS", '8' => "TUV", '9' => "WXYZ",
+        '2' => "ABC",
+        '3' => "DEF",
+        '4' => "GHI",
+        '5' => "JKL",
+        '6' => "MNO",
+        '7' => "PQRS",
+        '8' => "TUV",
+        '9' => "WXYZ",
         _ => "",
     }
 }
@@ -214,11 +280,11 @@ pub(crate) fn account_label(account: &SipAccount) -> String {
 
 pub(crate) fn status_filter_label(filter: &Option<CallStatus>) -> &'static str {
     match filter {
-        None                        => "All",
+        None => "All",
         Some(CallStatus::Answered) => "Answered",
-        Some(CallStatus::Missed)   => "Missed",
+        Some(CallStatus::Missed) => "Missed",
         Some(CallStatus::Rejected) => "Rejected",
-        Some(CallStatus::Failed)   => "Failed",
+        Some(CallStatus::Failed) => "Failed",
     }
 }
 
@@ -245,7 +311,10 @@ pub(crate) fn short_uri(uri: &str) -> String {
 /// be typed as either a plain number or a full SIP URI.
 pub(crate) fn extract_user_part(uri: &str) -> String {
     let lower = uri.trim().to_ascii_lowercase();
-    let stripped = lower.strip_prefix("sip:").or_else(|| lower.strip_prefix("sips:")).unwrap_or(&lower);
+    let stripped = lower
+        .strip_prefix("sip:")
+        .or_else(|| lower.strip_prefix("sips:"))
+        .unwrap_or(&lower);
     let before_at = stripped.split('@').next().unwrap_or(stripped);
     before_at.split(';').next().unwrap_or(before_at).to_string()
 }
@@ -257,7 +326,7 @@ pub(crate) fn codec_label(s: &str) -> &'static str {
         "g722" => "G.722",
         "pcmu" => "PCMU (G.711 μ-law)",
         "pcma" => "PCMA (G.711 A-law)",
-        "gsm"  => "GSM 06.10",
+        "gsm" => "GSM 06.10",
         "ilbc" => "iLBC",
         _ => "Unknown",
     }
@@ -272,7 +341,7 @@ pub(crate) fn audio_codec_label(codec: AudioCodec) -> &'static str {
         AudioCodec::G722 => "g722",
         AudioCodec::Pcmu => "pcmu",
         AudioCodec::Pcma => "pcma",
-        AudioCodec::Gsm  => "gsm",
+        AudioCodec::Gsm => "gsm",
         AudioCodec::Ilbc => "ilbc",
     })
 }
@@ -300,17 +369,20 @@ pub(crate) fn unix_now() -> u64 {
 }
 
 pub(crate) fn format_duration(secs: u32) -> String {
-    if secs < 60 { format!("{secs}s") }
-    else         { format!("{}m {:02}s", secs / 60, secs % 60) }
+    if secs < 60 {
+        format!("{secs}s")
+    } else {
+        format!("{}m {:02}s", secs / 60, secs % 60)
+    }
 }
 
 pub(crate) fn format_age(ts: u64) -> String {
     let age = unix_now().saturating_sub(ts);
     match age {
-        0..=59              => format!("{age}s ago"),
-        60..=3599           => format!("{}m ago", age / 60),
-        3600..=86399        => format!("{}h ago", age / 3600),
-        _                   => format!("{}d ago", age / 86400),
+        0..=59 => format!("{age}s ago"),
+        60..=3599 => format!("{}m ago", age / 60),
+        3600..=86399 => format!("{}h ago", age / 3600),
+        _ => format!("{}d ago", age / 86400),
     }
 }
 

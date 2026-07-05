@@ -17,60 +17,116 @@ use crate::wire::sdp::{AudioCodec, SrtpSession};
 /// `SipEvent` today.
 #[derive(Clone)]
 pub struct CallMediaReady {
-    pub codec:      AudioCodec,
-    pub dtmf_type:  Option<u8>,
-    pub local_rtp:  u16,
+    pub codec: AudioCodec,
+    pub dtmf_type: Option<u8>,
+    pub local_rtp: u16,
     pub remote_rtp: SocketAddr,
-    pub srtp:       Option<SrtpSession>,
+    pub srtp: Option<SrtpSession>,
     /// The connected transport to hand to `MediaEngine::start`'s `relay`
     /// param -- an ICE connection if one was negotiated, else a TURN relay
     /// if one is configured, else `None` (plain direct UDP).
-    pub relay:      Option<Arc<dyn Conn + Send + Sync>>,
+    pub relay: Option<Arc<dyn Conn + Send + Sync>>,
 }
 
 /// Events emitted by the SIP stack to the application.
 pub enum SipEvent {
-    Registered { expires: u32 },
-    RegistrationFailed { reason: String },
+    Registered {
+        expires: u32,
+    },
+    RegistrationFailed {
+        reason: String,
+    },
     /// Remote party is ringing (180 received on outgoing call).
-    CallRinging { call_id: String },
+    CallRinging {
+        call_id: String,
+    },
     /// Outgoing call answered, or our `AcceptCall` was confirmed -- either
     /// way, media is ready to start.
-    CallConnected { call_id: String, media: CallMediaReady },
+    CallConnected {
+        call_id: String,
+        media: CallMediaReady,
+    },
     /// Incoming INVITE arrived.
-    IncomingCall { call_id: String, from: String },
-    CallEnded { call_id: String },
-    CallFailed { call_id: String, code: u16, reason: String },
+    IncomingCall {
+        call_id: String,
+        from: String,
+    },
+    CallEnded {
+        call_id: String,
+    },
+    CallFailed {
+        call_id: String,
+        code: u16,
+        reason: String,
+    },
     /// Our hold re-INVITE was accepted — call is now on hold.
-    CallHeld { call_id: String },
+    CallHeld {
+        call_id: String,
+    },
     /// Our resume re-INVITE was accepted — call is active again.
-    CallResumed { call_id: String },
+    CallResumed {
+        call_id: String,
+    },
     /// Remote side put us on hold via re-INVITE.
-    RemoteHeld { call_id: String },
+    RemoteHeld {
+        call_id: String,
+    },
     /// Remote side resumed us via re-INVITE.
-    RemoteResumed { call_id: String },
+    RemoteResumed {
+        call_id: String,
+    },
     /// Our blind-transfer REFER was accepted (2xx) — the far end will
     /// typically send BYE on this dialog once the transferred call succeeds.
-    TransferAccepted { call_id: String },
+    TransferAccepted {
+        call_id: String,
+    },
     /// Our blind-transfer REFER was rejected.
-    TransferFailed { call_id: String, reason: String },
+    TransferFailed {
+        call_id: String,
+        reason: String,
+    },
     /// Presence SUBSCRIBE accepted (200 OK); `expires` is the server-granted value.
-    PresenceSubscribed { uri: String, expires: u32 },
+    PresenceSubscribed {
+        uri: String,
+        expires: u32,
+    },
     /// Presence SUBSCRIBE rejected.
-    PresenceSubscribeFailed { uri: String, reason: String },
+    PresenceSubscribeFailed {
+        uri: String,
+        reason: String,
+    },
     /// A NOTIFY updated a watched contact's presence state.
-    PresenceUpdate { uri: String, state: PresenceState },
+    PresenceUpdate {
+        uri: String,
+        state: PresenceState,
+    },
     /// MWI SUBSCRIBE accepted (200 OK); `expires` is the server-granted value.
-    MwiSubscribed { uri: String, expires: u32 },
+    MwiSubscribed {
+        uri: String,
+        expires: u32,
+    },
     /// MWI SUBSCRIBE rejected.
-    MwiSubscribeFailed { uri: String, reason: String },
+    MwiSubscribeFailed {
+        uri: String,
+        reason: String,
+    },
     /// A NOTIFY updated our mailbox's message-waiting state.
-    MwiUpdate { uri: String, state: MwiState },
+    MwiUpdate {
+        uri: String,
+        state: MwiState,
+    },
     /// An incoming SIP MESSAGE (RFC 3428) arrived; already ack'd with 200 OK.
-    MessageReceived { from: String, body: String },
+    MessageReceived {
+        from: String,
+        body: String,
+    },
     /// Delivery result for a `SipCommand::SendMessage` -- `reason` is the
     /// status line/error text when `ok` is false.
-    MessageSendResult { to: String, ok: bool, reason: Option<String> },
+    MessageSendResult {
+        to: String,
+        ok: bool,
+        reason: Option<String>,
+    },
 }
 
 /// Commands sent from the application into the SIP stack. SDP construction,
@@ -82,30 +138,64 @@ pub enum SipCommand {
     /// `attempt_ice` lets a caller opt a specific call out of ICE even when
     /// it's enabled globally (the attended-transfer consultation call does
     /// this -- see `deelip_ui`'s `place_call`).
-    MakeCall { to: String, attempt_ice: bool },
-    AcceptCall { call_id: String },
-    RejectCall { call_id: String },
-    HangUp { call_id: String },
+    MakeCall {
+        to: String,
+        attempt_ice: bool,
+    },
+    AcceptCall {
+        call_id: String,
+    },
+    RejectCall {
+        call_id: String,
+    },
+    HangUp {
+        call_id: String,
+    },
     /// Send a hold re-INVITE (a=sendonly).
-    HoldCall { call_id: String },
+    HoldCall {
+        call_id: String,
+    },
     /// Send a resume re-INVITE (a=sendrecv).
-    ResumeCall { call_id: String },
+    ResumeCall {
+        call_id: String,
+    },
     /// Blind-transfer an active (Confirmed) call to `target` (a full SIP URI) via REFER.
-    BlindTransfer { call_id: String, target: String },
+    BlindTransfer {
+        call_id: String,
+        target: String,
+    },
     /// Redirect a not-yet-answered incoming call via 302 Moved Temporarily.
-    RedirectCall { call_id: String, target: String },
+    RedirectCall {
+        call_id: String,
+        target: String,
+    },
     /// Subscribe to a contact's presence (`target_uri` is a full SIP URI).
-    SubscribePresence { target_uri: String },
+    SubscribePresence {
+        target_uri: String,
+    },
     /// Unsubscribe from a contact's presence (sends SUBSCRIBE with Expires: 0).
-    UnsubscribePresence { target_uri: String },
+    UnsubscribePresence {
+        target_uri: String,
+    },
     /// Attended-transfer `call_id` (the original call) via REFER with a
     /// `Replaces` parameter referencing `consultation_call_id`'s dialog.
-    AttendedTransfer { call_id: String, consultation_call_id: String },
+    AttendedTransfer {
+        call_id: String,
+        consultation_call_id: String,
+    },
     /// Send one DTMF digit via SIP INFO (`application/dtmf-relay` body)
     /// instead of RFC 2833 RTP telephone-events.
-    SendDtmfInfo { call_id: String, digit: char },
+    SendDtmfInfo {
+        call_id: String,
+        digit: char,
+    },
     /// Subscribe to a mailbox's MWI state (`target_uri` is a full SIP URI).
-    SubscribeMwi { target_uri: String },
+    SubscribeMwi {
+        target_uri: String,
+    },
     /// Send a standalone SIP MESSAGE (RFC 3428) to `to` (a full SIP URI).
-    SendMessage { to: String, body: String },
+    SendMessage {
+        to: String,
+        body: String,
+    },
 }

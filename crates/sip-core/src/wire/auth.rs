@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use md5::{Digest, Md5};
+use std::collections::HashMap;
 
 // ── Digest computation ────────────────────────────────────────────────────────
 
@@ -12,11 +12,11 @@ fn md5_hex(data: &str) -> String {
 /// Compute the RFC 2617 digest response value.
 pub fn compute_digest_response(
     username: &str,
-    realm:    &str,
+    realm: &str,
     password: &str,
-    method:   &str,
-    uri:      &str,
-    nonce:    &str,
+    method: &str,
+    uri: &str,
+    nonce: &str,
 ) -> String {
     let ha1 = md5_hex(&format!("{username}:{realm}:{password}"));
     let ha2 = md5_hex(&format!("{method}:{uri}"));
@@ -26,9 +26,9 @@ pub fn compute_digest_response(
 /// Build an `Authorization:` header value.
 pub fn build_auth_header(
     username: &str,
-    realm:    &str,
-    nonce:    &str,
-    uri:      &str,
+    realm: &str,
+    nonce: &str,
+    uri: &str,
     response: &str,
 ) -> String {
     format!(
@@ -44,23 +44,36 @@ pub fn build_auth_header(
 pub fn build_challenge_response(
     username: &str,
     password: &str,
-    method:   &str,
-    uri:      &str,
+    method: &str,
+    uri: &str,
     challenge_header: &str,
 ) -> Option<String> {
     let challenge = DigestChallenge::parse(challenge_header)?;
-    let digest = compute_digest_response(username, &challenge.realm, password, method, uri, &challenge.nonce);
-    Some(build_auth_header(username, &challenge.realm, &challenge.nonce, uri, &digest))
+    let digest = compute_digest_response(
+        username,
+        &challenge.realm,
+        password,
+        method,
+        uri,
+        &challenge.nonce,
+    );
+    Some(build_auth_header(
+        username,
+        &challenge.realm,
+        &challenge.nonce,
+        uri,
+        &digest,
+    ))
 }
 
 // ── Challenge parsing ─────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
 pub struct DigestChallenge {
-    pub realm:     String,
-    pub nonce:     String,
+    pub realm: String,
+    pub nonce: String,
     pub algorithm: String,
-    pub opaque:    Option<String>,
+    pub opaque: Option<String>,
 }
 
 impl DigestChallenge {
@@ -74,10 +87,13 @@ impl DigestChallenge {
         let params = parse_kv_pairs(body);
 
         Some(DigestChallenge {
-            realm:     params.get("realm")?.clone(),
-            nonce:     params.get("nonce")?.clone(),
-            algorithm: params.get("algorithm").cloned().unwrap_or_else(|| "MD5".into()),
-            opaque:    params.get("opaque").cloned(),
+            realm: params.get("realm")?.clone(),
+            nonce: params.get("nonce")?.clone(),
+            algorithm: params
+                .get("algorithm")
+                .cloned()
+                .unwrap_or_else(|| "MD5".into()),
+            opaque: params.get("opaque").cloned(),
         })
     }
 }
@@ -90,7 +106,10 @@ fn parse_kv_pairs(s: &str) -> HashMap<String, String> {
     let mut current = String::new();
     for c in s.chars() {
         match c {
-            '"' => { depth ^= 1; current.push(c); }
+            '"' => {
+                depth ^= 1;
+                current.push(c);
+            }
             ',' if depth == 0 => {
                 insert_kv(&mut map, &current);
                 current.clear();
@@ -105,7 +124,7 @@ fn parse_kv_pairs(s: &str) -> HashMap<String, String> {
 fn insert_kv(map: &mut HashMap<String, String>, s: &str) {
     let s = s.trim();
     if let Some(pos) = s.find('=') {
-        let key   = s[..pos].trim().to_ascii_lowercase();
+        let key = s[..pos].trim().to_ascii_lowercase();
         let value = s[pos + 1..].trim().trim_matches('"').to_string();
         map.insert(key, value);
     }

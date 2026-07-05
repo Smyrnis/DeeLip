@@ -52,15 +52,20 @@ impl EchoCanceller {
         }
 
         while self.mic_acc.len() >= AEC_FRAME_SAMPLES && self.ref_acc.len() >= AEC_FRAME_SAMPLES {
-            let mic_frame: Vec<f32> = self.mic_acc.drain(..AEC_FRAME_SAMPLES)
+            let mic_frame: Vec<f32> = self
+                .mic_acc
+                .drain(..AEC_FRAME_SAMPLES)
                 .map(|s| s as f32 / i16::MAX as f32)
                 .collect();
-            let ref_frame: Vec<f32> = self.ref_acc.drain(..AEC_FRAME_SAMPLES)
+            let ref_frame: Vec<f32> = self
+                .ref_acc
+                .drain(..AEC_FRAME_SAMPLES)
                 .map(|s| s as f32 / i16::MAX as f32)
                 .collect();
 
             let out = self.aec.process(&ref_frame, &mic_frame);
-            self.out_acc.extend(out.iter().map(|&s| (s * i16::MAX as f32) as i16));
+            self.out_acc
+                .extend(out.iter().map(|&s| (s * i16::MAX as f32) as i16));
         }
 
         let ready = self.out_acc.len().min(want);
@@ -77,7 +82,9 @@ impl EchoCanceller {
 }
 
 impl Default for EchoCanceller {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[cfg(test)]

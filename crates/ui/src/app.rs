@@ -1,19 +1,29 @@
 use std::collections::HashMap;
 
-use deelip_config::{AppConfig, CallDirection, CallHistory, CallStatus, Contact, ContactBook, Db, MessageLog, SipAccount};
+use deelip_config::{
+    AppConfig, CallDirection, CallHistory, CallStatus, Contact, ContactBook, Db, MessageLog,
+    SipAccount,
+};
 use deelip_media::MediaEngine;
 use deelip_sip::{CallMediaReady, MwiState, PresenceState, SipHandle};
 use tokio::runtime::Handle;
 
 use crate::platform::hotkeys::Hotkeys;
-use crate::platform::tray::{self, CtxSlot, QuitState};
 use crate::platform::ringtone::Ringtone;
+use crate::platform::tray::{self, CtxSlot, QuitState};
 use crate::theme::Palette;
 
 // ── Tab navigation ────────────────────────────────────────────────────────────
 
 #[derive(PartialEq, Eq, Clone, Copy, Default)]
-pub(crate) enum Tab { #[default] Dialer, History, Messages, Contacts, Settings }
+pub(crate) enum Tab {
+    #[default]
+    Dialer,
+    History,
+    Messages,
+    Contacts,
+    Settings,
+}
 
 // ── App state ─────────────────────────────────────────────────────────────────
 
@@ -21,7 +31,7 @@ pub struct DeelipApp {
     /// One registered SIP identity per enabled account in `config.accounts`,
     /// each independently registering/re-registering on its own transport.
     pub(crate) accounts: Vec<AccountState>,
-    pub(crate) rt:  Handle,
+    pub(crate) rt: Handle,
 
     pub(crate) tab: Tab,
 
@@ -35,7 +45,7 @@ pub struct DeelipApp {
 
     // Status
     pub(crate) status_line: String,
-    pub(crate) reg_ok:      bool,
+    pub(crate) reg_ok: bool,
 
     /// Confirmed (connected) calls — capped at 2 (one focused + one held),
     /// matching a simple "call waiting" model rather than arbitrary
@@ -65,11 +75,11 @@ pub struct DeelipApp {
     pub(crate) pending_accept: Option<PendingAccept>,
 
     /// Inline blind-transfer box state for the focused call.
-    pub(crate) transfer_target:  String,
+    pub(crate) transfer_target: String,
     pub(crate) showing_transfer: bool,
     /// Inline attended-transfer box state for the focused call — mirrors
     /// `transfer_target`/`showing_transfer` exactly.
-    pub(crate) attended_target:  String,
+    pub(crate) attended_target: String,
     pub(crate) showing_attended: bool,
     /// Whether the in-call screen's DTMF keypad is expanded -- hidden by
     /// default so the focused-call screen stays uncluttered, matching the
@@ -146,7 +156,7 @@ pub struct DeelipApp {
     pub(crate) hotkeys: Option<Hotkeys>,
 
     // History
-    pub(crate) history:      CallHistory,
+    pub(crate) history: CallHistory,
     pub(crate) history_search: String,
     /// `None` = show every status.
     pub(crate) history_status_filter: Option<CallStatus>,
@@ -167,16 +177,16 @@ pub struct DeelipApp {
     /// on switching to the Messages tab.
     pub(crate) unseen_messages: u32,
     /// Compose box state for the Messages tab.
-    pub(crate) message_to:   String,
+    pub(crate) message_to: String,
     pub(crate) message_body: String,
 
     // Blocklist
     pub(crate) blocklist_input: String,
 
     // Contacts
-    pub(crate) contacts:       ContactBook,
+    pub(crate) contacts: ContactBook,
     pub(crate) contact_search: String,
-    pub(crate) new_contact:    Contact,
+    pub(crate) new_contact: Contact,
     /// Index into `contacts.contacts` currently loaded into `new_contact`
     /// for editing — `None` means the form is in "Add" mode.
     pub(crate) editing_contact_idx: Option<usize>,
@@ -195,9 +205,9 @@ pub struct DeelipApp {
 /// A not-yet-answered incoming call.
 pub(crate) struct PendingCall {
     /// Index into `DeelipApp::accounts` — which identity this INVITE arrived on.
-    pub(crate) account:    usize,
-    pub(crate) call_id:    String,
-    pub(crate) from:       String,
+    pub(crate) account: usize,
+    pub(crate) call_id: String,
+    pub(crate) from: String,
     pub(crate) start_time: u64,
     /// (redirect deadline as a unix timestamp, forward-to URI) if the
     /// owning account has `no_answer_forward` configured.
@@ -211,7 +221,7 @@ pub(crate) struct PendingCall {
 /// An incoming call we've sent `AcceptCall` for, awaiting `CallConnected`.
 /// See `DeelipApp::pending_accept`'s doc comment.
 pub(crate) struct PendingAccept {
-    pub(crate) call_id:    String,
+    pub(crate) call_id: String,
     pub(crate) remote_uri: String,
     pub(crate) start_time: u64,
 }
@@ -234,13 +244,13 @@ pub(crate) struct PendingOutbound {
 /// state handed over by `SipStack` in `SipEvent::CallConnected` -- codec/
 /// SRTP/ICE/TURN resolution all happened there, not here.
 pub(crate) struct CallSlot {
-    pub(crate) account:    usize,
-    pub(crate) call_id:    String,
+    pub(crate) account: usize,
+    pub(crate) call_id: String,
     pub(crate) remote_uri: String,
-    pub(crate) direction:  CallDirection,
+    pub(crate) direction: CallDirection,
     pub(crate) start_time: u64,
-    pub(crate) is_held:    bool,
-    pub(crate) media:      CallMediaReady,
+    pub(crate) is_held: bool,
+    pub(crate) media: CallMediaReady,
 }
 
 /// A single registered SIP identity: its stack handle plus the registration
@@ -251,7 +261,7 @@ pub(crate) struct AccountState {
     /// (which may have since diverged; settings are restart-required).
     pub(crate) account: SipAccount,
     /// Display label for pickers — `display_name` if set, else `user@server`.
-    pub(crate) label:  String,
+    pub(crate) label: String,
     pub(crate) reg_ok: bool,
     pub(crate) status: String,
     /// Last-known voicemail MWI state, if this account has `mailbox` set
@@ -267,24 +277,33 @@ impl DeelipApp {
         db: Db,
         tray: Option<(CtxSlot, QuitState, tray::BadgeSender)>,
     ) -> Self {
-        let accounts = accounts.into_iter().map(|(account, handle)| AccountState {
-            label: crate::helpers::account_label(&account),
-            account,
-            handle,
-            reg_ok: false,
-            status: "Registering…".into(),
-            mwi: None,
-        }).collect();
+        let accounts = accounts
+            .into_iter()
+            .map(|(account, handle)| AccountState {
+                label: crate::helpers::account_label(&account),
+                account,
+                handle,
+                reg_ok: false,
+                status: "Registering…".into(),
+                mwi: None,
+            })
+            .collect();
 
         let history = CallHistory::load(&db).unwrap_or_default();
         let contacts = ContactBook::load(&db).unwrap_or_default();
         let messages = MessageLog::load(&db).unwrap_or_default();
 
         let hotkeys = if config.global_hotkeys_enabled {
-            match Hotkeys::spawn(&config.hotkey_answer, &config.hotkey_hangup, &config.hotkey_mute) {
+            match Hotkeys::spawn(
+                &config.hotkey_answer,
+                &config.hotkey_hangup,
+                &config.hotkey_mute,
+            ) {
                 Ok(h) => Some(h),
                 Err(e) => {
-                    tracing::warn!("Global hotkeys failed to register ({e}), continuing without them");
+                    tracing::warn!(
+                        "Global hotkeys failed to register ({e}), continuing without them"
+                    );
                     None
                 }
             }
@@ -295,28 +314,28 @@ impl DeelipApp {
         let mut app = Self {
             accounts,
             rt,
-            tab:              Tab::Dialer,
-            call_target:      String::new(),
+            tab: Tab::Dialer,
+            call_target: String::new(),
             selected_account: 0,
-            last_dialed:      None,
-            status_line:      "Registering…".into(),
-            reg_ok:           false,
-            calls:            Vec::new(),
-            focused_call:     None,
-            media:            None,
+            last_dialed: None,
+            status_line: "Registering…".into(),
+            reg_ok: false,
+            calls: Vec::new(),
+            focused_call: None,
+            media: None,
             pending_outbound: None,
-            pending_call:     None,
-            pending_accept:   None,
-            transfer_target:  String::new(),
+            pending_call: None,
+            pending_accept: None,
+            transfer_target: String::new(),
             showing_transfer: false,
-            attended_target:  String::new(),
+            attended_target: String::new(),
             showing_attended: false,
-            showing_dtmf:     false,
+            showing_dtmf: false,
             attended_transfer_original: None,
             in_conference: false,
-            ringtone:            None,
-            was_ringing:         false,
-            last_notified_call:  None,
+            ringtone: None,
+            was_ringing: false,
+            last_notified_call: None,
             config,
             db,
             settings_saved_notice: false,
@@ -329,18 +348,18 @@ impl DeelipApp {
             unseen_missed_calls: 0,
             hotkeys,
             history,
-            history_search:         String::new(),
-            history_status_filter:  None,
-            history_filter_key:     None,
-            history_filtered:       Vec::new(),
+            history_search: String::new(),
+            history_status_filter: None,
+            history_filter_key: None,
+            history_filtered: Vec::new(),
             messages,
             unseen_messages: 0,
-            message_to:   String::new(),
+            message_to: String::new(),
             message_body: String::new(),
-            blocklist_input:        String::new(),
+            blocklist_input: String::new(),
             contacts,
-            contact_search:   String::new(),
-            new_contact:      Contact::default(),
+            contact_search: String::new(),
+            new_contact: Contact::default(),
             editing_contact_idx: None,
             presence: HashMap::new(),
             update_state: crate::update::UpdateState::Idle,

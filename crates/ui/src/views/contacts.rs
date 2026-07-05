@@ -18,13 +18,25 @@ impl DeelipApp {
                     .hint_text("name or sip URI"),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button(egui_phosphor::regular::UPLOAD_SIMPLE).on_hover_text("Import contacts (CSV or vCard)").clicked() {
+                if ui
+                    .button(egui_phosphor::regular::UPLOAD_SIMPLE)
+                    .on_hover_text("Import contacts (CSV or vCard)")
+                    .clicked()
+                {
                     self.import_contacts();
                 }
-                if ui.button(format!("{} vCard", egui_phosphor::regular::DOWNLOAD_SIMPLE)).on_hover_text("Export as vCard").clicked() {
+                if ui
+                    .button(format!("{} vCard", egui_phosphor::regular::DOWNLOAD_SIMPLE))
+                    .on_hover_text("Export as vCard")
+                    .clicked()
+                {
                     self.export_contacts_vcard();
                 }
-                if ui.button(format!("{} CSV", egui_phosphor::regular::DOWNLOAD_SIMPLE)).on_hover_text("Export as CSV").clicked() {
+                if ui
+                    .button(format!("{} CSV", egui_phosphor::regular::DOWNLOAD_SIMPLE))
+                    .on_hover_text("Export as CSV")
+                    .clicked()
+                {
                     self.export_contacts_csv();
                 }
             });
@@ -32,11 +44,12 @@ impl DeelipApp {
         ui.add_space(4.0);
 
         let mut call_target: Option<String> = None;
-        let mut edit_idx:    Option<usize>   = None;
-        let mut delete_idx:  Option<usize>   = None;
+        let mut edit_idx: Option<usize> = None;
+        let mut delete_idx: Option<usize> = None;
 
         // Contact list
-        let results: Vec<(usize, String, String, bool)> = self.contacts
+        let results: Vec<(usize, String, String, bool)> = self
+            .contacts
             .search(&self.contact_search)
             .into_iter()
             .map(|(i, c)| (i, c.name.clone(), c.sip_uri.clone(), c.watch_presence))
@@ -58,21 +71,31 @@ impl DeelipApp {
                                 Some(PresenceState::Available) => palette.accent,
                                 _ => palette.muted,
                             };
-                            ui.label(RichText::new("●").color(color))
-                                .on_hover_text(match presence {
+                            ui.label(RichText::new("●").color(color)).on_hover_text(
+                                match presence {
                                     Some(PresenceState::Available) => "Available",
                                     Some(PresenceState::Offline) => "Offline",
                                     _ => "Unknown",
-                                });
+                                },
+                            );
                         }
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui.small_button(egui_phosphor::regular::PHONE).clicked() {
                                 call_target = Some(uri.clone());
                             }
-                            if ui.small_button(RichText::new(egui_phosphor::regular::TRASH).color(palette.danger)).clicked() {
+                            if ui
+                                .small_button(
+                                    RichText::new(egui_phosphor::regular::TRASH)
+                                        .color(palette.danger),
+                                )
+                                .clicked()
+                            {
                                 delete_idx = Some(*idx);
                             }
-                            if ui.small_button(egui_phosphor::regular::PENCIL_SIMPLE).clicked() {
+                            if ui
+                                .small_button(egui_phosphor::regular::PENCIL_SIMPLE)
+                                .clicked()
+                            {
                                 edit_idx = Some(*idx);
                             }
                             ui.label(RichText::new(uri).color(palette.muted));
@@ -99,17 +122,22 @@ impl DeelipApp {
         ui.separator();
 
         // Add/Edit contact form
-        let heading = if self.editing_contact_idx.is_some() { "Edit Contact" } else { "Add Contact" };
+        let heading = if self.editing_contact_idx.is_some() {
+            "Edit Contact"
+        } else {
+            "Add Contact"
+        };
         ui.label(RichText::new(heading).strong());
         ui.add_space(4.0);
         ui.horizontal(|ui| {
             ui.label("Name:");
-            ui.add(egui::TextEdit::singleline(&mut self.new_contact.name)
-                .desired_width(120.0));
+            ui.add(egui::TextEdit::singleline(&mut self.new_contact.name).desired_width(120.0));
             ui.label("URI:");
-            ui.add(egui::TextEdit::singleline(&mut self.new_contact.sip_uri)
-                .hint_text("sip:alice@example.com")
-                .desired_width(f32::INFINITY));
+            ui.add(
+                egui::TextEdit::singleline(&mut self.new_contact.sip_uri)
+                    .hint_text("sip:alice@example.com")
+                    .desired_width(f32::INFINITY),
+            );
         });
         ui.add_space(4.0);
         ui.horizontal(|ui| {
@@ -117,24 +145,31 @@ impl DeelipApp {
             if self.accounts.len() > 1 {
                 ui.label("via:");
                 let (current_reg_ok, current_text) = match &self.new_contact.presence_account {
-                    Some(username) => self.accounts.iter()
+                    Some(username) => self
+                        .accounts
+                        .iter()
                         .find(|a| &a.account.username == username)
                         .map(|a| (a.reg_ok, a.label.clone()))
                         .unwrap_or((false, username.clone())),
-                    None => self.accounts.first()
+                    None => self
+                        .accounts
+                        .first()
                         .map(|a| (a.reg_ok, format!("{} (default)", a.label)))
                         .unwrap_or_default(),
                 };
                 let palette = self.palette;
-                let selected_label = account_status_label(ui, &palette, current_reg_ok, &current_text);
+                let selected_label =
+                    account_status_label(ui, &palette, current_reg_ok, &current_text);
                 egui::ComboBox::from_id_source("contact_presence_account_picker")
                     .selected_text(selected_label)
                     .show_ui(ui, |ui| {
                         for acc in &self.accounts {
-                            let is_sel = self.new_contact.presence_account.as_deref() == Some(acc.account.username.as_str());
+                            let is_sel = self.new_contact.presence_account.as_deref()
+                                == Some(acc.account.username.as_str());
                             let label = account_status_label(ui, &palette, acc.reg_ok, &acc.label);
                             if ui.add(egui::SelectableLabel::new(is_sel, label)).clicked() {
-                                self.new_contact.presence_account = Some(acc.account.username.clone());
+                                self.new_contact.presence_account =
+                                    Some(acc.account.username.clone());
                             }
                         }
                     });
@@ -142,8 +177,12 @@ impl DeelipApp {
         });
         ui.add_space(4.0);
         ui.horizontal(|ui| {
-            let can_save = !self.new_contact.name.is_empty() && !self.new_contact.sip_uri.is_empty();
-            if ui.add_enabled(can_save, egui::Button::new("Save Contact")).clicked() {
+            let can_save =
+                !self.new_contact.name.is_empty() && !self.new_contact.sip_uri.is_empty();
+            if ui
+                .add_enabled(can_save, egui::Button::new("Save Contact"))
+                .clicked()
+            {
                 let c = std::mem::take(&mut self.new_contact);
                 if let Some(idx) = self.editing_contact_idx.take() {
                     let old = self.contacts.contacts[idx].clone();
@@ -168,16 +207,22 @@ impl DeelipApp {
     }
 
     pub(crate) fn subscribe_contact_presence(&mut self, contact: &Contact) {
-        if !contact.watch_presence { return; }
+        if !contact.watch_presence {
+            return;
+        }
         if let Some(idx) = self.resolve_presence_account(contact) {
-            self.accounts[idx].handle.subscribe_presence(contact.sip_uri.clone());
+            self.accounts[idx]
+                .handle
+                .subscribe_presence(contact.sip_uri.clone());
         }
     }
 
     pub(crate) fn unsubscribe_contact_presence(&mut self, contact: &Contact) {
         if contact.watch_presence {
             if let Some(idx) = self.resolve_presence_account(contact) {
-                self.accounts[idx].handle.unsubscribe_presence(contact.sip_uri.clone());
+                self.accounts[idx]
+                    .handle
+                    .unsubscribe_presence(contact.sip_uri.clone());
             }
         }
         self.presence.remove(&contact.sip_uri);
@@ -186,7 +231,11 @@ impl DeelipApp {
     pub(crate) fn export_contacts_csv(&self) {
         let mut csv = String::from("name,sip_uri\n");
         for c in &self.contacts.contacts {
-            csv.push_str(&format!("{},{}\n", crate::helpers::csv_escape(&c.name), crate::helpers::csv_escape(&c.sip_uri)));
+            csv.push_str(&format!(
+                "{},{}\n",
+                crate::helpers::csv_escape(&c.name),
+                crate::helpers::csv_escape(&c.sip_uri)
+            ));
         }
         save_text_file("deelip_contacts.csv", "CSV", "csv", csv);
     }
@@ -216,10 +265,16 @@ impl DeelipApp {
 
         let content = match std::fs::read_to_string(&path) {
             Ok(c) => c,
-            Err(e) => { tracing::error!("Failed to read {}: {e}", path.display()); return; }
+            Err(e) => {
+                tracing::error!("Failed to read {}: {e}", path.display());
+                return;
+            }
         };
 
-        let is_vcard = path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("vcf"))
+        let is_vcard = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("vcf"))
             || content.contains("BEGIN:VCARD");
 
         let imported = if is_vcard {
@@ -241,13 +296,19 @@ impl DeelipApp {
 /// Parse a CSV contact file with a `name,sip_uri` header, using
 /// `parse_csv_line` for each data row.
 fn parse_contacts_csv(content: &str) -> Vec<Contact> {
-    content.lines().skip(1)
+    content
+        .lines()
+        .skip(1)
         .filter(|line| !line.trim().is_empty())
         .filter_map(|line| {
             let fields = parse_csv_line(line);
-            let name    = fields.first()?.clone();
+            let name = fields.first()?.clone();
             let sip_uri = fields.get(1)?.clone();
-            Some(Contact { name, sip_uri, ..Default::default() })
+            Some(Contact {
+                name,
+                sip_uri,
+                ..Default::default()
+            })
         })
         .collect()
 }
@@ -261,9 +322,14 @@ fn parse_csv_line(line: &str) -> Vec<String> {
     let mut chars = line.chars().peekable();
     while let Some(c) = chars.next() {
         match c {
-            '"' if in_quotes && chars.peek() == Some(&'"') => { field.push('"'); chars.next(); }
+            '"' if in_quotes && chars.peek() == Some(&'"') => {
+                field.push('"');
+                chars.next();
+            }
             '"' => in_quotes = !in_quotes,
-            ',' if !in_quotes => { fields.push(std::mem::take(&mut field)); }
+            ',' if !in_quotes => {
+                fields.push(std::mem::take(&mut field));
+            }
             _ => field.push(c),
         }
     }
@@ -288,15 +354,23 @@ fn parse_vcard(content: &str) -> Vec<Contact> {
         }
         if line.eq_ignore_ascii_case("END:VCARD") {
             if let (Some(n), Some(u)) = (name.take(), uri.take()) {
-                contacts.push(Contact { name: n, sip_uri: u, ..Default::default() });
+                contacts.push(Contact {
+                    name: n,
+                    sip_uri: u,
+                    ..Default::default()
+                });
             }
             continue;
         }
-        let Some((prop, value)) = line.split_once(':') else { continue };
+        let Some((prop, value)) = line.split_once(':') else {
+            continue;
+        };
         let prop_name = prop.split(';').next().unwrap_or(prop);
         if name.is_none() && prop_name.eq_ignore_ascii_case("FN") {
             name = Some(value.to_string());
-        } else if uri.is_none() && (prop_name.eq_ignore_ascii_case("TEL") || prop_name.eq_ignore_ascii_case("IMPP")) {
+        } else if uri.is_none()
+            && (prop_name.eq_ignore_ascii_case("TEL") || prop_name.eq_ignore_ascii_case("IMPP"))
+        {
             uri = Some(value.to_string());
         }
     }

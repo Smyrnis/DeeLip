@@ -30,32 +30,36 @@ pub struct Palette {
 
 impl Palette {
     pub fn for_theme(dark: bool) -> Self {
-        if dark { Self::dark() } else { Self::light() }
+        if dark {
+            Self::dark()
+        } else {
+            Self::light()
+        }
     }
 
     pub fn dark() -> Self {
         Self {
-            accent:    Color32::from_rgb(0x4C, 0xC3, 0x8A),
-            info:      Color32::from_rgb(0x4C, 0x9E, 0xEB),
-            danger:    Color32::from_rgb(0xE5, 0x48, 0x4D),
-            warn:      Color32::from_rgb(0xE8, 0xA3, 0x3D),
-            muted:     Color32::from_rgb(0x9A, 0xA0, 0xA6),
-            card:      Color32::from_rgb(0x26, 0x2A, 0x2F),
+            accent: Color32::from_rgb(0x4C, 0xC3, 0x8A),
+            info: Color32::from_rgb(0x4C, 0x9E, 0xEB),
+            danger: Color32::from_rgb(0xE5, 0x48, 0x4D),
+            warn: Color32::from_rgb(0xE8, 0xA3, 0x3D),
+            muted: Color32::from_rgb(0x9A, 0xA0, 0xA6),
+            card: Color32::from_rgb(0x26, 0x2A, 0x2F),
             row_hover: Color32::from_rgb(0x32, 0x37, 0x3D),
-            divider:   Color32::from_rgb(0x38, 0x3D, 0x43),
+            divider: Color32::from_rgb(0x38, 0x3D, 0x43),
         }
     }
 
     pub fn light() -> Self {
         Self {
-            accent:    Color32::from_rgb(0x1F, 0x8B, 0x4C),
-            info:      Color32::from_rgb(0x24, 0x70, 0xC4),
-            danger:    Color32::from_rgb(0xC7, 0x36, 0x2B),
-            warn:      Color32::from_rgb(0xE8, 0xA3, 0x3D),
-            muted:     Color32::from_rgb(0x6B, 0x72, 0x80),
-            card:      Color32::from_rgb(0xF2, 0xF3, 0xF5),
+            accent: Color32::from_rgb(0x1F, 0x8B, 0x4C),
+            info: Color32::from_rgb(0x24, 0x70, 0xC4),
+            danger: Color32::from_rgb(0xC7, 0x36, 0x2B),
+            warn: Color32::from_rgb(0xE8, 0xA3, 0x3D),
+            muted: Color32::from_rgb(0x6B, 0x72, 0x80),
+            card: Color32::from_rgb(0xF2, 0xF3, 0xF5),
             row_hover: Color32::from_rgb(0xE8, 0xEA, 0xED),
-            divider:   Color32::from_rgb(0xDF, 0xE1, 0xE4),
+            divider: Color32::from_rgb(0xDF, 0xE1, 0xE4),
         }
     }
 }
@@ -101,9 +105,15 @@ pub fn card_frame(palette: &Palette) -> egui::Frame {
 /// `add_contents` (most of them) would otherwise hit a borrow conflict
 /// between `&self.palette` and the closure capturing `self` mutably, since
 /// both are evaluated as part of the same call.
-pub fn full_width_card<R>(ui: &mut egui::Ui, palette: Palette, add_contents: impl FnOnce(&mut egui::Ui) -> R) -> R {
-    card_frame(&palette).show(ui, |ui| {
-        ui.set_width(ui.available_width());
-        add_contents(ui)
-    }).inner
+pub fn full_width_card<R>(
+    ui: &mut egui::Ui,
+    palette: Palette,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    card_frame(&palette)
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            add_contents(ui)
+        })
+        .inner
 }

@@ -19,13 +19,13 @@ pub enum CallStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CallRecord {
-    pub remote_uri:    String,
-    pub direction:     CallDirection,
+    pub remote_uri: String,
+    pub direction: CallDirection,
     /// Unix timestamp (seconds) when the call was initiated/received.
-    pub timestamp:     u64,
+    pub timestamp: u64,
     /// Duration in seconds; 0 for unanswered calls.
     pub duration_secs: u32,
-    pub status:        CallStatus,
+    pub status: CallStatus,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -35,31 +35,31 @@ pub struct CallHistory {
 
 fn call_direction_to_str(d: &CallDirection) -> &'static str {
     match d {
-        CallDirection::Inbound  => "inbound",
+        CallDirection::Inbound => "inbound",
         CallDirection::Outbound => "outbound",
     }
 }
 fn call_direction_from_str(s: &str) -> CallDirection {
     match s {
         "outbound" => CallDirection::Outbound,
-        _          => CallDirection::Inbound,
+        _ => CallDirection::Inbound,
     }
 }
 
 fn call_status_to_str(s: &CallStatus) -> &'static str {
     match s {
         CallStatus::Answered => "answered",
-        CallStatus::Missed   => "missed",
+        CallStatus::Missed => "missed",
         CallStatus::Rejected => "rejected",
-        CallStatus::Failed   => "failed",
+        CallStatus::Failed => "failed",
     }
 }
 fn call_status_from_str(s: &str) -> CallStatus {
     match s {
         "answered" => CallStatus::Answered,
         "rejected" => CallStatus::Rejected,
-        "failed"   => CallStatus::Failed,
-        _          => CallStatus::Missed,
+        "failed" => CallStatus::Failed,
+        _ => CallStatus::Missed,
     }
 }
 
@@ -87,7 +87,9 @@ impl CallHistory {
     }
 
     pub fn save(&self, db: &Db) -> anyhow::Result<()> {
-        db.conn.execute("DELETE FROM call_history", []).context("Clearing call_history table")?;
+        db.conn
+            .execute("DELETE FROM call_history", [])
+            .context("Clearing call_history table")?;
         // `records` is newest-first (see `push`); capped at 200 there too, so
         // no separate truncation needed here.
         for r in &self.records {

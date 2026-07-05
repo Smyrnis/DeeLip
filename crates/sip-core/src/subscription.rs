@@ -2,6 +2,6 @@
 //! (RFC 3842) subscription state/parsing, plus the `SipStack` methods that
 //! send/refresh/handle both over the wire.
 
-pub mod presence;
-pub mod mwi;
 mod handlers;
+pub mod mwi;
+pub mod presence;

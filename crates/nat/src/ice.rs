@@ -44,7 +44,9 @@ impl Conn for ConnectedConn {
     }
     async fn recv_from(&self, buf: &mut [u8]) -> Result<(usize, SocketAddr), UtilError> {
         let n = self.0.recv(buf).await?;
-        let addr = self.0.remote_addr()
+        let addr = self
+            .0
+            .remote_addr()
             .ok_or_else(|| UtilError::Other("ICE: no candidate pair selected yet".into()))?;
         Ok((n, addr))
     }
@@ -107,13 +109,23 @@ pub async fn gather(
     let mut urls = Vec::new();
     if let Some(s) = stun_server {
         let (host, port) = split_host_port(s, 3478)?;
-        urls.push(Url { scheme: SchemeType::Stun, host, port, username: String::new(), password: String::new(), proto: ProtoType::Udp });
+        urls.push(Url {
+            scheme: SchemeType::Stun,
+            host,
+            port,
+            username: String::new(),
+            password: String::new(),
+            proto: ProtoType::Udp,
+        });
     }
     if let Some((addr, username, password)) = turn {
         let (host, port) = split_host_port(addr, 3478)?;
         urls.push(Url {
-            scheme: SchemeType::Turn, host, port,
-            username: username.to_string(), password: password.to_string(),
+            scheme: SchemeType::Turn,
+            host,
+            port,
+            username: username.to_string(),
+            password: password.to_string(),
             proto: ProtoType::Udp,
         });
     }
@@ -141,7 +153,9 @@ pub async fn gather(
             let _ = cand_tx.send(c);
         })
     }));
-    agent.gather_candidates().context("Starting ICE candidate gathering")?;
+    agent
+        .gather_candidates()
+        .context("Starting ICE candidate gathering")?;
 
     let gather_all = async {
         let mut candidates = Vec::new();
@@ -157,12 +171,20 @@ pub async fn gather(
         .await
         .context("ICE candidate gathering timed out")?;
 
-    let best = candidates.iter().max_by_key(|c| c.priority())
+    let best = candidates
+        .iter()
+        .max_by_key(|c| c.priority())
         .ok_or_else(|| anyhow::anyhow!("ICE gathering produced no candidates"))?;
     let default_addr = best.addr();
     let marshaled: Vec<String> = candidates.iter().map(|c| c.marshal()).collect();
 
-    Ok(IceGathered { agent, local_ufrag, local_pwd, candidates: marshaled, default_addr })
+    Ok(IceGathered {
+        agent,
+        local_ufrag,
+        local_pwd,
+        candidates: marshaled,
+        default_addr,
+    })
 }
 
 /// The winning `Conn` from a completed ICE connectivity check, plus the
@@ -192,7 +214,10 @@ pub async fn connect(
     for raw in remote_candidates {
         let candidate = unmarshal_candidate(raw).context("Parsing remote ICE candidate")?;
         let candidate: Arc<dyn Candidate + Send + Sync> = Arc::new(candidate);
-        gathered.agent.add_remote_candidate(&candidate).context("Adding remote ICE candidate")?;
+        gathered
+            .agent
+            .add_remote_candidate(&candidate)
+            .context("Adding remote ICE candidate")?;
     }
 
     // Never actually cancelled -- kept alive for the duration of the call so
@@ -202,12 +227,21 @@ pub async fn connect(
     let (_cancel_tx, cancel_rx) = mpsc::channel::<()>(1);
 
     let raw_conn: Arc<dyn Conn + Send + Sync> = if is_controlling {
-        gathered.agent.dial(cancel_rx, remote_ufrag.to_string(), remote_pwd.to_string())
-            .await.context("ICE connectivity checks failed (dial)")?
+        gathered
+            .agent
+            .dial(cancel_rx, remote_ufrag.to_string(), remote_pwd.to_string())
+            .await
+            .context("ICE connectivity checks failed (dial)")?
     } else {
-        gathered.agent.accept(cancel_rx, remote_ufrag.to_string(), remote_pwd.to_string())
-            .await.context("ICE connectivity checks failed (accept)")?
+        gathered
+            .agent
+            .accept(cancel_rx, remote_ufrag.to_string(), remote_pwd.to_string())
+            .await
+            .context("ICE connectivity checks failed (accept)")?
     };
     let conn: Arc<dyn Conn + Send + Sync> = Arc::new(ConnectedConn(raw_conn));
-    Ok(IceConnection { _agent: gathered.agent, conn })
+    Ok(IceConnection {
+        _agent: gathered.agent,
+        conn,
+    })
 }

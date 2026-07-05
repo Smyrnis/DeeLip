@@ -88,7 +88,8 @@ impl QuitState {
             sent = true;
         }
         if sent {
-            self.rt.block_on(tokio::time::sleep(std::time::Duration::from_millis(200)));
+            self.rt
+                .block_on(tokio::time::sleep(std::time::Duration::from_millis(200)));
         }
         tracing::info!("Tray: Quit selected, exiting");
         std::process::exit(0);
@@ -154,7 +155,8 @@ fn restore_window(ctx_slot: &CtxSlot) {
                      // a classic (non-async) GLib main loop.
 pub fn spawn_tray_icon() -> anyhow::Result<(TrayMenuIds, BadgeSender)> {
     let (ids_tx, ids_rx) = std::sync::mpsc::channel::<TrayMenuIds>();
-    let (badge_tx, badge_rx) = gtk::glib::MainContext::channel::<u32>(gtk::glib::Priority::default());
+    let (badge_tx, badge_rx) =
+        gtk::glib::MainContext::channel::<u32>(gtk::glib::Priority::default());
     let badge_tx_ret = badge_tx.clone();
 
     std::thread::spawn(move || {
@@ -173,7 +175,10 @@ pub fn spawn_tray_icon() -> anyhow::Result<(TrayMenuIds, BadgeSender)> {
 
         let show_item = MenuItem::new("Show DeeLip", true, None);
         let quit_item = MenuItem::new("Quit", true, None);
-        let _ = ids_tx.send(TrayMenuIds { show: show_item.id().clone(), quit: quit_item.id().clone() });
+        let _ = ids_tx.send(TrayMenuIds {
+            show: show_item.id().clone(),
+            quit: quit_item.id().clone(),
+        });
 
         let menu = Menu::new();
         if menu.append(&show_item).is_err() || menu.append(&quit_item).is_err() {
@@ -204,7 +209,10 @@ pub fn spawn_tray_icon() -> anyhow::Result<(TrayMenuIds, BadgeSender)> {
                         tracing::warn!("Tray: failed to update badge icon: {e}");
                     }
                     let tooltip = if count > 0 {
-                        format!("DeeLip — {count} missed call{}", if count == 1 { "" } else { "s" })
+                        format!(
+                            "DeeLip — {count} missed call{}",
+                            if count == 1 { "" } else { "s" }
+                        )
                     } else {
                         "DeeLip".to_string()
                     };
@@ -220,7 +228,9 @@ pub fn spawn_tray_icon() -> anyhow::Result<(TrayMenuIds, BadgeSender)> {
         gtk::main();
     });
 
-    let ids = ids_rx.recv().context("Tray thread failed before creating menu items")?;
+    let ids = ids_rx
+        .recv()
+        .context("Tray thread failed before creating menu items")?;
     Ok((ids, badge_tx_ret))
 }
 
@@ -242,16 +252,36 @@ fn load_icon(count: u32) -> anyhow::Result<Icon> {
 /// existing preference for hand-rolled parsing/rendering over new deps for
 /// simple, fixed-shape needs (see `sdp.rs`/`message.rs`/`auth.rs`).
 const DIGIT_FONT: [[u8; 7]; 10] = [
-    [0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110], // 0
-    [0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110], // 1
-    [0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b01000, 0b11111], // 2
-    [0b11110, 0b00001, 0b00001, 0b00110, 0b00001, 0b00001, 0b11110], // 3
-    [0b00010, 0b00110, 0b01010, 0b10010, 0b11111, 0b00010, 0b00010], // 4
-    [0b11111, 0b10000, 0b11110, 0b00001, 0b00001, 0b10001, 0b01110], // 5
-    [0b00110, 0b01000, 0b10000, 0b11110, 0b10001, 0b10001, 0b01110], // 6
-    [0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b01000, 0b01000], // 7
-    [0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110], // 8
-    [0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00010, 0b01100], // 9
+    [
+        0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110,
+    ], // 0
+    [
+        0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110,
+    ], // 1
+    [
+        0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b01000, 0b11111,
+    ], // 2
+    [
+        0b11110, 0b00001, 0b00001, 0b00110, 0b00001, 0b00001, 0b11110,
+    ], // 3
+    [
+        0b00010, 0b00110, 0b01010, 0b10010, 0b11111, 0b00010, 0b00010,
+    ], // 4
+    [
+        0b11111, 0b10000, 0b11110, 0b00001, 0b00001, 0b10001, 0b01110,
+    ], // 5
+    [
+        0b00110, 0b01000, 0b10000, 0b11110, 0b10001, 0b10001, 0b01110,
+    ], // 6
+    [
+        0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b01000, 0b01000,
+    ], // 7
+    [
+        0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110,
+    ], // 8
+    [
+        0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00010, 0b01100,
+    ], // 9
 ];
 
 /// Draw a filled red circle with a white digit in the bottom-right corner
@@ -266,9 +296,13 @@ fn draw_badge(img: &mut image::RgbaImage, digit: u8) {
 
     for dy in -radius..=radius {
         for dx in -radius..=radius {
-            if dx * dx + dy * dy > radius * radius { continue; }
+            if dx * dx + dy * dy > radius * radius {
+                continue;
+            }
             let (x, y) = (cx + dx, cy + dy);
-            if x < 0 || y < 0 || x as u32 >= w || y as u32 >= h { continue; }
+            if x < 0 || y < 0 || x as u32 >= w || y as u32 >= h {
+                continue;
+            }
             img.put_pixel(x as u32, y as u32, red);
         }
     }
@@ -281,11 +315,15 @@ fn draw_badge(img: &mut image::RgbaImage, digit: u8) {
     let oy = cy - glyph_h / 2;
     for (row, bits) in glyph.iter().enumerate() {
         for col in 0..5 {
-            if bits & (1 << (4 - col)) == 0 { continue; }
+            if bits & (1 << (4 - col)) == 0 {
+                continue;
+            }
             for py in 0..scale {
                 for px in 0..scale {
                     let (x, y) = (ox + col * scale + px, oy + row as i32 * scale + py);
-                    if x < 0 || y < 0 || x as u32 >= w || y as u32 >= h { continue; }
+                    if x < 0 || y < 0 || x as u32 >= w || y as u32 >= h {
+                        continue;
+                    }
                     img.put_pixel(x as u32, y as u32, white);
                 }
             }

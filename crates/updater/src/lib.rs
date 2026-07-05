@@ -15,10 +15,10 @@ pub const REPO: &str = "Smyrnis/DeeLip";
 
 #[derive(Debug, Clone)]
 pub struct ReleaseInfo {
-    pub tag:      String,
-    pub version:  String,
+    pub tag: String,
+    pub version: String,
     pub html_url: String,
-    tar_gz_url:   Option<String>,
+    tar_gz_url: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -32,7 +32,7 @@ struct GhRelease {
     tag_name: String,
     html_url: String,
     #[serde(default)]
-    assets:   Vec<GhAsset>,
+    assets: Vec<GhAsset>,
 }
 
 /// Fetches the latest published release and returns it if its version is
@@ -50,13 +50,22 @@ pub fn check_latest(current: &str) -> anyhow::Result<Option<ReleaseInfo>> {
         .context("Reading release response")?;
     let release: GhRelease = serde_json::from_str(&body).context("Parsing release JSON")?;
 
-    let Some(version) = newer_version(&release.tag_name, current) else { return Ok(None) };
+    let Some(version) = newer_version(&release.tag_name, current) else {
+        return Ok(None);
+    };
 
-    let tar_gz_url = release.assets.iter()
+    let tar_gz_url = release
+        .assets
+        .iter()
         .find(|a| a.name.ends_with(".tar.gz"))
         .map(|a| a.browser_download_url.clone());
 
-    Ok(Some(ReleaseInfo { tag: release.tag_name, version, html_url: release.html_url, tar_gz_url }))
+    Ok(Some(ReleaseInfo {
+        tag: release.tag_name,
+        version,
+        html_url: release.html_url,
+        tar_gz_url,
+    }))
 }
 
 /// Returns `tag`'s version string (leading `v` stripped) if it parses as
@@ -84,15 +93,22 @@ fn newer_version(tag: &str, current: &str) -> Option<String> {
 /// new binary alongside it and `rename()`s over it, which is a directory
 /// operation and works on a currently-running executable just fine.
 pub fn can_self_replace() -> bool {
-    let Ok(exe) = std::env::current_exe() else { return false };
-    let Some(dir) = exe.parent() else { return false };
+    let Ok(exe) = std::env::current_exe() else {
+        return false;
+    };
+    let Some(dir) = exe.parent() else {
+        return false;
+    };
     dir_is_writable(dir)
 }
 
 fn dir_is_writable(dir: &Path) -> bool {
     let probe = dir.join(format!(".deelip-update-probe-{}", std::process::id()));
     match std::fs::File::create(&probe) {
-        Ok(_) => { let _ = std::fs::remove_file(&probe); true }
+        Ok(_) => {
+            let _ = std::fs::remove_file(&probe);
+            true
+        }
         Err(_) => false,
     }
 }
@@ -108,7 +124,9 @@ fn dir_is_writable(dir: &Path) -> bool {
 /// expected to prompt the user to restart rather than doing it
 /// automatically (an in-progress call would otherwise be dropped).
 pub fn download_and_replace(release: &ReleaseInfo) -> anyhow::Result<()> {
-    let url = release.tar_gz_url.as_deref()
+    let url = release
+        .tar_gz_url
+        .as_deref()
         .ok_or_else(|| anyhow::anyhow!("Release {} has no .tar.gz asset", release.tag))?;
 
     let mut res = ureq::get(url)
@@ -121,8 +139,10 @@ pub fn download_and_replace(release: &ReleaseInfo) -> anyhow::Result<()> {
 
     let archive_path = tmp_dir.join("deelip.tar.gz");
     {
-        let mut file = std::fs::File::create(&archive_path).context("Creating temp archive file")?;
-        std::io::copy(&mut res.body_mut().as_reader(), &mut file).context("Saving downloaded archive")?;
+        let mut file =
+            std::fs::File::create(&archive_path).context("Creating temp archive file")?;
+        std::io::copy(&mut res.body_mut().as_reader(), &mut file)
+            .context("Saving downloaded archive")?;
     }
 
     let current_exe = std::env::current_exe().context("Locating running executable")?;
@@ -140,7 +160,9 @@ fn install_from_archive(archive_path: &Path, current_exe: &Path) -> anyhow::Resu
 
     let tar_gz = std::fs::File::open(archive_path).context("Opening downloaded archive")?;
     let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(tar_gz));
-    archive.unpack(&extract_dir).context("Extracting update archive")?;
+    archive
+        .unpack(&extract_dir)
+        .context("Extracting update archive")?;
 
     let new_binary = find_named(&extract_dir, "deelip")
         .context("Update archive did not contain the deelip binary")?;
@@ -165,7 +187,9 @@ fn find_named(dir: &Path, name: &str) -> Option<PathBuf> {
     for entry in std::fs::read_dir(dir).ok()?.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            if let Some(found) = find_named(&path, name) { return Some(found); }
+            if let Some(found) = find_named(&path, name) {
+                return Some(found);
+            }
         } else if path.file_name().and_then(|n| n.to_str()) == Some(name) {
             return Some(path);
         }

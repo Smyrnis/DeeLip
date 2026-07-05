@@ -24,7 +24,10 @@ fn tone_frame_is_continuous_across_frame_boundary() {
     let frame1 = dtmf_tone_frame('5', FRAME_SAMPLES as u32).unwrap();
     let restart = dtmf_tone_frame('5', 0).unwrap();
     assert_eq!(frame0, restart);
-    assert_ne!(frame1, restart, "continued phase should differ from a restarted one");
+    assert_ne!(
+        frame1, restart,
+        "continued phase should differ from a restarted one"
+    );
 }
 
 #[test]

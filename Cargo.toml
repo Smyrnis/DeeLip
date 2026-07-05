@@ -67,11 +67,11 @@ semver = "1"
 flate2 = "1"
 tar = "0.4"
 
-deelip-config  = { path = "crates/config" }
-deelip-sip     = { path = "crates/sip-core" }
-deelip-media   = { path = "crates/media-engine" }
-deelip-nat     = { path = "crates/nat" }
-deelip-ui      = { path = "crates/ui" }
+deelip-config = { path = "crates/config" }
+deelip-sip = { path = "crates/sip-core" }
+deelip-media = { path = "crates/media-engine" }
+deelip-nat = { path = "crates/nat" }
+deelip-ui = { path = "crates/ui" }
 deelip-updater = { path = "crates/updater" }
 
 [package]

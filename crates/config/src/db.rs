@@ -79,7 +79,8 @@ impl Db {
 
         let conn = Connection::open(&path)
             .with_context(|| format!("Opening database at {}", path.display()))?;
-        conn.execute_batch(SCHEMA).context("Creating database schema")?;
+        conn.execute_batch(SCHEMA)
+            .context("Creating database schema")?;
         let db = Db { conn };
 
         if is_fresh {
@@ -124,7 +125,9 @@ impl Db {
 
     pub(crate) fn get_setting(&self, key: &str) -> Option<String> {
         self.conn
-            .query_row("SELECT value FROM settings WHERE key = ?1", [key], |row| row.get(0))
+            .query_row("SELECT value FROM settings WHERE key = ?1", [key], |row| {
+                row.get(0)
+            })
             .ok()
     }
 
@@ -138,7 +141,8 @@ impl Db {
     }
 
     pub(crate) fn delete_setting(&self, key: &str) -> anyhow::Result<()> {
-        self.conn.execute("DELETE FROM settings WHERE key = ?1", [key])?;
+        self.conn
+            .execute("DELETE FROM settings WHERE key = ?1", [key])?;
         Ok(())
     }
 
@@ -147,7 +151,7 @@ impl Db {
     pub(crate) fn set_setting_opt(&self, key: &str, value: &Option<String>) -> anyhow::Result<()> {
         match value {
             Some(v) => self.set_setting(key, v),
-            None    => self.delete_setting(key),
+            None => self.delete_setting(key),
         }
     }
 }
@@ -160,11 +164,21 @@ pub fn default_db_path() -> anyhow::Result<PathBuf> {
 // ── Shared scalar<->SQL conversions ──────────────────────────────────────────
 // Used by both `account.rs` (`SipAccount`) and `contacts.rs` (`Contact`).
 
-pub(crate) fn bool_to_sql(b: bool) -> &'static str { if b { "1" } else { "0" } }
-pub(crate) fn sql_to_bool(s: &str) -> bool { s == "1" }
+pub(crate) fn bool_to_sql(b: bool) -> &'static str {
+    if b {
+        "1"
+    } else {
+        "0"
+    }
+}
+pub(crate) fn sql_to_bool(s: &str) -> bool {
+    s == "1"
+}
 /// Same as `sql_to_bool`, but for the `accounts`/`contacts` tables' `INTEGER`
 /// columns -- SQLite's INTEGER column affinity silently converts a bound
 /// numeric-looking TEXT value ("1"/"0") into actual INTEGER storage, so
 /// those columns must be read back as `i64`, unlike `settings.value` (a
 /// genuinely `TEXT`-affinity column, where "1"/"0" round-trips as text).
-pub(crate) fn sql_int_to_bool(i: i64) -> bool { i != 0 }
+pub(crate) fn sql_int_to_bool(i: i64) -> bool {
+    i != 0
+}

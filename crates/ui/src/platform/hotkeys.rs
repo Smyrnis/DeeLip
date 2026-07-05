@@ -38,11 +38,14 @@ impl Hotkeys {
     pub fn spawn(answer: &str, hangup: &str, mute: &str) -> anyhow::Result<Self> {
         let manager = GlobalHotKeyManager::new()?;
 
-        let answer_key: HotKey = answer.parse()
+        let answer_key: HotKey = answer
+            .parse()
             .map_err(|e| anyhow::anyhow!("Parsing answer hotkey {answer:?}: {e}"))?;
-        let hangup_key: HotKey = hangup.parse()
+        let hangup_key: HotKey = hangup
+            .parse()
             .map_err(|e| anyhow::anyhow!("Parsing hangup hotkey {hangup:?}: {e}"))?;
-        let mute_key: HotKey = mute.parse()
+        let mute_key: HotKey = mute
+            .parse()
             .map_err(|e| anyhow::anyhow!("Parsing mute hotkey {mute:?}: {e}"))?;
 
         manager.register(answer_key)?;

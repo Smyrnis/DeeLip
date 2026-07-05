@@ -28,7 +28,8 @@ pub fn set_autostart(enabled: bool) -> anyhow::Result<()> {
 
     let exe = std::env::current_exe().context("Resolving current executable path")?;
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).with_context(|| format!("Creating {}", parent.display()))?;
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("Creating {}", parent.display()))?;
     }
     let contents = format!(
         "[Desktop Entry]\nType=Application\nName=DeeLip\nExec={}\nX-GNOME-Autostart-enabled=true\n",

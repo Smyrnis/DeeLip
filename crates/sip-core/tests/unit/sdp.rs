@@ -13,7 +13,12 @@ fn offer_prefers_opus() {
 
 #[test]
 fn answer_honors_selected_codec() {
-    for codec in [AudioCodec::Pcmu, AudioCodec::Pcma, AudioCodec::Opus, AudioCodec::G722] {
+    for codec in [
+        AudioCodec::Pcmu,
+        AudioCodec::Pcma,
+        AudioCodec::Opus,
+        AudioCodec::G722,
+    ] {
         let sdp = build_answer("192.0.2.2", 40002, codec, None, None);
         let parsed = parse_sdp(&sdp, &ALL_CODECS).unwrap();
         assert_eq!(parsed.codec, codec);
@@ -24,7 +29,10 @@ fn answer_honors_selected_codec() {
 #[test]
 fn offer_includes_g722_with_correct_clock_quirk() {
     let sdp = build_offer("192.0.2.1", 40000, None, &ALL_CODECS, None);
-    assert!(sdp.contains("a=rtpmap:9 G722/8000"), "G722's RTP clock must be signalled as 8000 per RFC 3551, not 16000");
+    assert!(
+        sdp.contains("a=rtpmap:9 G722/8000"),
+        "G722's RTP clock must be signalled as 8000 per RFC 3551, not 16000"
+    );
     // An answerer selecting G722 (e.g. one without Opus support) must parse correctly.
     let g722_only = "v=0\r\n\
                       o=- 1 1 IN IP4 198.51.100.1\r\n\
@@ -88,12 +96,25 @@ fn hold_offer_is_sendonly() {
 fn build_offer_honors_restricted_and_reordered_codec_list() {
     let codecs = [AudioCodec::Pcma, AudioCodec::Pcmu];
     let sdp = build_offer("192.0.2.1", 40000, None, &codecs, None);
-    assert!(sdp.contains(&format!("m=audio 40000 RTP/AVP {} {} 101",
-        AudioCodec::Pcma.payload_type(), AudioCodec::Pcmu.payload_type())));
-    assert!(!sdp.contains("opus"), "Opus must not be offered when excluded from the codec list");
-    assert!(!sdp.contains("G722"), "G722 must not be offered when excluded from the codec list");
+    assert!(sdp.contains(&format!(
+        "m=audio 40000 RTP/AVP {} {} 101",
+        AudioCodec::Pcma.payload_type(),
+        AudioCodec::Pcmu.payload_type()
+    )));
+    assert!(
+        !sdp.contains("opus"),
+        "Opus must not be offered when excluded from the codec list"
+    );
+    assert!(
+        !sdp.contains("G722"),
+        "G722 must not be offered when excluded from the codec list"
+    );
     let parsed = parse_sdp(&sdp, &codecs).unwrap();
-    assert_eq!(parsed.codec, AudioCodec::Pcma, "first entry in the configured list should win");
+    assert_eq!(
+        parsed.codec,
+        AudioCodec::Pcma,
+        "first entry in the configured list should win"
+    );
 }
 
 #[test]
@@ -139,7 +160,10 @@ fn ice_attrs_round_trip_through_offer() {
     assert_eq!(parsed.ice_ufrag.as_deref(), Some("abcd1234"));
     assert_eq!(parsed.ice_pwd.as_deref(), Some("s0mel0ngicepasswordvalue"));
     assert_eq!(parsed.ice_candidates.len(), 2);
-    assert_eq!(parsed.ice_candidates[0], "1 1 udp 2130706431 192.0.2.1 40000 typ host");
+    assert_eq!(
+        parsed.ice_candidates[0],
+        "1 1 udp 2130706431 192.0.2.1 40000 typ host"
+    );
 }
 
 #[test]

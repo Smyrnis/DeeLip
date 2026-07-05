@@ -19,7 +19,10 @@ fn silence_in_silence_out() {
         push_ref(&echo_ref, &mic);
         let out = canceller.process(&mic, &echo_ref);
         assert_eq!(out.len(), 160);
-        assert!(out.iter().all(|&s| s.abs() < 100), "silence in should stay near-silent out, got {out:?}");
+        assert!(
+            out.iter().all(|&s| s.abs() < 100),
+            "silence in should stay near-silent out, got {out:?}"
+        );
     }
 }
 
@@ -32,7 +35,11 @@ fn always_returns_the_input_frame_length() {
     for _ in 0..20 {
         push_ref(&echo_ref, &mic);
         let out = canceller.process(&mic, &echo_ref);
-        assert_eq!(out.len(), 160, "must always return exactly one RTP frame's worth");
+        assert_eq!(
+            out.len(),
+            160,
+            "must always return exactly one RTP frame's worth"
+        );
     }
 }
 
@@ -53,7 +60,9 @@ fn converges_on_a_repeated_perfect_echo() {
         push_ref(&echo_ref, &tone);
         let out = canceller.process(&tone, &echo_ref);
         let energy = frame_energy(&out);
-        if i == 0 { first_energy = Some(energy.max(1.0)); }
+        if i == 0 {
+            first_energy = Some(energy.max(1.0));
+        }
         last_energy = energy;
     }
 

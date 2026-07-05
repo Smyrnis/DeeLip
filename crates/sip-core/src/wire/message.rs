@@ -18,18 +18,18 @@ pub enum SipMethod {
 impl SipMethod {
     pub fn as_str(&self) -> &str {
         match self {
-            Self::Register  => "REGISTER",
-            Self::Invite    => "INVITE",
-            Self::Ack       => "ACK",
-            Self::Bye       => "BYE",
-            Self::Cancel    => "CANCEL",
-            Self::Options   => "OPTIONS",
-            Self::Info      => "INFO",
-            Self::Notify    => "NOTIFY",
+            Self::Register => "REGISTER",
+            Self::Invite => "INVITE",
+            Self::Ack => "ACK",
+            Self::Bye => "BYE",
+            Self::Cancel => "CANCEL",
+            Self::Options => "OPTIONS",
+            Self::Info => "INFO",
+            Self::Notify => "NOTIFY",
             Self::Subscribe => "SUBSCRIBE",
-            Self::Refer     => "REFER",
-            Self::Message   => "MESSAGE",
-            Self::Other(s)  => s.as_str(),
+            Self::Refer => "REFER",
+            Self::Message => "MESSAGE",
+            Self::Other(s) => s.as_str(),
         }
     }
 }
@@ -37,18 +37,18 @@ impl SipMethod {
 impl From<&str> for SipMethod {
     fn from(s: &str) -> Self {
         match s {
-            "REGISTER"  => Self::Register,
-            "INVITE"    => Self::Invite,
-            "ACK"       => Self::Ack,
-            "BYE"       => Self::Bye,
-            "CANCEL"    => Self::Cancel,
-            "OPTIONS"   => Self::Options,
-            "INFO"      => Self::Info,
-            "NOTIFY"    => Self::Notify,
+            "REGISTER" => Self::Register,
+            "INVITE" => Self::Invite,
+            "ACK" => Self::Ack,
+            "BYE" => Self::Bye,
+            "CANCEL" => Self::Cancel,
+            "OPTIONS" => Self::Options,
+            "INFO" => Self::Info,
+            "NOTIFY" => Self::Notify,
             "SUBSCRIBE" => Self::Subscribe,
-            "REFER"     => Self::Refer,
-            "MESSAGE"   => Self::Message,
-            other       => Self::Other(other.to_string()),
+            "REFER" => Self::Refer,
+            "MESSAGE" => Self::Message,
+            other => Self::Other(other.to_string()),
         }
     }
 }
@@ -112,14 +112,18 @@ impl SipMessage {
                 continue;
             }
             if let Some(pos) = line.find(':') {
-                let name  = line[..pos].trim().to_string();
+                let name = line[..pos].trim().to_string();
                 let value = line[pos + 1..].trim().to_string();
                 headers.push((name, value));
             }
         }
 
         let body = body_parts.join("\r\n").into_bytes();
-        Some(SipMessage { start_line, headers, body })
+        Some(SipMessage {
+            start_line,
+            headers,
+            body,
+        })
     }
 
     // ── Header accessors ──────────────────────────────────────────────────────
@@ -127,7 +131,8 @@ impl SipMessage {
     /// Case-insensitive header lookup; returns the first match.
     pub fn header(&self, name: &str) -> Option<&str> {
         let lower = name.to_ascii_lowercase();
-        self.headers.iter()
+        self.headers
+            .iter()
             .find(|(k, _)| k.to_ascii_lowercase() == lower)
             .map(|(_, v)| v.as_str())
     }
@@ -135,7 +140,8 @@ impl SipMessage {
     /// All values for a header name (some headers repeat).
     pub fn headers_all(&self, name: &str) -> Vec<&str> {
         let lower = name.to_ascii_lowercase();
-        self.headers.iter()
+        self.headers
+            .iter()
             .filter(|(k, _)| k.to_ascii_lowercase() == lower)
             .map(|(_, v)| v.as_str())
             .collect()

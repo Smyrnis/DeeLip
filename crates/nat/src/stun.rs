@@ -8,11 +8,11 @@ use anyhow::{bail, Context};
 use tokio::net::UdpSocket;
 use tokio::time::{timeout, Duration};
 
-const MAGIC_COOKIE:       u32 = 0x2112_A442;
-const BINDING_REQUEST:    u16 = 0x0001;
-const BINDING_SUCCESS:    u16 = 0x0101;
-const ATTR_MAPPED_ADDR:   u16 = 0x0001;
-const ATTR_XOR_MAPPED:    u16 = 0x0020;
+const MAGIC_COOKIE: u32 = 0x2112_A442;
+const BINDING_REQUEST: u16 = 0x0001;
+const BINDING_SUCCESS: u16 = 0x0101;
+const ATTR_MAPPED_ADDR: u16 = 0x0001;
+const ATTR_XOR_MAPPED: u16 = 0x0020;
 
 /// Send a STUN Binding Request to `stun_server` (e.g. `"stun.l.google.com:19302"`)
 /// and return the external `SocketAddr` as seen by the STUN server.
@@ -55,15 +55,17 @@ fn parse_binding_response(data: &[u8]) -> anyhow::Result<SocketAddr> {
     }
 
     let mut xor_mapped: Option<SocketAddr> = None;
-    let mut mapped:     Option<SocketAddr> = None;
+    let mut mapped: Option<SocketAddr> = None;
     let mut offset = 20usize;
 
     while offset + 4 <= data.len() {
-        let attr_type = u16::from_be_bytes([data[offset],     data[offset + 1]]);
-        let attr_len  = u16::from_be_bytes([data[offset + 2], data[offset + 3]]) as usize;
+        let attr_type = u16::from_be_bytes([data[offset], data[offset + 1]]);
+        let attr_len = u16::from_be_bytes([data[offset + 2], data[offset + 3]]) as usize;
         offset += 4;
 
-        if offset + attr_len > data.len() { break; }
+        if offset + attr_len > data.len() {
+            break;
+        }
 
         match attr_type {
             ATTR_XOR_MAPPED if attr_len >= 8 && data[offset + 1] == 0x01 => {
@@ -73,16 +75,18 @@ fn parse_binding_response(data: &[u8]) -> anyhow::Result<SocketAddr> {
                 let ip = Ipv4Addr::new(
                     data[offset + 4] ^ ((MAGIC_COOKIE >> 24) as u8),
                     data[offset + 5] ^ ((MAGIC_COOKIE >> 16) as u8),
-                    data[offset + 6] ^ ((MAGIC_COOKIE >>  8) as u8),
-                    data[offset + 7] ^   MAGIC_COOKIE         as u8,
+                    data[offset + 6] ^ ((MAGIC_COOKIE >> 8) as u8),
+                    data[offset + 7] ^ MAGIC_COOKIE as u8,
                 );
                 xor_mapped = Some(SocketAddr::new(IpAddr::V4(ip), port));
             }
             ATTR_MAPPED_ADDR if attr_len >= 8 && data[offset + 1] == 0x01 => {
                 let port = u16::from_be_bytes([data[offset + 2], data[offset + 3]]);
-                let ip   = Ipv4Addr::new(
-                    data[offset + 4], data[offset + 5],
-                    data[offset + 6], data[offset + 7],
+                let ip = Ipv4Addr::new(
+                    data[offset + 4],
+                    data[offset + 5],
+                    data[offset + 6],
+                    data[offset + 7],
                 );
                 mapped = Some(SocketAddr::new(IpAddr::V4(ip), port));
             }
