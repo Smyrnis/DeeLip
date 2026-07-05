@@ -1,14 +1,14 @@
 use deelip_config::{CallDirection, CallStatus};
 use egui::{RichText, Ui};
 
-use crate::app::{DeelipApp, Tab};
-use crate::helpers::{csv_escape, extract_user_part, format_age, format_duration, list_row, short_uri, status_filter_label};
+use crate::app::DeelipApp;
+use crate::helpers::{csv_escape, empty_state, extract_user_part, format_age, format_duration, list_row, short_uri, status_filter_label};
 
 impl DeelipApp {
     pub(crate) fn show_history(&mut self, ui: &mut Ui, _ctx: &egui::Context) {
         ui.add_space(8.0);
         if self.history.records.is_empty() {
-            ui.label("No call history yet.");
+            empty_state(ui, &self.palette, "No call history yet.");
             return;
         }
 
@@ -61,7 +61,7 @@ impl DeelipApp {
         let mut block_target: Option<String> = None;
 
         if self.history_filtered.is_empty() {
-            ui.label(RichText::new("No matching calls.").color(self.palette.muted));
+            empty_state(ui, &self.palette, "No matching calls.");
         } else {
             // `show_rows` only lays out the rows actually scrolled into view
             // instead of all of them every frame -- with up to 200 records
@@ -113,12 +113,7 @@ impl DeelipApp {
         }
 
         if let Some(target) = call_target {
-            self.tab         = Tab::Dialer;
-            self.call_target = target.clone();
-            let can_dial = self.calls.is_empty() && self.pending_call.is_none() && self.pending_outbound.is_none();
-            if can_dial && self.reg_ok {
-                self.do_call(Some(target));
-            }
+            self.dial_from_list(target);
         }
         if let Some(target) = block_target {
             let entry = extract_user_part(&target);
@@ -132,14 +127,6 @@ impl DeelipApp {
     /// Export the currently filtered history view (respecting the search box
     /// and status dropdown) to a CSV file via a native save dialog.
     pub(crate) fn export_history_csv(&self) {
-        let Some(path) = rfd::FileDialog::new()
-            .set_file_name("deelip_history.csv")
-            .add_filter("CSV", &["csv"])
-            .save_file()
-        else {
-            return;
-        };
-
         let query = self.history_search.to_lowercase();
         let filtered = self.history.records.iter()
             .filter(|r| self.history_status_filter.as_ref().is_none_or(|s| *s == r.status))
@@ -163,8 +150,6 @@ impl DeelipApp {
             ));
         }
 
-        if let Err(e) = std::fs::write(&path, csv) {
-            tracing::error!("Failed to export history to {}: {e}", path.display());
-        }
+        crate::helpers::save_text_file("deelip_history.csv", "CSV", "csv", csv);
     }
 }

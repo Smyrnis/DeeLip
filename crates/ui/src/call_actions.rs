@@ -1,11 +1,7 @@
 use deelip_config::{CallDirection, CallStatus, DtmfMode};
-use deelip_media::alloc_rtp_port;
-use deelip_sip::{build_answer, build_hold_offer, build_offer, build_resume_offer, parse_sdp, IceAttrs, SrtpParams};
 
-use deelip_nat::TurnRelay;
-
-use crate::app::{CallSlot, DeelipApp, PendingOutbound};
-use crate::helpers::{account_codecs, normalize_target, short_uri, unix_now};
+use crate::app::{DeelipApp, PendingAccept, PendingOutbound, Tab};
+use crate::helpers::{normalize_target, short_uri, unix_now};
 
 impl DeelipApp {
     // ── Call actions ─────────────────────────────────────────────────────────
@@ -23,40 +19,10 @@ impl DeelipApp {
     /// plain STUN/TURN-fallback path unchanged.
     pub(crate) fn place_call(&mut self, acc: usize, target: &str, attempt_ice: bool) {
         let domain = self.accounts[acc].handle.domain.clone();
-        let secure = self.accounts[acc].handle.secure;
-        let advertised_ip = self.accounts[acc].handle.advertised_ip.clone();
         let t = normalize_target(target, &domain);
-        let local_rtp = alloc_rtp_port();
-        let mut relay: Option<TurnRelay> = None;
-        let rt = self.rt.clone();
-        let turn_config = self.turn_config();
-
-        let ice_gathered = if attempt_ice { self.try_gather_ice(true) } else { None };
-        let ice_attrs = ice_gathered.as_ref().map(|g| {
-            IceAttrs { ufrag: g.local_ufrag.clone(), pwd: g.local_pwd.clone(), candidates: g.candidates.clone() }
-        });
-        // The plain c=/m= fallback address is deliberately *never* the ICE
-        // agent's own gathered candidate socket — that socket only becomes
-        // usable via `finish_ice_connect` once the remote's answer confirms
-        // it also speaks ICE, and if it doesn't (the common case against a
-        // plain SIP/PBX peer), `finish_ice_connect` drops the ICE agent
-        // (and that socket) entirely. Advertising it here and then binding
-        // an unrelated `local_rtp` in `start_media` would leave the far end
-        // sending RTP to a socket nothing is listening on — one-way-silent
-        // audio on every ICE-enabled call to a non-ICE peer. Always
-        // resolving the fallback through the same STUN/TURN path used
-        // pre-ICE guarantees it's a socket `start_media` will actually bind.
-        let (rtp_ip, rtp_port) = Self::resolve_rtp_endpoint(&rt, turn_config, &advertised_ip, local_rtp, &mut relay);
-
-        let srtp = if secure { Some(SrtpParams::generate()) } else { None };
-        let codecs = account_codecs(&self.accounts[acc].account);
-        let sdp = build_offer(&rtp_ip, rtp_port, srtp.as_ref(), &codecs, ice_attrs.as_ref());
-        self.accounts[acc].handle.make_call(&t, sdp);
+        self.accounts[acc].handle.make_call(&t, attempt_ice);
         self.last_dialed = Some(t.clone());
-        self.pending_outbound = Some(PendingOutbound {
-            remote_uri: t.clone(), start_time: unix_now(),
-            local_rtp, local_srtp: srtp, relay, ice_gathered,
-        });
+        self.pending_outbound = Some(PendingOutbound { remote_uri: t.clone(), start_time: unix_now() });
         self.status_line = format!("Calling {}…", short_uri(&t));
     }
 
@@ -69,6 +35,19 @@ impl DeelipApp {
 
     pub(crate) fn do_redial(&mut self) {
         if let Some(target) = self.last_dialed.clone() {
+            self.do_call(Some(target));
+        }
+    }
+
+    /// Switch to the Dialer tab, load `target` into the dial box, and place
+    /// the call immediately if idle and registered -- shared by History's
+    /// and Contacts' "Call" buttons, which used to each hand-roll this
+    /// identical sequence.
+    pub(crate) fn dial_from_list(&mut self, target: String) {
+        self.tab         = Tab::Dialer;
+        self.call_target = target.clone();
+        let can_dial = self.calls.is_empty() && self.pending_call.is_none() && self.pending_outbound.is_none();
+        if can_dial && self.reg_ok {
             self.do_call(Some(target));
         }
     }
@@ -110,53 +89,34 @@ impl DeelipApp {
     }
 
     pub(crate) fn do_accept(&mut self) {
+        // `pending_accept` is a single slot, tracking one in-flight accept
+        // at a time -- accepting a 2nd call before the first's
+        // `CallConnected` arrives would silently overwrite it, orphaning
+        // the first as a connected-but-invisible call the moment its event
+        // finally lands (see `CallConnected`'s `pending_accept` matching in
+        // `event_handling.rs`). Deliberately a no-op rather than an error:
+        // `pending_call` (and its "incoming"/"call waiting" banner) is left
+        // untouched, so the user can just try Accept again once the first
+        // call visibly connects.
+        if self.pending_accept.is_some() { return; }
         let Some(pending) = self.pending_call.take() else { return };
         let acc = pending.account;
-        let acc_codecs = account_codecs(&self.accounts[acc].account);
-        let Some(parsed) = parse_sdp(&pending.remote_sdp, &acc_codecs) else {
-            // No codec in common with this account's enabled list -- decline
-            // rather than guess, before touching any already-focused call's media.
-            tracing::warn!(from = %pending.from, "No mutually-acceptable codec -- declining");
-            self.accounts[acc].handle.reject_call(&pending.call_id);
-            self.record_history(pending.from, CallDirection::Inbound, pending.start_time, CallStatus::Rejected);
-            return;
-        };
-        let codec = parsed.codec;
-        // Free the audio device for the new call if another one is focused.
-        if let Some(cur) = self.focused_call {
-            self.send_hold(cur);
-            if let Some(engine) = self.media.take() { self.rt.block_on(engine.stop()); }
-            self.focused_call = None;
-        }
-        let local_rtp = alloc_rtp_port();
-        let mut relay: Option<TurnRelay> = None;
-        let advertised_ip = self.accounts[acc].handle.advertised_ip.clone();
-        let rt = self.rt.clone();
-        let turn_config = self.turn_config();
-
-        let ice_result = self.try_answer_with_ice(&parsed);
-        let (rtp_ip, rtp_port, ice_attrs, ice) = match ice_result {
-            Some((attrs, addr, conn)) => (addr.ip().to_string(), addr.port(), Some(attrs), Some(conn)),
-            None => {
-                let (ip, port) = Self::resolve_rtp_endpoint(&rt, turn_config, &advertised_ip, local_rtp, &mut relay);
-                (ip, port, None, None)
-            }
-        };
-
-        let secure = self.accounts[acc].handle.secure;
-        let srtp   = if secure { Some(SrtpParams::generate()) } else { None };
-        let sdp    = build_answer(&rtp_ip, rtp_port, codec, srtp.as_ref(), ice_attrs.as_ref());
-        self.accounts[acc].handle.accept_call(&pending.call_id, sdp);
-        let slot = CallSlot {
-            account: acc, call_id: pending.call_id.clone(), remote_uri: pending.from.clone(),
-            direction: CallDirection::Inbound, start_time: pending.start_time, is_held: false,
-            codec, dtmf_type: None, local_srtp: srtp, relay, ice, local_rtp,
-            remote_sdp: pending.remote_sdp.clone(),
-        };
-        self.calls.push(slot);
-        let idx = self.calls.len() - 1;
-        self.status_line = "Accepted — connecting…".into();
-        self.start_media(idx, &pending.remote_sdp);
+        // Codec negotiation / RTP port / ICE / TURN all happen inside
+        // `SipStack` now -- if any of that fails, it declines on our behalf
+        // and reports back via `SipEvent::CallFailed` (see
+        // `on_call_terminated`'s `pending_accept` handling), not here.
+        // Deliberately *not* holding/freeing the currently-focused call's
+        // media here anymore: that used to happen eagerly, before this
+        // could ever fail, so a decline (no compatible codec, RTP port
+        // allocation failure) would needlessly put an already-active call
+        // on hold with nothing to auto-resume it. Deferred to the
+        // `CallConnected` handler (`event_handling.rs`), which only runs
+        // once accept has actually succeeded.
+        self.accounts[acc].handle.accept_call(&pending.call_id);
+        self.pending_accept = Some(PendingAccept {
+            call_id: pending.call_id, remote_uri: pending.from, start_time: pending.start_time,
+        });
+        self.status_line = "Accepting…".into();
         self.refresh_call_status();
     }
 
@@ -184,26 +144,14 @@ impl DeelipApp {
     pub(crate) fn send_hold(&mut self, idx: usize) {
         let call_id = self.calls[idx].call_id.clone();
         let acc     = self.calls[idx].account;
-        let advertised_ip = self.accounts[acc].handle.advertised_ip.clone();
-        let local_rtp = self.calls[idx].local_rtp;
-        let rt = self.rt.clone();
-        let turn_config = self.turn_config();
-        let (rtp_ip, rtp_port) = Self::resolve_rtp_endpoint(&rt, turn_config, &advertised_ip, local_rtp, &mut self.calls[idx].relay);
-        let sdp = build_hold_offer(&rtp_ip, rtp_port, self.calls[idx].codec, self.calls[idx].local_srtp.as_ref());
         self.calls[idx].is_held = true;
-        self.accounts[acc].handle.hold_call(&call_id, sdp);
+        self.accounts[acc].handle.hold_call(&call_id);
     }
 
     pub(crate) fn send_resume(&mut self, idx: usize) {
         let call_id = self.calls[idx].call_id.clone();
         let acc     = self.calls[idx].account;
-        let advertised_ip = self.accounts[acc].handle.advertised_ip.clone();
-        let local_rtp = self.calls[idx].local_rtp;
-        let rt = self.rt.clone();
-        let turn_config = self.turn_config();
-        let (rtp_ip, rtp_port) = Self::resolve_rtp_endpoint(&rt, turn_config, &advertised_ip, local_rtp, &mut self.calls[idx].relay);
-        let sdp = build_resume_offer(&rtp_ip, rtp_port, self.calls[idx].codec, self.calls[idx].local_srtp.as_ref());
-        self.accounts[acc].handle.resume_call(&call_id, sdp);
+        self.accounts[acc].handle.resume_call(&call_id);
     }
 
     /// Hold call `idx` — if it's the focused one, its media stops and no
@@ -219,7 +167,9 @@ impl DeelipApp {
 
     /// Switch live audio to call `idx`: holds whatever's currently focused
     /// (there's at most one other call), then resumes and restarts media
-    /// for `idx` using its last-known remote SDP.
+    /// for `idx` using its originally-negotiated `CallMediaReady` (the
+    /// negotiated RTP endpoint doesn't change between hold and resume, so
+    /// there's nothing new to learn from a resume re-INVITE's response).
     pub(crate) fn do_swap_to(&mut self, idx: usize) {
         if self.focused_call == Some(idx) { return; }
         if let Some(cur) = self.focused_call {
@@ -229,8 +179,7 @@ impl DeelipApp {
         }
         self.send_resume(idx);
         self.calls[idx].is_held = false;
-        let remote_sdp = self.calls[idx].remote_sdp.clone();
-        self.start_media(idx, &remote_sdp);
+        self.start_media(idx);
         self.refresh_call_status();
     }
 
@@ -298,7 +247,7 @@ impl DeelipApp {
         let Some((deadline, target)) = &pending.forward else { return };
         if now < *deadline { return; }
         let target = target.clone();
-        let pending = self.pending_call.take().unwrap();
+        let Some(pending) = self.pending_call.take() else { return };
         self.accounts[pending.account].handle.redirect_call(&pending.call_id, target);
         self.record_history(pending.from, CallDirection::Inbound, pending.start_time, CallStatus::Missed);
         self.refresh_call_status();

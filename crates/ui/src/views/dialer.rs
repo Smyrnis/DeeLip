@@ -3,7 +3,7 @@ use deelip_sip::AudioCodec;
 use egui::{FontId, RichText, Ui};
 
 use crate::app::DeelipApp;
-use crate::helpers::{account_status_label, ctx_key_enter, phone_keypad, short_uri};
+use crate::helpers::{account_status_label, audio_codec_label, ctx_key_enter, phone_keypad, short_uri};
 use crate::theme;
 
 impl DeelipApp {
@@ -45,8 +45,7 @@ impl DeelipApp {
             ui.add_space(8.0);
         }
 
-        theme::card_frame(&self.palette).show(ui, |ui| {
-            ui.set_width(ui.available_width());
+        theme::full_width_card(ui, self.palette, |ui| {
             ui.label(RichText::new("SIP address / number").color(self.palette.muted).small());
             ui.add_space(4.0);
             let resp = ui.add(
@@ -62,8 +61,7 @@ impl DeelipApp {
         ui.add_space(8.0);
 
         let palette = self.palette;
-        theme::card_frame(&palette).show(ui, |ui| {
-            ui.set_width(ui.available_width());
+        theme::full_width_card(ui, palette, |ui| {
             phone_keypad(ui, palette, |digit| self.call_target.push(digit));
             ui.add_space(6.0);
             ui.horizontal(|ui| {
@@ -138,8 +136,7 @@ impl DeelipApp {
     }
 
     fn show_call_waiting_banner(&mut self, ui: &mut Ui, from: &str) {
-        theme::card_frame(&self.palette).show(ui, |ui| {
-            ui.set_width(ui.available_width());
+        theme::full_width_card(ui, self.palette, |ui| {
             ui.label(RichText::new(format!("Call waiting: {}", short_uri(from)))
                 .color(self.palette.warn).font(FontId::proportional(15.0)));
             ui.add_space(6.0);
@@ -192,8 +189,7 @@ impl DeelipApp {
                 (icon, color, call.remote_uri.clone())
             };
 
-            theme::card_frame(&self.palette).show(ui, |ui| {
-                ui.set_width(ui.available_width());
+            theme::full_width_card(ui, self.palette, |ui| {
                 if focused {
                     ui.vertical_centered(|ui| {
                         ui.label(RichText::new(icon).size(28.0).color(color));
@@ -257,8 +253,7 @@ impl DeelipApp {
     }
 
     fn show_focused_call_controls(&mut self, ui: &mut Ui) {
-        theme::card_frame(&self.palette).show(ui, |ui| {
-            ui.set_width(ui.available_width());
+        theme::full_width_card(ui, self.palette, |ui| {
             ui.horizontal(|ui| {
                 let mute_icon = if self.is_muted() { egui_phosphor::regular::MICROPHONE_SLASH } else { egui_phosphor::regular::MICROPHONE };
                 let mute_label = format!("{mute_icon}  {}", if self.is_muted() { "Unmute" } else { "Mute" });
@@ -311,8 +306,7 @@ impl DeelipApp {
         if self.showing_dtmf {
             ui.add_space(8.0);
             let palette = self.palette;
-            theme::card_frame(&palette).show(ui, |ui| {
-                ui.set_width(ui.available_width());
+            theme::full_width_card(ui, palette, |ui| {
                 phone_keypad(ui, palette, |digit| self.do_dtmf(digit));
             });
         }
@@ -323,13 +317,13 @@ impl DeelipApp {
             let muted_color = self.palette.muted;
             egui::CollapsingHeader::new("Call statistics").show(ui, |ui| {
                 if self.in_conference && self.calls.len() == 2 {
-                    show_leg_stats(ui, &short_uri(&self.calls[0].remote_uri), self.calls[0].codec, &stats.leg1, muted_color);
+                    show_leg_stats(ui, &short_uri(&self.calls[0].remote_uri), self.calls[0].media.codec, &stats.leg1, muted_color);
                     if let Some(leg2) = stats.leg2.as_ref() {
                         ui.add_space(4.0);
-                        show_leg_stats(ui, &short_uri(&self.calls[1].remote_uri), self.calls[1].codec, leg2, muted_color);
+                        show_leg_stats(ui, &short_uri(&self.calls[1].remote_uri), self.calls[1].media.codec, leg2, muted_color);
                     }
                 } else if let Some(idx) = self.focused_call {
-                    show_leg_stats(ui, "This call", self.calls[idx].codec, &stats.leg1, muted_color);
+                    show_leg_stats(ui, "This call", self.calls[idx].media.codec, &stats.leg1, muted_color);
                 }
             });
         }
@@ -349,14 +343,7 @@ fn circular_action_button(ui: &mut Ui, icon: &str, color: egui::Color32) -> bool
 /// Render one leg's RTP stats as a small label grid inside a "Call
 /// statistics" collapsing section.
 fn show_leg_stats(ui: &mut Ui, label: &str, codec: AudioCodec, stats: &deelip_media::LegStats, muted: egui::Color32) {
-    let codec_name = match codec {
-        AudioCodec::Opus => "Opus",
-        AudioCodec::G722 => "G.722",
-        AudioCodec::Pcmu => "PCMU",
-        AudioCodec::Pcma => "PCMA",
-        AudioCodec::Gsm  => "GSM",
-        AudioCodec::Ilbc => "iLBC",
-    };
+    let codec_name = audio_codec_label(codec);
     ui.label(RichText::new(format!("{label} — {codec_name}")).strong());
     ui.label(RichText::new(format!(
         "Sent: {} pkts / {}    Received: {} pkts / {}",

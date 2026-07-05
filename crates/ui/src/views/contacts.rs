@@ -2,8 +2,8 @@ use deelip_config::Contact;
 use deelip_sip::PresenceState;
 use egui::{RichText, Ui};
 
-use crate::app::{DeelipApp, Tab};
-use crate::helpers::list_row;
+use crate::app::DeelipApp;
+use crate::helpers::{account_status_label, empty_state, list_row, save_text_file};
 
 impl DeelipApp {
     pub(crate) fn show_contacts(&mut self, ui: &mut Ui, _ctx: &egui::Context) {
@@ -46,7 +46,7 @@ impl DeelipApp {
             .max_height(200.0)
             .show(ui, |ui| {
                 if results.is_empty() {
-                    ui.label(RichText::new("No contacts found.").color(self.palette.muted));
+                    empty_state(ui, &self.palette, "No contacts found.");
                 }
                 for (idx, name, uri, watch_presence) in &results {
                     let palette = self.palette;
@@ -116,21 +116,24 @@ impl DeelipApp {
             ui.checkbox(&mut self.new_contact.watch_presence, "Watch presence");
             if self.accounts.len() > 1 {
                 ui.label("via:");
-                let current_label = match &self.new_contact.presence_account {
+                let (current_reg_ok, current_text) = match &self.new_contact.presence_account {
                     Some(username) => self.accounts.iter()
                         .find(|a| &a.account.username == username)
-                        .map(|a| a.label.clone())
-                        .unwrap_or_else(|| username.clone()),
+                        .map(|a| (a.reg_ok, a.label.clone()))
+                        .unwrap_or((false, username.clone())),
                     None => self.accounts.first()
-                        .map(|a| format!("{} (default)", a.label))
+                        .map(|a| (a.reg_ok, format!("{} (default)", a.label)))
                         .unwrap_or_default(),
                 };
+                let palette = self.palette;
+                let selected_label = account_status_label(ui, &palette, current_reg_ok, &current_text);
                 egui::ComboBox::from_id_source("contact_presence_account_picker")
-                    .selected_text(current_label)
+                    .selected_text(selected_label)
                     .show_ui(ui, |ui| {
                         for acc in &self.accounts {
                             let is_sel = self.new_contact.presence_account.as_deref() == Some(acc.account.username.as_str());
-                            if ui.selectable_label(is_sel, &acc.label).clicked() {
+                            let label = account_status_label(ui, &palette, acc.reg_ok, &acc.label);
+                            if ui.add(egui::SelectableLabel::new(is_sel, label)).clicked() {
                                 self.new_contact.presence_account = Some(acc.account.username.clone());
                             }
                         }
@@ -160,12 +163,7 @@ impl DeelipApp {
         });
 
         if let Some(target) = call_target {
-            self.tab         = Tab::Dialer;
-            self.call_target = target.clone();
-            let can_dial = self.calls.is_empty() && self.pending_call.is_none() && self.pending_outbound.is_none();
-            if can_dial && self.reg_ok {
-                self.do_call(Some(target));
-            }
+            self.dial_from_list(target);
         }
     }
 
@@ -186,33 +184,14 @@ impl DeelipApp {
     }
 
     pub(crate) fn export_contacts_csv(&self) {
-        let Some(path) = rfd::FileDialog::new()
-            .set_file_name("deelip_contacts.csv")
-            .add_filter("CSV", &["csv"])
-            .save_file()
-        else {
-            return;
-        };
-
         let mut csv = String::from("name,sip_uri\n");
         for c in &self.contacts.contacts {
             csv.push_str(&format!("{},{}\n", crate::helpers::csv_escape(&c.name), crate::helpers::csv_escape(&c.sip_uri)));
         }
-
-        if let Err(e) = std::fs::write(&path, csv) {
-            tracing::error!("Failed to export contacts to {}: {e}", path.display());
-        }
+        save_text_file("deelip_contacts.csv", "CSV", "csv", csv);
     }
 
     pub(crate) fn export_contacts_vcard(&self) {
-        let Some(path) = rfd::FileDialog::new()
-            .set_file_name("deelip_contacts.vcf")
-            .add_filter("vCard", &["vcf"])
-            .save_file()
-        else {
-            return;
-        };
-
         let mut vcf = String::new();
         for c in &self.contacts.contacts {
             vcf.push_str("BEGIN:VCARD\r\n");
@@ -221,10 +200,7 @@ impl DeelipApp {
             vcf.push_str(&format!("IMPP:{}\r\n", c.sip_uri));
             vcf.push_str("END:VCARD\r\n");
         }
-
-        if let Err(e) = std::fs::write(&path, vcf) {
-            tracing::error!("Failed to export contacts to {}: {e}", path.display());
-        }
+        save_text_file("deelip_contacts.vcf", "vCard", "vcf", vcf);
     }
 
     /// Import contacts from a CSV or vCard file (detected by extension,
@@ -258,7 +234,7 @@ impl DeelipApp {
         }
 
         self.contacts.contacts.extend(imported);
-                let _ = self.contacts.save(&self.db);
+        let _ = self.contacts.save(&self.db);
     }
 }
 

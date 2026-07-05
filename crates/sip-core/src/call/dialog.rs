@@ -1,3 +1,7 @@
+use deelip_nat::{IceConnection, IceGathered, TurnRelay};
+
+use crate::wire::sdp::{AudioCodec, SrtpParams};
+
 /// State of a SIP call dialog (simplified early/confirmed dialog).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DialogState {
@@ -9,7 +13,37 @@ pub enum DialogState {
     Terminated,
 }
 
-#[derive(Debug, Clone)]
+/// The negotiated media state for a confirmed call -- kept on the `Dialog`
+/// so hold/resume can rebuild their re-INVITE SDP (same codec/SRTP key, and
+/// the same TURN relay reused rather than re-allocated) without redoing any
+/// STUN/TURN/ICE resolution or touching the remote SDP again.
+///
+/// Deliberately *not* `Clone`/`Debug`-derivable (neither is `Dialog` anymore,
+/// for the same reason): `TurnRelay`/`IceConnection` hold live network
+/// resources (an open relay allocation, a running ICE agent) that can't be
+/// cloned and aren't meaningfully printable.
+pub struct CallMedia {
+    pub local_rtp:   u16,
+    pub local_srtp:  Option<SrtpParams>,
+    pub relay:       Option<TurnRelay>,
+    pub ice:         Option<IceConnection>,
+    pub codec:       AudioCodec,
+    pub dtmf_type:   Option<u8>,
+}
+
+/// Offerer-side media state resolved before the INVITE was sent (local RTP
+/// port, our own SRTP key, a TURN relay if one is in use) -- unlike the
+/// answerer side, which knows the negotiated codec immediately (it's
+/// choosing from the already-received offer), the offerer doesn't know the
+/// codec until the answer arrives. Held here in the meantime; consumed
+/// (taken) in `on_response`'s `Act::Connected` handling to build the final
+/// `CallMedia` once the answer's codec is known.
+pub struct PendingOfferMedia {
+    pub local_rtp:  u16,
+    pub local_srtp: Option<SrtpParams>,
+    pub relay:      Option<TurnRelay>,
+}
+
 pub struct Dialog {
     pub call_id:        String,
     pub local_tag:      String,
@@ -41,6 +75,21 @@ pub struct Dialog {
     /// Set once we've retried the initial INVITE with digest auth, so a second
     /// 401/407 (bad credentials) is treated as a final failure, not another retry.
     pub auth_retried:   bool,
+    /// Negotiated media state, populated once the call is confirmed --
+    /// `None` before then (or after `Dialog` is otherwise ready but the
+    /// call hasn't connected/been accepted yet).
+    pub media:          Option<CallMedia>,
+    /// Offerer-side ICE candidates gathered before the INVITE was sent,
+    /// held here until the answer arrives (`on_response`) so they can be
+    /// fed into `media_setup::finish_ice_connect` -- `None` throughout if
+    /// ICE wasn't attempted for this call. Consumed (taken) once the answer
+    /// arrives, same one-shot idiom as `hold_pending`.
+    pub ice_gathered:   Option<IceGathered>,
+    /// Offerer-side media state resolved before the INVITE was sent --
+    /// `None` after the call is confirmed (folded into `media` by then) or
+    /// for an incoming call (the answerer path populates `media` directly,
+    /// never this). See `PendingOfferMedia`'s doc comment.
+    pub pending_offer:  Option<PendingOfferMedia>,
 }
 
 impl Dialog {
@@ -61,6 +110,9 @@ impl Dialog {
             is_held:        false,
             hold_pending:   None,
             auth_retried:   false,
+            media:          None,
+            ice_gathered:   None,
+            pending_offer:  None,
         }
     }
 
@@ -89,6 +141,9 @@ impl Dialog {
             is_held:        false,
             hold_pending:   None,
             auth_retried:   false,
+            media:          None,
+            ice_gathered:   None,
+            pending_offer:  None,
         }
     }
 

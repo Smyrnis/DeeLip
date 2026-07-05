@@ -1,6 +1,4 @@
-use super::{account_codecs, extract_user_part, normalize_target};
-use deelip_config::SipAccount;
-use deelip_sip::{sdp, AudioCodec};
+use super::{extract_user_part, normalize_target};
 
 #[test]
 fn bare_number_gets_domain_appended() {
@@ -40,22 +38,4 @@ fn extracts_user_from_full_uri_with_params() {
 #[test]
 fn extract_user_part_is_case_insensitive() {
     assert_eq!(extract_user_part("SIP:Bob@Example.com"), extract_user_part("sip:bob@example.com"));
-}
-
-#[test]
-fn account_codecs_honors_configured_order() {
-    let acc = SipAccount { codec_order: vec!["pcma".into(), "pcmu".into()], ..Default::default() };
-    assert_eq!(account_codecs(&acc), vec![AudioCodec::Pcma, AudioCodec::Pcmu]);
-}
-
-#[test]
-fn account_codecs_falls_back_when_list_is_empty() {
-    let acc = SipAccount { codec_order: vec![], ..Default::default() };
-    assert_eq!(account_codecs(&acc).len(), sdp::ALL_CODECS.len());
-}
-
-#[test]
-fn account_codecs_skips_unrecognized_entries() {
-    let acc = SipAccount { codec_order: vec!["opus".into(), "carrier-pigeon".into()], ..Default::default() };
-    assert_eq!(account_codecs(&acc), vec![AudioCodec::Opus]);
 }

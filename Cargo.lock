@@ -1427,6 +1427,7 @@ dependencies = [
  "anyhow",
  "base64",
  "deelip-config",
+ "deelip-nat",
  "md-5",
  "rand 0.8.6",
  "rustls",
@@ -1435,6 +1436,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tracing",
+ "webrtc-util 0.17.1",
 ]
 
 [[package]]

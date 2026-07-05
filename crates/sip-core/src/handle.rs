@@ -18,13 +18,13 @@ pub struct SipHandle {
 }
 
 impl SipHandle {
-    pub fn make_call(&self, to: &str, local_sdp: String) {
-        let _ = self.cmd_tx.send(SipCommand::MakeCall { to: to.to_string(), local_sdp });
+    /// `attempt_ice` lets the caller opt this specific call out of ICE even
+    /// if it's enabled globally -- see `SipCommand::MakeCall`'s doc comment.
+    pub fn make_call(&self, to: &str, attempt_ice: bool) {
+        let _ = self.cmd_tx.send(SipCommand::MakeCall { to: to.to_string(), attempt_ice });
     }
-    pub fn accept_call(&self, call_id: &str, local_sdp: String) {
-        let _ = self.cmd_tx.send(SipCommand::AcceptCall {
-            call_id: call_id.to_string(), local_sdp,
-        });
+    pub fn accept_call(&self, call_id: &str) {
+        let _ = self.cmd_tx.send(SipCommand::AcceptCall { call_id: call_id.to_string() });
     }
     pub fn reject_call(&self, call_id: &str) {
         let _ = self.cmd_tx.send(SipCommand::RejectCall { call_id: call_id.to_string() });
@@ -32,15 +32,11 @@ impl SipHandle {
     pub fn hang_up(&self, call_id: &str) {
         let _ = self.cmd_tx.send(SipCommand::HangUp { call_id: call_id.to_string() });
     }
-    pub fn hold_call(&self, call_id: &str, local_sdp: String) {
-        let _ = self.cmd_tx.send(SipCommand::HoldCall {
-            call_id: call_id.to_string(), local_sdp,
-        });
+    pub fn hold_call(&self, call_id: &str) {
+        let _ = self.cmd_tx.send(SipCommand::HoldCall { call_id: call_id.to_string() });
     }
-    pub fn resume_call(&self, call_id: &str, local_sdp: String) {
-        let _ = self.cmd_tx.send(SipCommand::ResumeCall {
-            call_id: call_id.to_string(), local_sdp,
-        });
+    pub fn resume_call(&self, call_id: &str) {
+        let _ = self.cmd_tx.send(SipCommand::ResumeCall { call_id: call_id.to_string() });
     }
     /// `target` must already be a fully-qualified SIP URI (e.g. from
     /// `normalize_target`) — it's placed verbatim into the Refer-To header.

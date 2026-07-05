@@ -2,10 +2,8 @@ use std::collections::HashMap;
 
 use deelip_config::{AppConfig, CallDirection, CallHistory, CallStatus, Contact, ContactBook, Db, MessageLog, SipAccount};
 use deelip_media::MediaEngine;
-use deelip_sip::{AudioCodec, MwiState, PresenceState, SipHandle, SrtpParams};
+use deelip_sip::{CallMediaReady, MwiState, PresenceState, SipHandle};
 use tokio::runtime::Handle;
-
-use deelip_nat::{IceConnection, IceGathered, TurnRelay};
 
 use crate::platform::hotkeys::Hotkeys;
 use crate::platform::tray::{self, CtxSlot, QuitState};
@@ -56,6 +54,15 @@ pub struct DeelipApp {
     /// "call waiting" second call while `calls` is non-empty (distinguished
     /// in the UI, not in this struct).
     pub(crate) pending_call: Option<PendingCall>,
+    /// An incoming call we've sent `AcceptCall` for but haven't yet gotten
+    /// `SipEvent::CallConnected` back on -- media negotiation (codec/SRTP/
+    /// ICE/TURN) now happens inside `SipStack` itself, so there's a real gap
+    /// between "we told it to accept" and "media is ready to start". Kept
+    /// separate from `pending_outbound` (rather than reusing one slot for
+    /// both directions) since an inbound ring can in principle arrive while
+    /// an outbound dial is still in flight, and both would then be waiting
+    /// on their own `CallConnected` simultaneously.
+    pub(crate) pending_accept: Option<PendingAccept>,
 
     /// Inline blind-transfer box state for the focused call.
     pub(crate) transfer_target:  String,
@@ -191,7 +198,6 @@ pub(crate) struct PendingCall {
     pub(crate) account:    usize,
     pub(crate) call_id:    String,
     pub(crate) from:       String,
-    pub(crate) remote_sdp: String,
     pub(crate) start_time: u64,
     /// (redirect deadline as a unix timestamp, forward-to URI) if the
     /// owning account has `no_answer_forward` configured.
@@ -202,26 +208,31 @@ pub(crate) struct PendingCall {
     pub(crate) auto_answer_at: Option<u64>,
 }
 
+/// An incoming call we've sent `AcceptCall` for, awaiting `CallConnected`.
+/// See `DeelipApp::pending_accept`'s doc comment.
+pub(crate) struct PendingAccept {
+    pub(crate) call_id:    String,
+    pub(crate) remote_uri: String,
+    pub(crate) start_time: u64,
+}
+
 /// A not-yet-answered outgoing call — at most one at a time (placing a 2nd
 /// outbound call is blocked while this is `Some`). Which account it's on
 /// doesn't need to be stored here: `CallConnected`/`CallFailed` already carry
-/// that as the account index tagged onto the event itself.
+/// that as the account index tagged onto the event itself. SDP/codec/ICE/
+/// TURN are entirely `SipStack`'s business now (see `deelip_sip::media_setup`)
+/// — this just tracks enough to build history/`CallSlot` once `CallConnected`
+/// arrives.
 pub(crate) struct PendingOutbound {
     pub(crate) remote_uri: String,
     pub(crate) start_time: u64,
-    pub(crate) local_rtp:  u16,
-    pub(crate) local_srtp: Option<SrtpParams>,
-    pub(crate) relay:      Option<TurnRelay>,
-    /// Locally-gathered ICE candidates, if ICE was attempted for this call --
-    /// connectivity checks against the remote's candidates only happen once
-    /// their answer SDP arrives (see `SipEvent::CallConnected`), since that's
-    /// the first point we know their ICE parameters.
-    pub(crate) ice_gathered: Option<IceGathered>,
 }
 
 /// A confirmed (connected) call — held or focused. Only the focused call has
 /// a live `MediaEngine`; a held call keeps just enough state here to restart
-/// media (with a fresh SDP offer/answer) if the user swaps back to it.
+/// media if the user swaps back to it. `media` is the already-negotiated
+/// state handed over by `SipStack` in `SipEvent::CallConnected` -- codec/
+/// SRTP/ICE/TURN resolution all happened there, not here.
 pub(crate) struct CallSlot {
     pub(crate) account:    usize,
     pub(crate) call_id:    String,
@@ -229,20 +240,7 @@ pub(crate) struct CallSlot {
     pub(crate) direction:  CallDirection,
     pub(crate) start_time: u64,
     pub(crate) is_held:    bool,
-    pub(crate) codec:      AudioCodec,
-    pub(crate) dtmf_type:  Option<u8>,
-    pub(crate) local_srtp: Option<SrtpParams>,
-    pub(crate) relay:      Option<TurnRelay>,
-    /// The winning ICE connection, if ICE was used for this call — `None`
-    /// for a plain direct/TURN-relayed call, same as `relay`. Deliberately
-    /// not carried across into conference mode (`start_conference` keeps
-    /// using `relay` only) or attended-transfer's consultation call, per
-    /// this feature's scoped-to-basic-calls design.
-    pub(crate) ice:        Option<IceConnection>,
-    pub(crate) local_rtp:  u16,
-    /// Last known remote SDP — reused to restart media on resume (the
-    /// negotiated RTP endpoint doesn't change between hold and resume).
-    pub(crate) remote_sdp: String,
+    pub(crate) media:      CallMediaReady,
 }
 
 /// A single registered SIP identity: its stack handle plus the registration
@@ -308,6 +306,7 @@ impl DeelipApp {
             media:            None,
             pending_outbound: None,
             pending_call:     None,
+            pending_accept:   None,
             transfer_target:  String::new(),
             showing_transfer: false,
             attended_target:  String::new(),

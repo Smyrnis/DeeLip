@@ -4,4 +4,5 @@
 
 pub mod dialog;
 mod lifecycle;
+pub mod media_setup;
 mod transfer;

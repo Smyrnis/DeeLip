@@ -9,8 +9,9 @@ pub mod transport;
 mod wire;
 
 pub use call::dialog;
+pub use call::media_setup;
 pub use client::SipStack;
-pub use events::{SipCommand, SipEvent};
+pub use events::{CallMediaReady, SipCommand, SipEvent};
 pub use handle::SipHandle;
 pub use subscription::mwi;
 pub use subscription::mwi::MwiState;

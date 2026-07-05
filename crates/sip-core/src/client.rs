@@ -12,6 +12,7 @@ use deelip_config::{SipAccount, TransportProtocol};
 
 use crate::{
     call::dialog::Dialog,
+    call::media_setup::NetworkConfig,
     events::{SipCommand, SipEvent},
     handle::SipHandle,
     subscription::mwi::MwiSubscription,
@@ -37,6 +38,7 @@ pub(crate) const MWI_ACCEPT: &str = "application/simple-message-summary";
 pub struct SipStack {
     pub(crate) transport:     Arc<SipTransport>,
     pub(crate) account:       SipAccount,
+    pub(crate) network:       NetworkConfig,
     pub(crate) local_ip:      String,
     pub(crate) advertised_ip: String,
     pub(crate) local_port:    u16,
@@ -67,6 +69,7 @@ pub(crate) type CmdRx = mpsc::UnboundedReceiver<SipCommand>;
 impl SipStack {
     pub async fn new(
         account:      SipAccount,
+        network:      NetworkConfig,
         local_port:   u16,
         external_ip:  Option<String>,
         event_tx:     mpsc::UnboundedSender<SipEvent>,
@@ -84,6 +87,7 @@ impl SipStack {
         Ok(Self {
             transport,
             account,
+            network,
             local_ip,
             advertised_ip,
             local_port,
@@ -155,12 +159,13 @@ impl SipStack {
     /// of staying dead until the whole process is restarted).
     pub async fn spawn(
         account:     SipAccount,
+        network:     NetworkConfig,
         local_port:  u16,
         external_ip: Option<String>,
     ) -> anyhow::Result<SipHandle> {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let (cmd_tx,   cmd_rx)   = mpsc::unbounded_channel();
-        let stack = SipStack::new(account.clone(), local_port, external_ip.clone(), event_tx.clone(), cmd_rx)
+        let stack = SipStack::new(account.clone(), network.clone(), local_port, external_ip.clone(), event_tx.clone(), cmd_rx)
             .await
             .map_err(|(e, _)| e)?;
         let advertised_ip = stack.advertised_ip.clone();
@@ -176,7 +181,7 @@ impl SipStack {
                 if stack.is_none() {
                     let cmd_rx = pending_cmd_rx.take()
                         .expect("no live stack means a previous attempt stashed its cmd_rx");
-                    match SipStack::new(account.clone(), local_port, external_ip.clone(), event_tx.clone(), cmd_rx).await {
+                    match SipStack::new(account.clone(), network.clone(), local_port, external_ip.clone(), event_tx.clone(), cmd_rx).await {
                         Ok(s) => {
                             info!("Reconnected");
                             stack = Some(s);
@@ -335,12 +340,12 @@ impl SipStack {
 
     async fn handle_command(&mut self, cmd: SipCommand) {
         match cmd {
-            SipCommand::MakeCall   { to, local_sdp }     => self.initiate_call(&to, &local_sdp).await,
-            SipCommand::AcceptCall { call_id, local_sdp } => self.accept_call(&call_id, &local_sdp).await,
+            SipCommand::MakeCall   { to, attempt_ice }   => self.initiate_call(&to, attempt_ice).await,
+            SipCommand::AcceptCall { call_id }             => self.accept_call(&call_id).await,
             SipCommand::RejectCall { call_id }             => self.reject_call(&call_id).await,
             SipCommand::HangUp     { call_id }             => self.hang_up(&call_id).await,
-            SipCommand::HoldCall   { call_id, local_sdp } => self.send_reinvite(&call_id, &local_sdp, true).await,
-            SipCommand::ResumeCall { call_id, local_sdp } => self.send_reinvite(&call_id, &local_sdp, false).await,
+            SipCommand::HoldCall   { call_id }             => self.send_reinvite(&call_id, true).await,
+            SipCommand::ResumeCall { call_id }             => self.send_reinvite(&call_id, false).await,
             SipCommand::BlindTransfer { call_id, target }  => self.blind_transfer(&call_id, &target).await,
             SipCommand::RedirectCall  { call_id, target }  => self.redirect_call(&call_id, &target).await,
             SipCommand::SubscribePresence   { target_uri } => self.subscribe_presence(&target_uri).await,

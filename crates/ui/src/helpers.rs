@@ -1,8 +1,8 @@
 use deelip_config::{CallStatus, SipAccount};
-use deelip_sip::{sdp, AudioCodec};
+use deelip_sip::AudioCodec;
 use egui::{RichText, Ui};
 
-use crate::theme::Palette;
+use crate::theme::{self, Palette};
 
 /// Left-hand side of the bottom status bar -- just the connection dot and
 /// status text. Caller wraps this in its own `ui.horizontal()` alongside a
@@ -62,6 +62,85 @@ pub(crate) fn list_row(ui: &mut Ui, palette: &Palette, id_source: impl std::hash
 pub(crate) fn info_hint(ui: &mut Ui, palette: &Palette, text: &str) {
     ui.label(RichText::new(egui_phosphor::regular::INFO).color(palette.muted))
         .on_hover_text(text);
+}
+
+/// One Settings section: a bold title (with an optional `info_hint` beside
+/// it) followed by a `full_width_card`. Every section in `views/settings.rs`
+/// repeated this same header+card scaffolding by hand; factored out so the
+/// header treatment can't drift between sections (some previously had a
+/// hint, some didn't, with no reason for the difference).
+pub(crate) fn settings_section<R>(
+    ui: &mut Ui,
+    palette: &Palette,
+    title: &str,
+    hint: Option<&str>,
+    add_contents: impl FnOnce(&mut Ui) -> R,
+) -> R {
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(title).strong());
+        if let Some(hint) = hint {
+            info_hint(ui, palette, hint);
+        }
+    });
+    theme::full_width_card(ui, *palette, add_contents)
+}
+
+/// One row of a device-picker `ComboBox` bound to `Option<String>` (`None`
+/// = "Default") -- the Settings Audio section had this same shape three
+/// times over (input/output/ringtone device), differing only in label,
+/// bound field, and candidate list.
+pub(crate) fn device_picker(
+    ui: &mut Ui,
+    id_source: &str,
+    label: &str,
+    current: &mut Option<String>,
+    names: &[String],
+) -> bool {
+    let mut changed = false;
+    ui.label(label);
+    let selected = current.clone().unwrap_or_else(|| "Default".into());
+    egui::ComboBox::from_id_source(id_source)
+        .selected_text(selected)
+        .show_ui(ui, |ui| {
+            if ui.selectable_label(current.is_none(), "Default").clicked() {
+                *current = None;
+                changed = true;
+            }
+            for name in names {
+                let is_sel = current.as_deref() == Some(name.as_str());
+                if ui.selectable_label(is_sel, name).clicked() {
+                    *current = Some(name.clone());
+                    changed = true;
+                }
+            }
+        });
+    changed
+}
+
+/// Muted, small "nothing here" label -- the shared style for every list's
+/// empty state (History/Messages/Contacts/Settings' blocklist), so a list
+/// that gains this treatment later can't render as a differently-styled
+/// plain label by accident.
+pub(crate) fn empty_state(ui: &mut Ui, palette: &Palette, text: &str) {
+    ui.label(RichText::new(text).color(palette.muted).small());
+}
+
+/// Prompt for a save location (via `rfd`) and write `content` to it,
+/// logging (not surfacing to the UI -- matches this codebase's existing
+/// export-failure handling) on error. Shared by History's CSV export and
+/// Contacts' CSV/vCard export, which each hand-rolled the same
+/// dialog+write+log-on-error sequence.
+pub(crate) fn save_text_file(default_name: &str, filter_name: &str, filter_ext: &str, content: String) {
+    let Some(path) = rfd::FileDialog::new()
+        .set_file_name(default_name)
+        .add_filter(filter_name, &[filter_ext])
+        .save_file()
+    else {
+        return;
+    };
+    if let Err(e) = std::fs::write(&path, content) {
+        tracing::error!("Failed to write {}: {e}", path.display());
+    }
 }
 
 /// A registration-status dot (`palette.accent` green when registered,
@@ -171,21 +250,6 @@ pub(crate) fn extract_user_part(uri: &str) -> String {
     before_at.split(';').next().unwrap_or(before_at).to_string()
 }
 
-/// Convert a `SipAccount::codec_order` entry to its `AudioCodec`. Unknown
-/// entries (e.g. a stale name from a future version) are simply skipped by
-/// callers via `filter_map`, not treated as an error.
-fn codec_from_str(s: &str) -> Option<AudioCodec> {
-    match s {
-        "opus" => Some(AudioCodec::Opus),
-        "g722" => Some(AudioCodec::G722),
-        "pcmu" => Some(AudioCodec::Pcmu),
-        "pcma" => Some(AudioCodec::Pcma),
-        "gsm"  => Some(AudioCodec::Gsm),
-        "ilbc" => Some(AudioCodec::Ilbc),
-        _ => None,
-    }
-}
-
 /// Display label for a `SipAccount::codec_order` entry in Settings.
 pub(crate) fn codec_label(s: &str) -> &'static str {
     match s {
@@ -199,14 +263,18 @@ pub(crate) fn codec_label(s: &str) -> &'static str {
     }
 }
 
-/// This account's enabled codecs in preference order, ready to hand to
-/// `build_offer`/`parse_sdp`. Falls back to every known codec if the
-/// configured list is empty or entirely unrecognized — the Settings UI
-/// itself refuses to let the last enabled codec be disabled, so this should
-/// be unreachable in practice.
-pub(crate) fn account_codecs(acc: &SipAccount) -> Vec<AudioCodec> {
-    let codecs: Vec<AudioCodec> = acc.codec_order.iter().filter_map(|s| codec_from_str(s)).collect();
-    if codecs.is_empty() { sdp::ALL_CODECS.to_vec() } else { codecs }
+/// Same table as `codec_label`, keyed by `AudioCodec` directly -- for
+/// displaying an already-negotiated codec (e.g. call statistics) rather
+/// than a `SipAccount::codec_order` entry.
+pub(crate) fn audio_codec_label(codec: AudioCodec) -> &'static str {
+    codec_label(match codec {
+        AudioCodec::Opus => "opus",
+        AudioCodec::G722 => "g722",
+        AudioCodec::Pcmu => "pcmu",
+        AudioCodec::Pcma => "pcma",
+        AudioCodec::Gsm  => "gsm",
+        AudioCodec::Ilbc => "ilbc",
+    })
 }
 
 /// Normalize a dial-box entry into a full SIP URI. Bare numbers/usernames

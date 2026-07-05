@@ -2,14 +2,14 @@ use deelip_config::{Message, MessageDirection};
 use egui::{RichText, Ui};
 
 use crate::app::DeelipApp;
-use crate::helpers::{list_row, normalize_target, short_uri, unix_now};
+use crate::helpers::{empty_state, list_row, normalize_target, short_uri, unix_now};
 
 impl DeelipApp {
     pub(crate) fn show_messages(&mut self, ui: &mut Ui) {
         ui.add_space(8.0);
 
         if self.messages.messages.is_empty() {
-            ui.label(RichText::new("No messages yet.").color(self.palette.muted));
+            empty_state(ui, &self.palette, "No messages yet.");
         } else {
             // Same `show_rows` virtualization + single-widget-per-row divider
             // approach as History (`views/history.rs`) -- same shape of

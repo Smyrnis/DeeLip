@@ -2,7 +2,7 @@ use deelip_config::{DtmfMode, SipAccount, TransportProtocol};
 use egui::{RichText, Ui};
 
 use crate::app::DeelipApp;
-use crate::helpers::{account_label, codec_label, info_hint};
+use crate::helpers::{account_label, account_status_label, codec_label, device_picker, empty_state, info_hint, settings_section};
 use crate::theme;
 
 impl DeelipApp {
@@ -17,12 +17,7 @@ impl DeelipApp {
         ui.add_space(8.0);
         egui::ScrollArea::vertical().show(ui, |ui| {
             // ── Appearance (applies immediately) ─────────────────────────────
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("Appearance").strong());
-                info_hint(ui, &palette, "Applies immediately — no restart needed.");
-            });
-            theme::card_frame(&palette).show(ui, |ui| {
-                ui.set_width(ui.available_width());
+            settings_section(ui, &palette, "Appearance", Some("Applies immediately — no restart needed."), |ui| {
                 ui.horizontal(|ui| {
                     ui.label("Theme:");
                     if ui.selectable_label(!self.config.dark_mode, format!("{}  Light", egui_phosphor::regular::SUN)).clicked() {
@@ -38,12 +33,7 @@ impl DeelipApp {
             ui.add_space(14.0);
 
             // ── Notifications & Ringtone (applies immediately) ──────────────
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("Notifications & Ringtone").strong());
-                info_hint(ui, &palette, "Applies immediately — no restart needed.");
-            });
-            theme::card_frame(&palette).show(ui, |ui| {
-                ui.set_width(ui.available_width());
+            settings_section(ui, &palette, "Notifications & Ringtone", Some("Applies immediately — no restart needed."), |ui| {
                 if ui.checkbox(&mut self.config.notifications_enabled, "Desktop notification on incoming calls").changed() {
                     self.save_config_quietly();
                 }
@@ -54,12 +44,7 @@ impl DeelipApp {
             ui.add_space(14.0);
 
             // ── Blocklist ────────────────────────────────────────────────────
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("Blocklist").strong());
-                info_hint(ui, &palette, "Applies immediately — no restart needed.");
-            });
-            theme::card_frame(&palette).show(ui, |ui| {
-                ui.set_width(ui.available_width());
+            settings_section(ui, &palette, "Blocklist", Some("Applies immediately — no restart needed."), |ui| {
                 ui.horizontal(|ui| {
                     ui.add(egui::TextEdit::singleline(&mut self.blocklist_input)
                         .hint_text("number or sip:user@host")
@@ -74,7 +59,7 @@ impl DeelipApp {
                     }
                 });
                 if self.config.blocklist.is_empty() {
-                    ui.label(RichText::new("No blocked numbers.").color(palette.muted).small());
+                    empty_state(ui, &palette, "No blocked numbers.");
                 } else {
                     let mut remove_idx = None;
                     for (i, entry) in self.config.blocklist.iter().enumerate() {
@@ -96,9 +81,7 @@ impl DeelipApp {
             ui.add_space(14.0);
 
             // ── Startup ───────────────────────────────────────────────────
-            ui.label(RichText::new("Startup").strong());
-            theme::card_frame(&palette).show(ui, |ui| {
-                ui.set_width(ui.available_width());
+            settings_section(ui, &palette, "Startup", None, |ui| {
                 ui.horizontal(|ui| {
                     edited |= ui.checkbox(&mut self.config.start_minimized, "Start minimized (to tray)").changed();
                     info_hint(ui, &palette, "Restart to apply.");
@@ -117,12 +100,7 @@ impl DeelipApp {
             ui.add_space(14.0);
 
             // ── Updates (applies immediately) ────────────────────────────────
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("Updates").strong());
-                info_hint(ui, &palette, "Applies immediately — no restart needed.");
-            });
-            theme::card_frame(&palette).show(ui, |ui| {
-                ui.set_width(ui.available_width());
+            settings_section(ui, &palette, "Updates", Some("Applies immediately — no restart needed."), |ui| {
                 ui.label(RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION"))).color(palette.muted));
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
@@ -171,22 +149,29 @@ impl DeelipApp {
                 });
             });
             ui.add_space(4.0);
+            // A draft account only has a live registration-status dot once
+            // it matches a currently-running identity by username -- a
+            // freshly-added or just-edited entry has no such match yet
+            // (accurately reads as "not registered" until Save + restart).
+            let is_registered = |acc: &SipAccount| self.accounts.iter().any(|a| a.account.username == acc.username && a.reg_ok);
+            let selected_text = account_status_label(
+                ui, &palette, is_registered(&self.config.accounts[self.edit_account_idx]),
+                &format!("{}. {}", self.edit_account_idx + 1, account_label(&self.config.accounts[self.edit_account_idx])),
+            );
             egui::ComboBox::from_id_source("settings_account_picker")
-                .selected_text(format!(
-                    "{}. {}",
-                    self.edit_account_idx + 1,
-                    account_label(&self.config.accounts[self.edit_account_idx]),
-                ))
+                .selected_text(selected_text)
                 .show_ui(ui, |ui| {
                     for i in 0..self.config.accounts.len() {
-                        let label = format!("{}. {}", i + 1, account_label(&self.config.accounts[i]));
-                        ui.selectable_value(&mut self.edit_account_idx, i, label);
+                        let label_text = format!("{}. {}", i + 1, account_label(&self.config.accounts[i]));
+                        let label = account_status_label(ui, &palette, is_registered(&self.config.accounts[i]), &label_text);
+                        if ui.add(egui::SelectableLabel::new(self.edit_account_idx == i, label)).clicked() {
+                            self.edit_account_idx = i;
+                        }
                     }
                 });
             ui.add_space(6.0);
 
-            theme::card_frame(&palette).show(ui, |ui| {
-                ui.set_width(ui.available_width());
+            theme::full_width_card(ui, palette, |ui| {
                 let account = &mut self.config.accounts[self.edit_account_idx];
 
                 edited |= ui.checkbox(&mut account.enabled, "Enabled (register this account on next restart)").changed();
@@ -218,13 +203,7 @@ impl DeelipApp {
                         ui.end_row();
 
                         ui.label("Display name:");
-                        let mut display_name = account.display_name.clone().unwrap_or_default();
-                        if ui.add(egui::TextEdit::singleline(&mut display_name)
-                            .desired_width(f32::INFINITY)).changed()
-                        {
-                            account.display_name = if display_name.is_empty() { None } else { Some(display_name) };
-                            edited = true;
-                        }
+                        edited |= optional_text_field(ui, &mut account.display_name, "");
                         ui.end_row();
 
                         ui.label("Transport:");
@@ -353,8 +332,7 @@ impl DeelipApp {
 
             // ── Audio ─────────────────────────────────────────────────────
             ui.label(RichText::new("Audio").strong());
-            theme::card_frame(&palette).show(ui, |ui| {
-                ui.set_width(ui.available_width());
+            theme::full_width_card(ui, palette, |ui| {
                 let (input_names, output_names) = self.audio_device_cache
                     .get_or_insert_with(|| (list_device_names(true), list_device_names(false)))
                     .clone();
@@ -367,64 +345,11 @@ impl DeelipApp {
                     .num_columns(2)
                     .spacing([8.0, 4.0])
                     .show(ui, |ui| {
-                        ui.label("Input device:");
-                        let selected = self.config.audio.input_device.clone()
-                            .unwrap_or_else(|| "Default".into());
-                        egui::ComboBox::from_id_source("settings_input_device")
-                            .selected_text(selected)
-                            .show_ui(ui, |ui| {
-                                if ui.selectable_label(self.config.audio.input_device.is_none(), "Default").clicked() {
-                                    self.config.audio.input_device = None;
-                                    edited = true;
-                                }
-                                for name in &input_names {
-                                    let is_sel = self.config.audio.input_device.as_deref() == Some(name.as_str());
-                                    if ui.selectable_label(is_sel, name).clicked() {
-                                        self.config.audio.input_device = Some(name.clone());
-                                        edited = true;
-                                    }
-                                }
-                            });
+                        edited |= device_picker(ui, "settings_input_device", "Input device:", &mut self.config.audio.input_device, &input_names);
                         ui.end_row();
-
-                        ui.label("Output device:");
-                        let selected = self.config.audio.output_device.clone()
-                            .unwrap_or_else(|| "Default".into());
-                        egui::ComboBox::from_id_source("settings_output_device")
-                            .selected_text(selected)
-                            .show_ui(ui, |ui| {
-                                if ui.selectable_label(self.config.audio.output_device.is_none(), "Default").clicked() {
-                                    self.config.audio.output_device = None;
-                                    edited = true;
-                                }
-                                for name in &output_names {
-                                    let is_sel = self.config.audio.output_device.as_deref() == Some(name.as_str());
-                                    if ui.selectable_label(is_sel, name).clicked() {
-                                        self.config.audio.output_device = Some(name.clone());
-                                        edited = true;
-                                    }
-                                }
-                            });
+                        edited |= device_picker(ui, "settings_output_device", "Output device:", &mut self.config.audio.output_device, &output_names);
                         ui.end_row();
-
-                        ui.label("Ringing device:");
-                        let selected = self.config.audio.ringtone_device.clone()
-                            .unwrap_or_else(|| "Default".into());
-                        egui::ComboBox::from_id_source("settings_ringtone_device")
-                            .selected_text(selected)
-                            .show_ui(ui, |ui| {
-                                if ui.selectable_label(self.config.audio.ringtone_device.is_none(), "Default").clicked() {
-                                    self.config.audio.ringtone_device = None;
-                                    edited = true;
-                                }
-                                for name in &output_names {
-                                    let is_sel = self.config.audio.ringtone_device.as_deref() == Some(name.as_str());
-                                    if ui.selectable_label(is_sel, name).clicked() {
-                                        self.config.audio.ringtone_device = Some(name.clone());
-                                        edited = true;
-                                    }
-                                }
-                            });
+                        edited |= device_picker(ui, "settings_ringtone_device", "Ringing device:", &mut self.config.audio.ringtone_device, &output_names);
                         ui.end_row();
                     });
                 ui.horizontal(|ui| {
@@ -466,8 +391,7 @@ impl DeelipApp {
 
             // ── Network ───────────────────────────────────────────────────
             ui.label(RichText::new("Network").strong());
-            theme::card_frame(&palette).show(ui, |ui| {
-                ui.set_width(ui.available_width());
+            theme::full_width_card(ui, palette, |ui| {
                 egui::Grid::new("settings_network_grid")
                     .num_columns(2)
                     .spacing([8.0, 4.0])
@@ -504,8 +428,7 @@ impl DeelipApp {
 
             ui.add_space(14.0);
             ui.label(RichText::new("Global Hotkeys").strong());
-            theme::card_frame(&palette).show(ui, |ui| {
-                ui.set_width(ui.available_width());
+            theme::full_width_card(ui, palette, |ui| {
                 ui.horizontal(|ui| {
                     edited |= ui.checkbox(&mut self.config.global_hotkeys_enabled,
                         "Enable system-wide Answer/Hangup/Mute hotkeys (Linux: X11 only)"

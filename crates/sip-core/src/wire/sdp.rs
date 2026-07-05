@@ -144,6 +144,7 @@ impl SrtpParams {
 /// Both sides' SRTP keys for one call. Per RFC 4568, each side's a=crypto line
 /// declares the key IT uses to encrypt what it sends: encrypt outgoing traffic
 /// with `local`'s own key, decrypt incoming traffic with `remote`'s key.
+#[derive(Debug, Clone)]
 pub struct SrtpSession {
     pub local:  SrtpParams,
     pub remote: SrtpParams,

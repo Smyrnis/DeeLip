@@ -1,5 +1,5 @@
 use deelip_config::{CallDirection, CallRecord, CallStatus, Contact, Message, MessageDirection};
-use deelip_sip::{AudioCodec, PresenceState, SipEvent};
+use deelip_sip::{PresenceState, SipEvent};
 
 use crate::app::{CallSlot, DeelipApp, PendingCall};
 use crate::helpers::{extract_user_part, normalize_target, short_uri, unix_now};
@@ -40,25 +40,48 @@ impl DeelipApp {
             SipEvent::CallRinging { .. } => {
                 self.status_line = "Ringing…".into();
             }
-            SipEvent::CallConnected { call_id, remote_sdp } => {
-                let Some(out) = self.pending_outbound.take() else {
-                    tracing::warn!(call_id, "CallConnected with no pending outbound call — ignoring");
-                    return;
-                };
-                let ice = self.finish_ice_connect(out.ice_gathered, true, &remote_sdp);
-                let slot = CallSlot {
-                    account, call_id, remote_uri: out.remote_uri.clone(),
-                    direction: CallDirection::Outbound, start_time: out.start_time, is_held: false,
-                    codec: AudioCodec::Pcmu, dtmf_type: None,
-                    local_srtp: out.local_srtp, relay: out.relay, ice, local_rtp: out.local_rtp,
-                    remote_sdp: remote_sdp.clone(),
-                };
-                self.calls.push(slot);
-                let idx = self.calls.len() - 1;
-                self.status_line = format!("In call — {}", short_uri(&out.remote_uri));
-                self.start_media(idx, &remote_sdp);
+            SipEvent::CallConnected { call_id, media } => {
+                // `pending_accept` (an inbound call we told `SipStack` to
+                // accept) is checked first since it carries `call_id` to
+                // match on; `pending_outbound` doesn't (there's at most one
+                // in flight, and its `call_id` isn't known until the far end
+                // answers) so it's the fallback once accept is ruled out.
+                if self.pending_accept.as_ref().is_some_and(|p| p.call_id == call_id) {
+                    let pending = self.pending_accept.take().unwrap();
+                    // Free the audio device for the new call if another one
+                    // is focused -- deferred until here (accept actually
+                    // succeeded) rather than done eagerly in `do_accept`, so
+                    // a decline never needlessly disturbs an already-active
+                    // call's media.
+                    if let Some(cur) = self.focused_call {
+                        self.send_hold(cur);
+                        if let Some(engine) = self.media.take() { self.rt.block_on(engine.stop()); }
+                        self.focused_call = None;
+                    }
+                    let slot = CallSlot {
+                        account, call_id, remote_uri: pending.remote_uri.clone(),
+                        direction: CallDirection::Inbound, start_time: pending.start_time,
+                        is_held: false, media,
+                    };
+                    self.calls.push(slot);
+                    let idx = self.calls.len() - 1;
+                    self.status_line = format!("In call — {}", short_uri(&pending.remote_uri));
+                    self.start_media(idx);
+                } else if let Some(out) = self.pending_outbound.take() {
+                    let slot = CallSlot {
+                        account, call_id, remote_uri: out.remote_uri.clone(),
+                        direction: CallDirection::Outbound, start_time: out.start_time,
+                        is_held: false, media,
+                    };
+                    self.calls.push(slot);
+                    let idx = self.calls.len() - 1;
+                    self.status_line = format!("In call — {}", short_uri(&out.remote_uri));
+                    self.start_media(idx);
+                } else {
+                    tracing::warn!(call_id, "CallConnected with no pending call — ignoring");
+                }
             }
-            SipEvent::IncomingCall { call_id, from, remote_sdp } => {
+            SipEvent::IncomingCall { call_id, from } => {
                 let caller = extract_user_part(&from);
                 if self.config.blocklist.iter().any(|entry| extract_user_part(entry) == caller) {
                     self.accounts[account].handle.reject_call(&call_id);
@@ -91,7 +114,19 @@ impl DeelipApp {
                         return;
                     }
                 }
-                if self.calls.len() >= 2 || self.pending_call.is_some() {
+                // `pending_accept` counts toward capacity too -- it's a call
+                // we've already told `SipStack` to accept and is about to
+                // occupy a `calls` slot once `CallConnected` arrives. Without
+                // this, a 2nd incoming call could slip in and itself get
+                // accepted while the first is still mid-accept, and since
+                // `pending_accept` is a single slot (not a list), the second
+                // accept would silently overwrite the first's tracking --
+                // orphaning it as a connected-but-invisible call the moment
+                // its own `CallConnected` finally arrives (see
+                // `on_call_terminated`'s and the `CallConnected` handler's
+                // `pending_accept` matching just above).
+                let occupied = self.calls.len() + usize::from(self.pending_accept.is_some());
+                if occupied >= 2 || self.pending_call.is_some() {
                     // Already at capacity (2 concurrent + at most 1 ringing) — decline immediately.
                     self.accounts[account].handle.reject_call(&call_id);
                     return;
@@ -111,7 +146,7 @@ impl DeelipApp {
                 let auto_answer_at = acc.auto_answer_enabled
                     .then(|| unix_now() + acc.auto_answer_secs as u64);
                 self.pending_call = Some(PendingCall {
-                    account, call_id, from, remote_sdp, start_time: unix_now(), forward, auto_answer_at,
+                    account, call_id, from, start_time: unix_now(), forward, auto_answer_at,
                 });
             }
             SipEvent::CallEnded { call_id } => {
@@ -257,14 +292,30 @@ impl DeelipApp {
     }
 
     /// A call in `calls` ended or an outstanding attempt failed — figure out
-    /// which of `pending_call` / `calls` / `pending_outbound` `call_id`
-    /// refers to, tear it down, and record it in history.
+    /// which of `pending_call` / `pending_accept` / `calls` / `pending_outbound`
+    /// `call_id` refers to, tear it down, and record it in history.
     pub(crate) fn on_call_terminated(&mut self, call_id: &str, failure: Option<(u16, String)>) {
-        if self.pending_call.as_ref().is_some_and(|p| p.call_id == call_id) {
-            let pending = self.pending_call.take().unwrap();
-            self.record_history(pending.from, CallDirection::Inbound, pending.start_time, CallStatus::Missed);
-            self.refresh_call_status();
-            return;
+        if let Some(pending) = self.pending_call.take() {
+            if pending.call_id == call_id {
+                self.record_history(pending.from, CallDirection::Inbound, pending.start_time, CallStatus::Missed);
+                self.refresh_call_status();
+                return;
+            }
+            self.pending_call = Some(pending);
+        }
+        // We told `SipStack` to accept this call but it declined on our
+        // behalf (no compatible codec, RTP port allocation failure, etc. --
+        // see `accept_call`'s doc comment) before `CallConnected` ever arrived.
+        if let Some(pending) = self.pending_accept.take() {
+            if pending.call_id == call_id {
+                if let Some((code, reason)) = &failure {
+                    self.status_line = format!("Call failed ({code}): {reason}");
+                }
+                self.record_history(pending.remote_uri, CallDirection::Inbound, pending.start_time, CallStatus::Rejected);
+                self.refresh_call_status();
+                return;
+            }
+            self.pending_accept = Some(pending);
         }
         if let Some(idx) = self.calls.iter().position(|c| c.call_id == call_id) {
             let status = if let Some((code, reason)) = &failure {
@@ -323,11 +374,8 @@ impl DeelipApp {
         // Either call ending invalidates a pending attended transfer --
         // both legs must still exist for Complete Transfer to make sense.
         self.attended_transfer_original = None;
-        if was_conference {
-            if let Some(remaining) = self.calls.first() {
-                let remote_sdp = remaining.remote_sdp.clone();
-                self.start_media(0, &remote_sdp);
-            }
+        if was_conference && !self.calls.is_empty() {
+            self.start_media(0);
         }
         slot
     }

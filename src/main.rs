@@ -62,6 +62,18 @@ fn main() -> anyhow::Result<()> {
     };
 
     // ── SIP stacks ────────────────────────────────────────────────────────────
+    // Network settings (STUN/TURN/ICE) are process-wide, not per-account --
+    // every stack shares this one `NetworkConfig` (SDP construction and
+    // STUN/TURN/ICE resolution now happen inside `SipStack` itself, see
+    // `deelip_sip::media_setup`).
+    let network = deelip_sip::media_setup::NetworkConfig {
+        stun_server:   config.stun_server.clone(),
+        turn_server:   config.turn_server.clone(),
+        turn_username: config.turn_username.clone().unwrap_or_default(),
+        turn_password: config.turn_password.clone().unwrap_or_default(),
+        ice_enabled:   config.ice_enabled,
+    };
+
     // Each enabled account gets its own independent stack (own transport,
     // own registration loop) on a distinct local port derived from the
     // configured base port — one process-wide UDP/TCP bind can't serve two
@@ -72,7 +84,7 @@ fn main() -> anyhow::Result<()> {
     for (i, account) in enabled_accounts.into_iter().enumerate() {
         let local_port = config.local_sip_port + i as u16;
         let username   = account.username.clone();
-        match rt.block_on(SipStack::spawn(account.clone(), local_port, external_ip.clone())) {
+        match rt.block_on(SipStack::spawn(account.clone(), network.clone(), local_port, external_ip.clone())) {
             Ok(handle) => account_handles.push((account, handle)),
             Err(e) => warn!("Account {username} failed to start ({e}), skipping"),
         }
