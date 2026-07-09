@@ -1,5 +1,6 @@
 use deelip_config::{
-    DtmfMode, MediaEncryption, RecordingFormat, SipAccount, TransportProtocol, UpdateCheckFrequency,
+    DefaultListAction, DialPlanRule, DtmfMode, MediaEncryption, RecordingFormat, SipAccount,
+    TransportProtocol, UpdateCheckFrequency,
 };
 use egui::{RichText, Ui};
 
@@ -8,10 +9,106 @@ use crate::helpers::{
     account_label, account_status_label, codec_label, device_picker, empty_state, info_hint,
     settings_section,
 };
-use crate::theme;
+use crate::theme::{self, Palette};
 
 impl DeelipApp {
-    pub(crate) fn show_settings(&mut self, ui: &mut Ui) {
+    /// Settings as a separate, genuinely movable native OS window rather
+    /// than a tab (MicroSIP-style "phone window + separate settings window"
+    /// split -- see `app.rs`'s `settings_open` doc comment). No-op when
+    /// closed.
+    ///
+    /// This used to be an `egui::Window` (a floating panel drawn *inside*
+    /// the main app's own OS window canvas) plus a hand-rolled dimming
+    /// backdrop faking modality -- it looked like a separate window but was
+    /// mechanically trapped inside the main window's bounds, unable to be
+    /// dragged out to a different part of the screen (a real user-reported
+    /// bug: "the settings window is inside the initial deelip window, and i
+    /// can not move it"). `Context::show_viewport_immediate` creates an
+    /// actual second native window (its own OS-level title bar, move,
+    /// resize, and close -- not an egui-drawn imitation of one), which is
+    /// what a "separate window" needs to mean here. Called every frame
+    /// while `settings_open` is true, same lifecycle as the old
+    /// `egui::Window` had (egui's immediate-viewport model, not a
+    /// create-once-and-forget window).
+    pub(crate) fn show_settings_modal(&mut self, ctx: &egui::Context) {
+        if !self.settings_open {
+            return;
+        }
+
+        let viewport_id = egui::ViewportId::from_hash_of("deelip_settings_window");
+        let mut close_requested = false;
+        ctx.show_viewport_immediate(
+            viewport_id,
+            egui::ViewportBuilder::default()
+                .with_title("DeeLip Settings")
+                .with_inner_size([460.0, 640.0])
+                .with_min_inner_size([360.0, 300.0])
+                .with_icon(settings_window_icon()),
+            |child_ctx, class| {
+                // Some backends (or a compositor without multi-window
+                // support) can't actually open a second native window --
+                // `embed_viewports()` reports that via `ViewportClass::
+                // Embedded`, in which case this callback runs against the
+                // *main* window's context instead of a real child one.
+                // Falling back to the old in-canvas `egui::Window` there
+                // keeps Settings reachable rather than silently invisible.
+                if class == egui::ViewportClass::Embedded {
+                    let mut open = true;
+                    egui::Window::new("Settings")
+                        .id(egui::Id::new("settings_window_fallback"))
+                        .open(&mut open)
+                        .collapsible(false)
+                        .resizable(true)
+                        .default_size([460.0, 560.0])
+                        .min_width(360.0)
+                        .show(child_ctx, |ui| self.show_settings(ui));
+                    if !open {
+                        close_requested = true;
+                    }
+                    return;
+                }
+
+                egui::CentralPanel::default().show(child_ctx, |ui| {
+                    // An in-app Close button, not just reliance on the OS
+                    // window chrome's own close button -- some window
+                    // managers (or none at all, e.g. a bare X server) don't
+                    // draw title-bar decorations at all, which would
+                    // otherwise leave no way to close this window short of
+                    // quitting the whole app. This is also the *reliable*
+                    // close path: it goes through the same graceful
+                    // "stop calling show_viewport_immediate next frame"
+                    // shutdown as everything else in this function, rather
+                    // than depending on the OS/window-manager's own close
+                    // protocol, which is a real title-bar interaction this
+                    // codebase can't fully control or verify across every
+                    // window manager.
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("Settings").font(theme::font_heading(16.0)));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("Close").clicked() {
+                                close_requested = true;
+                            }
+                        });
+                    });
+                    ui.separator();
+                    self.show_settings(ui);
+                });
+                if child_ctx.input(|i| i.viewport().close_requested()) {
+                    close_requested = true;
+                }
+            },
+        );
+        if close_requested {
+            self.settings_open = false;
+        }
+    }
+
+    /// Renders every Settings section in order inside the scroll area, then
+    /// the trailing Save button. Each section is its own method (see below)
+    /// -- this is just the scaffolding: `edited` accumulates whether any
+    /// restart-required field changed (the "applies immediately" sections
+    /// save themselves as they go and don't feed into it).
+    fn show_settings(&mut self, ui: &mut Ui) {
         if self.config.accounts.is_empty() {
             self.config
                 .accounts
@@ -23,661 +120,45 @@ impl DeelipApp {
 
         ui.add_space(8.0);
         egui::ScrollArea::vertical().show(ui, |ui| {
-            // ── Appearance (applies immediately) ─────────────────────────────
-            settings_section(ui, &palette, "Appearance", Some("Applies immediately — no restart needed."), |ui| {
-                ui.horizontal(|ui| {
-                    ui.label("Theme:");
-                    if ui.selectable_label(!self.config.dark_mode, format!("{}  Light", egui_phosphor::regular::SUN)).clicked() {
-                        self.config.dark_mode = false;
-                        self.save_config_quietly();
-                    }
-                    if ui.selectable_label(self.config.dark_mode, format!("{}  Dark", egui_phosphor::regular::MOON)).clicked() {
-                        self.config.dark_mode = true;
-                        self.save_config_quietly();
-                    }
-                });
-            });
+            self.show_appearance_section(ui, &palette);
             ui.add_space(14.0);
 
-            // ── Notifications & Ringtone (applies immediately) ──────────────
-            settings_section(ui, &palette, "Notifications & Ringtone", Some("Applies immediately — no restart needed."), |ui| {
-                if ui.checkbox(&mut self.config.notifications_enabled, "Desktop notification on incoming calls").changed() {
-                    self.save_config_quietly();
-                }
-                if ui.checkbox(&mut self.config.ringtone_enabled, "Ringtone (incoming) / ringback (outgoing)").changed() {
-                    self.save_config_quietly();
-                }
-            });
+            self.show_notifications_section(ui, &palette);
             ui.add_space(14.0);
 
-            // ── Blocklist ────────────────────────────────────────────────────
-            settings_section(ui, &palette, "Blocklist", Some("Applies immediately — no restart needed."), |ui| {
-                ui.horizontal(|ui| {
-                    ui.add(egui::TextEdit::singleline(&mut self.blocklist_input)
-                        .hint_text("number or sip:user@host")
-                        .desired_width(200.0));
-                    if ui.button("Block").clicked() {
-                        let entry = self.blocklist_input.trim().to_string();
-                        if !entry.is_empty() && !self.config.blocklist.iter().any(|e| e.eq_ignore_ascii_case(&entry)) {
-                            self.config.blocklist.push(entry);
-                            self.save_config_quietly();
-                        }
-                        self.blocklist_input.clear();
-                    }
-                });
-                if self.config.blocklist.is_empty() {
-                    empty_state(ui, &palette, "No blocked numbers.");
-                } else {
-                    let mut remove_idx = None;
-                    for (i, entry) in self.config.blocklist.iter().enumerate() {
-                        ui.horizontal(|ui| {
-                            ui.label(entry);
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if ui.small_button("Remove").clicked() {
-                                    remove_idx = Some(i);
-                                }
-                            });
-                        });
-                    }
-                    if let Some(i) = remove_idx {
-                        self.config.blocklist.remove(i);
-                        self.save_config_quietly();
-                    }
-                }
-            });
+            self.show_call_handling_section(ui, &palette);
             ui.add_space(14.0);
 
-            // ── Startup ───────────────────────────────────────────────────
-            settings_section(ui, &palette, "Startup", None, |ui| {
-                ui.horizontal(|ui| {
-                    edited |= ui.checkbox(&mut self.config.start_minimized, "Start minimized (to tray)").changed();
-                    info_hint(ui, &palette, "Restart to apply.");
-                });
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    edited |= ui.checkbox(&mut self.config.log_to_file, "Enable log file").changed();
-                    info_hint(ui, &palette, "Also writes logs to ~/.config/deelip/deelip.log, \
-                        in addition to the console. Restart to apply.");
-                });
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    if ui.checkbox(&mut self.autostart_enabled, "Start DeeLip on login").changed() {
-                        if let Err(e) = deelip_config::set_autostart(self.autostart_enabled) {
-                            tracing::error!("Failed to update autostart: {e}");
-                            self.autostart_enabled = deelip_config::is_autostart_enabled();
-                        }
-                    }
-                    info_hint(ui, &palette, "Applies immediately — no restart needed.");
-                });
-            });
+            self.show_blocklist_section(ui, &palette);
             ui.add_space(14.0);
 
-            // ── Updates (applies immediately) ────────────────────────────────
-            settings_section(ui, &palette, "Updates", Some("Applies immediately — no restart needed."), |ui| {
-                ui.label(RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION"))).color(palette.muted));
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    ui.label("Check for updates:");
-                    egui::ComboBox::from_id_source("settings_update_check_frequency")
-                        .selected_text(match self.config.update_check_frequency {
-                            UpdateCheckFrequency::Always => "Every launch",
-                            UpdateCheckFrequency::Daily => "Daily",
-                            UpdateCheckFrequency::Weekly => "Weekly",
-                            UpdateCheckFrequency::Never => "Never",
-                        })
-                        .show_ui(ui, |ui| {
-                            for (val, label) in [
-                                (UpdateCheckFrequency::Always, "Every launch"),
-                                (UpdateCheckFrequency::Daily, "Daily"),
-                                (UpdateCheckFrequency::Weekly, "Weekly"),
-                                (UpdateCheckFrequency::Never, "Never"),
-                            ] {
-                                if ui.selectable_value(&mut self.config.update_check_frequency, val, label).changed() {
-                                    self.save_config_quietly();
-                                }
-                            }
-                        });
-                });
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    if ui.checkbox(&mut self.config.auto_update_enabled, "Automatically download and install updates").changed() {
-                        self.save_config_quietly();
-                    }
-                    info_hint(ui, &palette, "Only works for a portable (tar.gz/install.sh) install -- \
-                        .deb/.rpm installs are always updated through your package manager instead, \
-                        regardless of this toggle.");
-                });
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    if ui.button("Check for updates now").clicked() {
-                        self.start_update_check();
-                    }
-                    let status = match &self.update_state {
-                        crate::update::UpdateState::Idle       => "Up to date (or not checked yet).".to_string(),
-                        crate::update::UpdateState::Checking    => "Checking…".to_string(),
-                        crate::update::UpdateState::Available(r) => format!("Update available: {}", r.version),
-                        crate::update::UpdateState::Downloading => "Downloading update…".to_string(),
-                        crate::update::UpdateState::Updated(v)  => format!("Updated to {v} -- restart to finish."),
-                        crate::update::UpdateState::Failed(e)   => format!("Check failed: {e}"),
-                    };
-                    ui.label(RichText::new(status).color(palette.muted).small());
-                });
-            });
+            edited |= self.show_startup_section(ui, &palette);
             ui.add_space(14.0);
 
-            // ── Account ───────────────────────────────────────────────────
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("Accounts").strong());
-                info_hint(ui, &palette, "Each enabled account registers independently on its own \
-                    local SIP port (base port below, incrementing by one per additional account).");
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let can_remove = self.config.accounts.len() > 1;
-                    if ui.add_enabled(can_remove, egui::Button::new("Remove")).clicked() {
-                        self.config.accounts.remove(self.edit_account_idx);
-                        self.edit_account_idx = self.edit_account_idx.min(self.config.accounts.len() - 1);
-                        edited = true;
-                    }
-                    if ui.button("+ Add account").clicked() {
-                        self.config.accounts.push(SipAccount::default());
-                        self.edit_account_idx = self.config.accounts.len() - 1;
-                        edited = true;
-                    }
-                });
-            });
-            ui.add_space(4.0);
-            // A draft account only has a live registration-status dot once
-            // it matches a currently-running identity by username -- a
-            // freshly-added or just-edited entry has no such match yet
-            // (accurately reads as "not registered" until Save + restart).
-            let is_registered = |acc: &SipAccount| self.accounts.iter().any(|a| a.account.username == acc.username && a.reg_ok);
-            let selected_text = account_status_label(
-                ui, &palette, is_registered(&self.config.accounts[self.edit_account_idx]),
-                &format!("{}. {}", self.edit_account_idx + 1, account_label(&self.config.accounts[self.edit_account_idx])),
-            );
-            egui::ComboBox::from_id_source("settings_account_picker")
-                .selected_text(selected_text)
-                .show_ui(ui, |ui| {
-                    for i in 0..self.config.accounts.len() {
-                        let label_text = format!("{}. {}", i + 1, account_label(&self.config.accounts[i]));
-                        let label = account_status_label(ui, &palette, is_registered(&self.config.accounts[i]), &label_text);
-                        if ui.add(egui::SelectableLabel::new(self.edit_account_idx == i, label)).clicked() {
-                            self.edit_account_idx = i;
-                        }
-                    }
-                });
-            ui.add_space(6.0);
-
-            theme::full_width_card(ui, palette, |ui| {
-                let account = &mut self.config.accounts[self.edit_account_idx];
-
-                edited |= ui.checkbox(&mut account.enabled, "Enabled (register this account on next restart)").changed();
-                edited |= ui.checkbox(&mut account.dnd, "Do Not Disturb (reject all incoming calls)").changed();
-                ui.add_space(4.0);
-
-                egui::Grid::new("settings_account_grid")
-                    .num_columns(2)
-                    .spacing([8.0, 4.0])
-                    .show(ui, |ui| {
-                        ui.label("Account name:");
-                        edited |= optional_text_field(ui, &mut account.account_name, "e.g. Home, Work");
-                        ui.end_row();
-
-                        ui.label("Username:");
-                        edited |= ui.add(egui::TextEdit::singleline(&mut account.username)
-                            .desired_width(f32::INFINITY)).changed();
-                        ui.end_row();
-
-                        ui.label("Password:");
-                        ui.horizontal(|ui| {
-                            edited |= ui.add(egui::TextEdit::singleline(&mut account.password)
-                                .password(!self.show_account_password)
-                                .desired_width(200.0)).changed();
-                            let icon = if self.show_account_password {
-                                egui_phosphor::regular::EYE_SLASH
-                            } else {
-                                egui_phosphor::regular::EYE
-                            };
-                            if ui.small_button(icon).clicked() {
-                                self.show_account_password = !self.show_account_password;
-                            }
-                        });
-                        ui.end_row();
-
-                        ui.label("Login (optional):");
-                        ui.horizontal(|ui| {
-                            edited |= optional_text_field(ui, &mut account.auth_username, "defaults to Username");
-                            info_hint(ui, &palette, "Digest-auth identity, when a provider requires \
-                                a login distinct from the public SIP username above.");
-                        });
-                        ui.end_row();
-
-                        ui.label("Server:");
-                        edited |= ui.add(egui::TextEdit::singleline(&mut account.server)
-                            .desired_width(f32::INFINITY)).changed();
-                        ui.end_row();
-
-                        ui.label("Port:");
-                        edited |= ui.add(egui::DragValue::new(&mut account.port)).changed();
-                        ui.end_row();
-
-                        ui.label("Domain (optional):");
-                        ui.horizontal(|ui| {
-                            edited |= optional_text_field(ui, &mut account.domain, "defaults to Server");
-                            info_hint(ui, &palette, "SIP domain used in From/To/Contact URIs, when it \
-                                differs from the registrar host in Server above.");
-                        });
-                        ui.end_row();
-
-                        ui.label("SIP proxy (optional):");
-                        ui.horizontal(|ui| {
-                            edited |= optional_text_field(ui, &mut account.sip_proxy, "host[:port]");
-                            info_hint(ui, &palette, "Outbound proxy to actually connect through, \
-                                instead of Server/Port directly.");
-                        });
-                        ui.end_row();
-
-                        ui.label("Display name:");
-                        edited |= optional_text_field(ui, &mut account.display_name, "");
-                        ui.end_row();
-
-                        ui.label("Transport:");
-                        egui::ComboBox::from_id_source("settings_transport")
-                            .selected_text(match account.transport {
-                                TransportProtocol::Udp => "UDP",
-                                TransportProtocol::Tcp => "TCP",
-                                TransportProtocol::Tls => "TLS",
-                                TransportProtocol::Auto => "Auto",
-                            })
-                            .show_ui(ui, |ui| {
-                                edited |= ui.selectable_value(&mut account.transport, TransportProtocol::Udp, "UDP").changed();
-                                edited |= ui.selectable_value(&mut account.transport, TransportProtocol::Tcp, "TCP").changed();
-                                edited |= ui.selectable_value(&mut account.transport, TransportProtocol::Tls, "TLS").changed();
-                                edited |= ui.selectable_value(&mut account.transport, TransportProtocol::Auto, "Auto").changed();
-                            });
-                        if account.transport == TransportProtocol::Auto {
-                            info_hint(ui, &palette, "Tries UDP, then TCP, then TLS at connect time, \
-                                keeping whichever one actually gets a response from the server.");
-                        }
-                        ui.end_row();
-                    });
-
-                if matches!(account.transport, TransportProtocol::Tls | TransportProtocol::Auto) {
-                    edited |= ui.checkbox(
-                        &mut account.tls_insecure_skip_verify,
-                        "Skip TLS certificate verification (self-signed/home-lab PBXes)",
-                    ).changed();
-                    if account.tls_insecure_skip_verify {
-                        ui.label(RichText::new(
-                            "Warning: certificate verification is disabled — traffic can be intercepted."
-                        ).color(palette.warn));
-                    }
-                }
-
-                ui.add_space(6.0);
-                ui.label("Codecs (order = preference):");
-                let mut move_up: Option<usize> = None;
-                let mut move_down: Option<usize> = None;
-                let mut to_disable: Option<usize> = None;
-                for (i, name) in account.codec_order.iter().enumerate() {
-                    ui.horizontal(|ui| {
-                        ui.label(codec_label(name));
-                        if ui.add_enabled(i > 0, egui::Button::new("↑")).clicked() {
-                            move_up = Some(i);
-                        }
-                        if ui.add_enabled(i + 1 < account.codec_order.len(), egui::Button::new("↓")).clicked() {
-                            move_down = Some(i);
-                        }
-                        let can_disable = account.codec_order.len() > 1;
-                        if ui.add_enabled(can_disable, egui::Button::new("Disable")).clicked() {
-                            to_disable = Some(i);
-                        }
-                    });
-                }
-                if let Some(i) = move_up { account.codec_order.swap(i, i - 1); edited = true; }
-                if let Some(i) = move_down { account.codec_order.swap(i, i + 1); edited = true; }
-                if let Some(i) = to_disable { account.codec_order.remove(i); edited = true; }
-                for name in ["opus", "g722", "pcmu", "pcma", "gsm", "ilbc", "g729"] {
-                    if !account.codec_order.iter().any(|c| c == name) {
-                        ui.horizontal(|ui| {
-                            ui.label(RichText::new(codec_label(name)).color(palette.muted));
-                            if ui.small_button("Enable").clicked() {
-                                account.codec_order.push(name.to_string());
-                                edited = true;
-                            }
-                        });
-                    }
-                }
-
-                ui.add_space(6.0);
-                ui.horizontal(|ui| {
-                    ui.label("Force codec for incoming:");
-                    let selected_label = account.force_incoming_codec.as_deref()
-                        .map(codec_label)
-                        .unwrap_or("No override");
-                    egui::ComboBox::from_id_source("settings_force_incoming_codec")
-                        .selected_text(selected_label)
-                        .show_ui(ui, |ui| {
-                            if ui.selectable_label(account.force_incoming_codec.is_none(), "No override").clicked() {
-                                account.force_incoming_codec = None;
-                                edited = true;
-                            }
-                            for name in &account.codec_order {
-                                if ui.selectable_label(account.force_incoming_codec.as_deref() == Some(name.as_str()), codec_label(name)).clicked() {
-                                    account.force_incoming_codec = Some(name.clone());
-                                    edited = true;
-                                }
-                            }
-                        });
-                    info_hint(ui, &palette, "Negotiates this codec on an incoming call whenever the \
-                        caller offers it at all, ignoring the caller's own preference order.");
-                });
-
-                ui.add_space(6.0);
-                ui.horizontal(|ui| {
-                    edited |= ui.checkbox(&mut account.vad_enabled, "Voice activity detection (comfort noise)").changed();
-                    info_hint(ui, &palette, "During silence, sends occasional comfort-noise packets \
-                        instead of continuous audio, and plays synthesized background noise for the \
-                        far end's silence instead of dead air. Only takes effect with a non-Opus codec.");
-                });
-
-                ui.add_space(6.0);
-                ui.horizontal(|ui| {
-                    ui.label("DTMF mode:");
-                    egui::ComboBox::from_id_source("settings_dtmf_mode")
-                        .selected_text(match account.dtmf_mode {
-                            DtmfMode::Rfc2833 => "RFC 2833 (RTP telephone-event)",
-                            DtmfMode::SipInfo => "SIP INFO",
-                            DtmfMode::Inband  => "Inband (audio tone)",
-                        })
-                        .show_ui(ui, |ui| {
-                            edited |= ui.selectable_value(&mut account.dtmf_mode, DtmfMode::Rfc2833, "RFC 2833 (RTP telephone-event)").changed();
-                            edited |= ui.selectable_value(&mut account.dtmf_mode, DtmfMode::SipInfo, "SIP INFO").changed();
-                            edited |= ui.selectable_value(&mut account.dtmf_mode, DtmfMode::Inband, "Inband (audio tone)").changed();
-                        });
-                });
-
-                ui.add_space(6.0);
-                ui.label("Forward always (optional):");
-                ui.horizontal(|ui| {
-                    edited |= optional_text_field(ui, &mut account.forward_always, "sip:reception@example.com");
-                });
-
-                ui.add_space(6.0);
-                ui.label("Forward when busy (optional):");
-                ui.horizontal(|ui| {
-                    edited |= optional_text_field(ui, &mut account.forward_on_busy, "sip:voicemail@example.com");
-                });
-
-                ui.add_space(6.0);
-                ui.label("Forward if unanswered (optional):");
-                ui.horizontal(|ui| {
-                    edited |= optional_text_field(ui, &mut account.no_answer_forward, "sip:voicemail@example.com");
-                });
-                ui.horizontal(|ui| {
-                    ui.label("after (seconds):");
-                    edited |= ui.add(egui::DragValue::new(&mut account.no_answer_timeout_secs).range(1..=300)).changed();
-                });
-
-                ui.add_space(6.0);
-                edited |= ui.checkbox(&mut account.auto_answer_enabled, "Auto-answer incoming calls (intercom mode)").changed();
-                if account.auto_answer_enabled {
-                    ui.horizontal(|ui| {
-                        ui.label("after (seconds):");
-                        edited |= ui.add(egui::DragValue::new(&mut account.auto_answer_secs).range(0..=60)).changed();
-                    });
-                }
-
-                ui.add_space(6.0);
-                ui.label("Voicemail mailbox for MWI (optional):");
-                ui.horizontal(|ui| {
-                    edited |= optional_text_field(ui, &mut account.mailbox, "1000");
-                });
-
-                ui.add_space(6.0);
-                ui.label("Dialing prefix (optional):");
-                ui.horizontal(|ui| {
-                    edited |= optional_text_field(ui, &mut account.dialing_prefix, "e.g. 9");
-                    info_hint(ui, &palette, "Auto-prepended to bare numbers dialed from this account \
-                        (e.g. \"9\" for an outside line) -- not applied to a full SIP URI or an \
-                        explicit user@host entry.");
-                });
-
-                ui.add_space(6.0);
-                edited |= ui.checkbox(&mut account.hide_caller_id, "Hide caller ID (send Privacy: id)").changed();
-
-                ui.add_space(6.0);
-                ui.horizontal(|ui| {
-                    ui.label("Register refresh (seconds):");
-                    edited |= ui.add(egui::DragValue::new(&mut account.register_expires).range(60..=86400)).changed();
-                    info_hint(ui, &palette, "Requested REGISTER Expires -- the server may return a \
-                        shorter value, which re-registration timing always honors regardless of this.");
-                });
-
-                ui.add_space(6.0);
-                let mut keepalive_on = account.keepalive_secs.is_some();
-                if ui.checkbox(&mut keepalive_on, "NAT keepalive").changed() {
-                    account.keepalive_secs = if keepalive_on { Some(15) } else { None };
-                    edited = true;
-                }
-                if let Some(secs) = &mut account.keepalive_secs {
-                    ui.horizontal(|ui| {
-                        ui.label("every (seconds):");
-                        edited |= ui.add(egui::DragValue::new(secs).range(5..=300)).changed();
-                        info_hint(ui, &palette, "Sends a lone empty packet to the registrar on this \
-                            interval, to hold a NAT/firewall's outbound binding open between registrations.");
-                    });
-                }
-
-                ui.add_space(6.0);
-                ui.horizontal(|ui| {
-                    ui.label("Media encryption:");
-                    egui::ComboBox::from_id_source("settings_media_encryption")
-                        .selected_text(match account.media_encryption {
-                            MediaEncryption::MatchTransport => "Match transport (default)",
-                            MediaEncryption::Disabled => "Disabled",
-                            MediaEncryption::Enabled => "Always (SRTP)",
-                        })
-                        .show_ui(ui, |ui| {
-                            edited |= ui.selectable_value(&mut account.media_encryption, MediaEncryption::MatchTransport, "Match transport (default)").changed();
-                            edited |= ui.selectable_value(&mut account.media_encryption, MediaEncryption::Disabled, "Disabled").changed();
-                            edited |= ui.selectable_value(&mut account.media_encryption, MediaEncryption::Enabled, "Always (SRTP)").changed();
-                        });
-                });
-                info_hint(ui, &palette, "\"Match transport\" offers SRTP exactly when the signaling \
-                    transport is TLS (today's behavior); the other two are independent of transport.");
-
-                ui.add_space(6.0);
-                ui.label("Public address (optional):");
-                ui.horizontal(|ui| {
-                    edited |= optional_text_field(ui, &mut account.public_address, "e.g. 203.0.113.5");
-                    info_hint(ui, &palette, "Overrides the address advertised in Contact/SDP for this \
-                        account, instead of the globally STUN-discovered external IP.");
-                });
-
-                ui.add_space(6.0);
-                let mut ice_override_on = account.ice_enabled.is_some();
-                if ui.checkbox(&mut ice_override_on, "Override global ICE setting for this account").changed() {
-                    account.ice_enabled = if ice_override_on { Some(self.config.ice_enabled) } else { None };
-                    edited = true;
-                }
-                if let Some(ice_on) = &mut account.ice_enabled {
-                    edited |= ui.checkbox(ice_on, "Use ICE (RFC 8445) for this account").changed();
-                }
-            });
-
-            if !self.config.accounts.iter().any(|a| a.enabled) {
-                ui.label(RichText::new(
-                    "Warning: no accounts are enabled — DeeLip won't be able to register on restart."
-                ).color(palette.warn));
-            }
-
+            self.show_updates_section(ui, &palette);
             ui.add_space(14.0);
 
-            // ── Audio ─────────────────────────────────────────────────────
-            ui.label(RichText::new("Audio").strong());
-            theme::full_width_card(ui, palette, |ui| {
-                let (input_names, output_names) = self.audio_device_cache
-                    .get_or_insert_with(|| (list_device_names(true), list_device_names(false)))
-                    .clone();
-
-                if ui.button("Refresh device list").clicked() {
-                    self.audio_device_cache = Some((list_device_names(true), list_device_names(false)));
-                }
-
-                egui::Grid::new("settings_audio_grid")
-                    .num_columns(2)
-                    .spacing([8.0, 4.0])
-                    .show(ui, |ui| {
-                        edited |= device_picker(ui, "settings_input_device", "Input device:", &mut self.config.audio.input_device, &input_names);
-                        ui.end_row();
-                        edited |= device_picker(ui, "settings_output_device", "Output device:", &mut self.config.audio.output_device, &output_names);
-                        ui.end_row();
-                        edited |= device_picker(ui, "settings_ringtone_device", "Ringing device:", &mut self.config.audio.ringtone_device, &output_names);
-                        ui.end_row();
-                    });
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("Ringing device").color(palette.muted).small());
-                    info_hint(ui, &palette, "Independent of the Output device above -- lets the \
-                        ringtone play on a different device than call audio, e.g. ring on \
-                        speakers, talk on a headset.");
-                });
-
-                ui.add_space(6.0);
-                ui.horizontal(|ui| {
-                    ui.label("Custom ringtone (WAV):");
-                    let name = self.config.audio.ringtone_file.as_deref()
-                        .and_then(|p| std::path::Path::new(p).file_name())
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| "Built-in tone".into());
-                    ui.label(RichText::new(name).color(palette.muted));
-                    if ui.small_button("Choose…").clicked() {
-                        if let Some(path) = rfd::FileDialog::new().add_filter("WAV", &["wav"]).pick_file() {
-                            self.config.audio.ringtone_file = Some(path.to_string_lossy().into_owned());
-                            edited = true;
-                        }
-                    }
-                    if self.config.audio.ringtone_file.is_some() && ui.small_button("Clear").clicked() {
-                        self.config.audio.ringtone_file = None;
-                        edited = true;
-                    }
-                });
-
-                ui.add_space(6.0);
-                ui.horizontal(|ui| {
-                    ui.label("Ringtone volume:");
-                    edited |= ui.add(egui::Slider::new(&mut self.config.audio.ringtone_volume, 0.0..=2.0)
-                        .fixed_decimals(2)).changed();
-                });
-
-                ui.add_space(6.0);
-                edited |= ui.checkbox(&mut self.config.audio.echo_cancellation, "Echo cancellation").changed();
-                ui.horizontal(|ui| {
-                    edited |= ui.checkbox(&mut self.config.audio.agc_enabled, "Automatic microphone gain control").changed();
-                    info_hint(ui, &palette, "Adaptively boosts a quiet mic signal and limits a loud one.");
-                });
-
-                ui.add_space(6.0);
-                edited |= ui.checkbox(&mut self.config.recording_enabled, "Record calls").changed();
-                if self.config.recording_enabled {
-                    ui.horizontal(|ui| {
-                        ui.label("Format:");
-                        egui::ComboBox::from_id_source("settings_recording_format")
-                            .selected_text(match self.config.recording_format {
-                                RecordingFormat::Wav => "WAV (lossless, larger files)",
-                                RecordingFormat::Mp3 => "MP3 (lossy, smaller files)",
-                            })
-                            .show_ui(ui, |ui| {
-                                edited |= ui.selectable_value(&mut self.config.recording_format, RecordingFormat::Wav, "WAV (lossless, larger files)").changed();
-                                edited |= ui.selectable_value(&mut self.config.recording_format, RecordingFormat::Mp3, "MP3 (lossy, smaller files)").changed();
-                            });
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("Save to:");
-                        let shown = self.config.recordings_dir_override.as_deref()
-                            .unwrap_or("~/.config/deelip/recordings (default)");
-                        ui.label(RichText::new(shown).color(palette.muted));
-                        if ui.small_button("Choose…").clicked() {
-                            if let Some(dir) = rfd::FileDialog::new().pick_folder() {
-                                self.config.recordings_dir_override = Some(dir.to_string_lossy().into_owned());
-                                edited = true;
-                            }
-                        }
-                        if self.config.recordings_dir_override.is_some() && ui.small_button("Reset").clicked() {
-                            self.config.recordings_dir_override = None;
-                            edited = true;
-                        }
-                    });
-                }
-            });
-
+            edited |= self.show_account_section(ui, &palette);
             ui.add_space(14.0);
 
-            // ── Network ───────────────────────────────────────────────────
-            ui.label(RichText::new("Network").strong());
-            theme::full_width_card(ui, palette, |ui| {
-                egui::Grid::new("settings_network_grid")
-                    .num_columns(2)
-                    .spacing([8.0, 4.0])
-                    .show(ui, |ui| {
-                        ui.label("Local SIP port:");
-                        edited |= ui.add(egui::DragValue::new(&mut self.config.local_sip_port)).changed();
-                        ui.end_row();
-
-                        ui.label("STUN server:");
-                        edited |= optional_text_field(ui, &mut self.config.stun_server, "e.g. stun.l.google.com:19302");
-                        ui.end_row();
-
-                        ui.label("TURN server:");
-                        edited |= optional_text_field(ui, &mut self.config.turn_server, "e.g. turn.example.com:3478");
-                        ui.end_row();
-
-                        ui.label("TURN username:");
-                        edited |= optional_text_field(ui, &mut self.config.turn_username, "");
-                        ui.end_row();
-
-                        ui.label("TURN password:");
-                        edited |= optional_password_field(ui, &mut self.config.turn_password);
-                        ui.end_row();
-                    });
-                ui.add_space(6.0);
-                ui.horizontal(|ui| {
-                    edited |= ui.checkbox(&mut self.config.ice_enabled,
-                        "Use ICE (RFC 8445) for NAT traversal, falling back to the above if it fails"
-                    ).changed();
-                    info_hint(ui, &palette, "Takes effect on the next call placed or answered, \
-                        not calls already in progress.");
-                });
-            });
-
+            edited |= self.show_audio_section(ui, &palette);
             ui.add_space(14.0);
-            ui.label(RichText::new("Global Hotkeys").strong());
-            theme::full_width_card(ui, palette, |ui| {
-                ui.horizontal(|ui| {
-                    edited |= ui.checkbox(&mut self.config.global_hotkeys_enabled,
-                        "Enable system-wide Answer/Hangup/Mute hotkeys (Linux: X11 only)"
-                    ).changed();
-                    info_hint(ui, &palette, "Format: \"Ctrl+Alt+A\" style. Restart required to apply.");
-                });
-                if self.config.global_hotkeys_enabled {
-                    egui::Grid::new("hotkeys_grid").num_columns(2).show(ui, |ui| {
-                        ui.label("Answer:");
-                        edited |= ui.text_edit_singleline(&mut self.config.hotkey_answer).changed();
-                        ui.end_row();
-                        ui.label("Hangup:");
-                        edited |= ui.text_edit_singleline(&mut self.config.hotkey_hangup).changed();
-                        ui.end_row();
-                        ui.label("Mute:");
-                        edited |= ui.text_edit_singleline(&mut self.config.hotkey_mute).changed();
-                        ui.end_row();
-                    });
-                }
-            });
 
+            edited |= self.show_video_section(ui, &palette);
+            ui.add_space(14.0);
+
+            edited |= self.show_network_section(ui, &palette);
+            ui.add_space(14.0);
+
+            edited |= self.show_directory_section(ui, &palette);
+            ui.add_space(14.0);
+
+            edited |= self.show_global_hotkeys_section(ui, &palette);
             ui.add_space(14.0);
 
             if ui.button("Save").clicked() {
                 match self.config.save(&self.db) {
-                    Ok(())   => self.settings_saved_notice = true,
+                    Ok(()) => self.settings_saved_notice = true,
                     Err(err) => {
                         self.settings_saved_notice = false;
                         tracing::error!("Failed to save config: {err}");
@@ -685,13 +166,1059 @@ impl DeelipApp {
                 }
             }
             if self.settings_saved_notice {
-                ui.label(RichText::new("Saved — restart DeeLip to apply changes.").color(palette.accent));
+                ui.label(
+                    RichText::new("Saved — restart DeeLip to apply changes.").color(palette.signal),
+                );
             }
         });
 
         if edited {
             self.settings_saved_notice = false;
         }
+    }
+
+    /// Applies immediately -- no restart needed, saves itself on change.
+    fn show_appearance_section(&mut self, ui: &mut Ui, palette: &Palette) {
+        settings_section(ui, palette, "Appearance", Some("Applies immediately — no restart needed."), |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Theme:");
+                if ui.selectable_label(!self.config.dark_mode, format!("{}  Light", egui_phosphor::regular::SUN)).clicked() {
+                    self.config.dark_mode = false;
+                    self.save_config_quietly();
+                }
+                if ui.selectable_label(self.config.dark_mode, format!("{}  Dark", egui_phosphor::regular::MOON)).clicked() {
+                    self.config.dark_mode = true;
+                    self.save_config_quietly();
+                }
+            });
+        });
+    }
+
+    /// Applies immediately -- no restart needed, saves itself on change.
+    fn show_notifications_section(&mut self, ui: &mut Ui, palette: &Palette) {
+        settings_section(ui, palette, "Notifications & Ringtone", Some("Applies immediately — no restart needed."), |ui| {
+            if ui.checkbox(&mut self.config.notifications_enabled, "Desktop notification on incoming calls").changed() {
+                self.save_config_quietly();
+            }
+            if ui.checkbox(&mut self.config.ringtone_enabled, "Ringtone (incoming) / ringback (outgoing)").changed() {
+                self.save_config_quietly();
+            }
+            ui.horizontal(|ui| {
+                if ui.checkbox(&mut self.config.random_popup_position, "Random popup position").changed() {
+                    self.save_config_quietly();
+                }
+                info_hint(ui, palette, "Show the main window at a random spot on the current \
+                    monitor each time it's raised for an incoming call, instead of wherever it \
+                    last was.");
+            });
+            ui.horizontal(|ui| {
+                ui.label("Default list action:");
+                egui::ComboBox::from_id_source("settings_default_list_action")
+                    .selected_text(match self.config.default_list_action {
+                        DefaultListAction::Call => "Call",
+                        DefaultListAction::Message => "Message",
+                        DefaultListAction::Edit => "Edit",
+                    })
+                    .show_ui(ui, |ui| {
+                        for (val, label) in [
+                            (DefaultListAction::Call, "Call"),
+                            (DefaultListAction::Message, "Message"),
+                            (DefaultListAction::Edit, "Edit"),
+                        ] {
+                            if ui.selectable_value(&mut self.config.default_list_action, val, label).changed() {
+                                self.save_config_quietly();
+                            }
+                        }
+                    });
+                info_hint(ui, palette, "What double-clicking a row's name/number in History or \
+                    Contacts does. \"Edit\" falls back to \"Call\" in History (nothing to edit there).");
+            });
+        });
+    }
+
+    /// Applies immediately -- no restart needed, saves itself on change.
+    fn show_call_handling_section(&mut self, ui: &mut Ui, palette: &Palette) {
+        settings_section(ui, palette, "Call Handling", Some("Applies immediately — no restart needed."), |ui| {
+            ui.horizontal(|ui| {
+                if ui.checkbox(&mut self.config.single_call_mode, "Single Call Mode (disable call waiting)").changed() {
+                    self.save_config_quietly();
+                }
+                info_hint(ui, palette, "An incoming call while another is already active is \
+                    rejected with Busy instead of ringing as a 2nd call. A per-account \
+                    \"Forward on busy\" (Account editor) still takes priority over this.");
+            });
+        });
+    }
+
+    /// Applies immediately -- no restart needed, saves itself on change.
+    fn show_blocklist_section(&mut self, ui: &mut Ui, palette: &Palette) {
+        settings_section(ui, palette, "Blocklist", Some("Applies immediately — no restart needed."), |ui| {
+            ui.horizontal(|ui| {
+                ui.add(egui::TextEdit::singleline(&mut self.blocklist_input)
+                    .hint_text("number or sip:user@host")
+                    .desired_width(200.0));
+                if ui.button("Block").clicked() {
+                    let entry = self.blocklist_input.trim().to_string();
+                    if !entry.is_empty() && !self.config.blocklist.iter().any(|e| e.eq_ignore_ascii_case(&entry)) {
+                        self.config.blocklist.push(entry);
+                        self.save_config_quietly();
+                    }
+                    self.blocklist_input.clear();
+                }
+            });
+            if self.config.blocklist.is_empty() {
+                empty_state(ui, palette, "No blocked numbers.");
+            } else {
+                let mut remove_idx = None;
+                for (i, entry) in self.config.blocklist.iter().enumerate() {
+                    ui.horizontal(|ui| {
+                        ui.label(entry);
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.small_button("Remove").clicked() {
+                                remove_idx = Some(i);
+                            }
+                        });
+                    });
+                }
+                if let Some(i) = remove_idx {
+                    self.config.blocklist.remove(i);
+                    self.save_config_quietly();
+                }
+            }
+        });
+    }
+
+    /// Restart required -- returns whether anything changed.
+    fn show_startup_section(&mut self, ui: &mut Ui, palette: &Palette) -> bool {
+        let mut edited = false;
+        settings_section(ui, palette, "Startup", None, |ui| {
+            ui.horizontal(|ui| {
+                edited |= ui.checkbox(&mut self.config.start_minimized, "Start minimized (to tray)").changed();
+                info_hint(ui, palette, "Restart to apply.");
+            });
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                edited |= ui.checkbox(&mut self.config.log_to_file, "Enable log file").changed();
+                info_hint(ui, palette, "Also writes logs to ~/.config/deelip/deelip.log, \
+                    in addition to the console. Restart to apply.");
+            });
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                edited |= ui.checkbox(&mut self.config.crash_reporting_enabled, "Save crash reports locally").changed();
+                info_hint(ui, palette, "If DeeLip crashes, save a report (version, panic message, \
+                    backtrace) to ~/.config/deelip/crashes/ for troubleshooting. Purely local -- \
+                    never uploaded or sent anywhere. Restart to apply.");
+            });
+            ui.horizontal(|ui| {
+                if ui.button("Open crash reports folder").clicked() {
+                    if let Ok(dir) = deelip_config::crashes_dir() {
+                        let _ = std::process::Command::new("xdg-open").arg(dir).spawn();
+                    }
+                }
+            });
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                if ui.checkbox(&mut self.autostart_enabled, "Start DeeLip on login").changed() {
+                    if let Err(e) = deelip_config::set_autostart(self.autostart_enabled) {
+                        tracing::error!("Failed to update autostart: {e}");
+                        self.autostart_enabled = deelip_config::is_autostart_enabled();
+                    }
+                }
+                info_hint(ui, palette, "Applies immediately — no restart needed.");
+            });
+        });
+        edited
+    }
+
+    /// Applies immediately -- no restart needed, saves itself on change.
+    fn show_updates_section(&mut self, ui: &mut Ui, palette: &Palette) {
+        settings_section(ui, palette, "Updates", Some("Applies immediately — no restart needed."), |ui| {
+            ui.label(RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION"))).color(palette.ink_muted));
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.label("Check for updates:");
+                egui::ComboBox::from_id_source("settings_update_check_frequency")
+                    .selected_text(match self.config.update_check_frequency {
+                        UpdateCheckFrequency::Always => "Every launch",
+                        UpdateCheckFrequency::Daily => "Daily",
+                        UpdateCheckFrequency::Weekly => "Weekly",
+                        UpdateCheckFrequency::Never => "Never",
+                    })
+                    .show_ui(ui, |ui| {
+                        for (val, label) in [
+                            (UpdateCheckFrequency::Always, "Every launch"),
+                            (UpdateCheckFrequency::Daily, "Daily"),
+                            (UpdateCheckFrequency::Weekly, "Weekly"),
+                            (UpdateCheckFrequency::Never, "Never"),
+                        ] {
+                            if ui.selectable_value(&mut self.config.update_check_frequency, val, label).changed() {
+                                self.save_config_quietly();
+                            }
+                        }
+                    });
+            });
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                if ui.checkbox(&mut self.config.auto_update_enabled, "Automatically download and install updates").changed() {
+                    self.save_config_quietly();
+                }
+                info_hint(ui, palette, "Only works for a portable (tar.gz/install.sh) install -- \
+                    .deb/.rpm installs are always updated through your package manager instead, \
+                    regardless of this toggle.");
+            });
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                if ui.button("Check for updates now").clicked() {
+                    self.start_update_check();
+                }
+                let status = match &self.update_state {
+                    crate::update::UpdateState::Idle       => "Up to date (or not checked yet).".to_string(),
+                    crate::update::UpdateState::Checking    => "Checking…".to_string(),
+                    crate::update::UpdateState::Available(r) => format!("Update available: {}", r.version),
+                    crate::update::UpdateState::Downloading => "Downloading update…".to_string(),
+                    crate::update::UpdateState::Updated(v)  => format!("Updated to {v} -- restart to finish."),
+                    crate::update::UpdateState::Failed(e)   => format!("Check failed: {e}"),
+                };
+                ui.label(RichText::new(status).color(palette.ink_muted).small());
+            });
+        });
+    }
+
+    /// Restart required -- returns whether anything changed.
+    fn show_account_section(&mut self, ui: &mut Ui, palette: &Palette) -> bool {
+        let mut edited = false;
+
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Accounts").font(theme::font_heading(13.5)));
+            info_hint(ui, palette, "Each enabled account registers independently on its own \
+                local SIP port (base port below, incrementing by one per additional account).");
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let can_remove = self.config.accounts.len() > 1;
+                if ui.add_enabled(can_remove, egui::Button::new("Remove")).clicked() {
+                    self.config.accounts.remove(self.edit_account_idx);
+                    self.edit_account_idx = self.edit_account_idx.min(self.config.accounts.len() - 1);
+                    edited = true;
+                }
+                if ui.button("+ Add account").clicked() {
+                    self.config.accounts.push(SipAccount::default());
+                    self.edit_account_idx = self.config.accounts.len() - 1;
+                    edited = true;
+                }
+            });
+        });
+        ui.add_space(4.0);
+        // A draft account only has a live registration-status dot once
+        // it matches a currently-running identity by username -- a
+        // freshly-added or just-edited entry has no such match yet
+        // (accurately reads as "not registered" until Save + restart).
+        let is_registered = |acc: &SipAccount| self.accounts.iter().any(|a| a.account.username == acc.username && a.reg_ok);
+        let selected_text = account_status_label(
+            ui, palette, is_registered(&self.config.accounts[self.edit_account_idx]),
+            &format!("{}. {}", self.edit_account_idx + 1, account_label(&self.config.accounts[self.edit_account_idx])),
+        );
+        egui::ComboBox::from_id_source("settings_account_picker")
+            .selected_text(selected_text)
+            .show_ui(ui, |ui| {
+                for i in 0..self.config.accounts.len() {
+                    let label_text = format!("{}. {}", i + 1, account_label(&self.config.accounts[i]));
+                    let label = account_status_label(ui, palette, is_registered(&self.config.accounts[i]), &label_text);
+                    if ui.add(egui::SelectableLabel::new(self.edit_account_idx == i, label)).clicked() {
+                        self.edit_account_idx = i;
+                    }
+                }
+            });
+        ui.add_space(6.0);
+
+        theme::full_width_card(ui, *palette, |ui| {
+            let account = &mut self.config.accounts[self.edit_account_idx];
+
+            edited |= ui.checkbox(&mut account.enabled, "Enabled (register this account on next restart)").changed();
+            edited |= ui.checkbox(&mut account.dnd, "Do Not Disturb (reject all incoming calls)").changed();
+            ui.horizontal(|ui| {
+                edited |= ui.checkbox(&mut account.local_account, "Local Account (serverless, direct-IP calling)").changed();
+                info_hint(ui, palette, "Place and receive calls straight to/from an IP address with \
+                    no SIP server at all -- no REGISTER is ever sent. Server, Password, Login, and \
+                    Transport below are ignored (always plain UDP); dial a bare IP or host[:port] \
+                    (e.g. 192.168.1.50 or 192.168.1.50:5060) directly from the dialer. Username/ \
+                    Display name are still used as this account's caller-ID identity. Restart required.");
+            });
+            if account.local_account {
+                empty_state(ui, palette, "Local Account: Server/Password/Login/Transport ignored below.");
+            }
+            ui.add_space(4.0);
+
+            egui::Grid::new("settings_account_grid")
+                .num_columns(2)
+                .spacing([8.0, 4.0])
+                .show(ui, |ui| {
+                    ui.label("Account name:");
+                    edited |= optional_text_field(ui, &mut account.account_name, "e.g. Home, Work");
+                    ui.end_row();
+
+                    ui.label("Username:");
+                    edited |= ui.add(egui::TextEdit::singleline(&mut account.username)
+                        .desired_width(f32::INFINITY)).changed();
+                    ui.end_row();
+
+                    ui.label("Password:");
+                    ui.horizontal(|ui| {
+                        edited |= ui.add(egui::TextEdit::singleline(&mut account.password)
+                            .password(!self.show_account_password)
+                            .desired_width(200.0)).changed();
+                        let icon = if self.show_account_password {
+                            egui_phosphor::regular::EYE_SLASH
+                        } else {
+                            egui_phosphor::regular::EYE
+                        };
+                        if ui.small_button(icon).clicked() {
+                            self.show_account_password = !self.show_account_password;
+                        }
+                    });
+                    ui.end_row();
+
+                    ui.label("Login (optional):");
+                    ui.horizontal(|ui| {
+                        edited |= optional_text_field(ui, &mut account.auth_username, "defaults to Username");
+                        info_hint(ui, palette, "Digest-auth identity, when a provider requires \
+                            a login distinct from the public SIP username above.");
+                    });
+                    ui.end_row();
+
+                    ui.label("Server:");
+                    edited |= ui.add(egui::TextEdit::singleline(&mut account.server)
+                        .font(egui::FontId::new(13.0, egui::FontFamily::Monospace))
+                        .desired_width(f32::INFINITY)).changed();
+                    ui.end_row();
+
+                    ui.label("Port:");
+                    edited |= ui.add(egui::DragValue::new(&mut account.port)).changed();
+                    ui.end_row();
+
+                    ui.label("Domain (optional):");
+                    ui.horizontal(|ui| {
+                        edited |= optional_text_field(ui, &mut account.domain, "defaults to Server");
+                        info_hint(ui, palette, "SIP domain used in From/To/Contact URIs, when it \
+                            differs from the registrar host in Server above.");
+                    });
+                    ui.end_row();
+
+                    ui.label("SIP proxy (optional):");
+                    ui.horizontal(|ui| {
+                        edited |= optional_text_field(ui, &mut account.sip_proxy, "host[:port]");
+                        info_hint(ui, palette, "Outbound proxy to actually connect through, \
+                            instead of Server/Port directly.");
+                    });
+                    ui.end_row();
+
+                    ui.label("Display name:");
+                    edited |= optional_text_field(ui, &mut account.display_name, "");
+                    ui.end_row();
+
+                    ui.label("Transport:");
+                    egui::ComboBox::from_id_source("settings_transport")
+                        .selected_text(match account.transport {
+                            TransportProtocol::Udp => "UDP",
+                            TransportProtocol::Tcp => "TCP",
+                            TransportProtocol::Tls => "TLS",
+                            TransportProtocol::Auto => "Auto",
+                        })
+                        .show_ui(ui, |ui| {
+                            edited |= ui.selectable_value(&mut account.transport, TransportProtocol::Udp, "UDP").changed();
+                            edited |= ui.selectable_value(&mut account.transport, TransportProtocol::Tcp, "TCP").changed();
+                            edited |= ui.selectable_value(&mut account.transport, TransportProtocol::Tls, "TLS").changed();
+                            edited |= ui.selectable_value(&mut account.transport, TransportProtocol::Auto, "Auto").changed();
+                        });
+                    if account.transport == TransportProtocol::Auto {
+                        info_hint(ui, palette, "Tries UDP, then TCP, then TLS at connect time, \
+                            keeping whichever one actually gets a response from the server.");
+                    }
+                    ui.end_row();
+                });
+
+            if matches!(account.transport, TransportProtocol::Tls | TransportProtocol::Auto) {
+                edited |= ui.checkbox(
+                    &mut account.tls_insecure_skip_verify,
+                    "Skip TLS certificate verification (self-signed/home-lab PBXes)",
+                ).changed();
+                if account.tls_insecure_skip_verify {
+                    ui.label(RichText::new(
+                        "Warning: certificate verification is disabled — traffic can be intercepted."
+                    ).color(palette.ringing));
+                }
+            }
+
+            ui.add_space(6.0);
+            ui.label("Codecs (order = preference):");
+            let mut move_up: Option<usize> = None;
+            let mut move_down: Option<usize> = None;
+            let mut to_disable: Option<usize> = None;
+            for (i, name) in account.codec_order.iter().enumerate() {
+                ui.horizontal(|ui| {
+                    ui.label(codec_label(name));
+                    if ui.add_enabled(i > 0, egui::Button::new("↑")).clicked() {
+                        move_up = Some(i);
+                    }
+                    if ui.add_enabled(i + 1 < account.codec_order.len(), egui::Button::new("↓")).clicked() {
+                        move_down = Some(i);
+                    }
+                    let can_disable = account.codec_order.len() > 1;
+                    if ui.add_enabled(can_disable, egui::Button::new("Disable")).clicked() {
+                        to_disable = Some(i);
+                    }
+                });
+            }
+            if let Some(i) = move_up { account.codec_order.swap(i, i - 1); edited = true; }
+            if let Some(i) = move_down { account.codec_order.swap(i, i + 1); edited = true; }
+            if let Some(i) = to_disable { account.codec_order.remove(i); edited = true; }
+            for name in ["opus", "g722", "pcmu", "pcma", "gsm", "ilbc", "g729"] {
+                if !account.codec_order.iter().any(|c| c == name) {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(codec_label(name)).color(palette.ink_muted));
+                        if ui.small_button("Enable").clicked() {
+                            account.codec_order.push(name.to_string());
+                            edited = true;
+                        }
+                    });
+                }
+            }
+
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.label("Force codec for incoming:");
+                let selected_label = account.force_incoming_codec.as_deref()
+                    .map(codec_label)
+                    .unwrap_or("No override");
+                egui::ComboBox::from_id_source("settings_force_incoming_codec")
+                    .selected_text(selected_label)
+                    .show_ui(ui, |ui| {
+                        if ui.selectable_label(account.force_incoming_codec.is_none(), "No override").clicked() {
+                            account.force_incoming_codec = None;
+                            edited = true;
+                        }
+                        for name in &account.codec_order {
+                            if ui.selectable_label(account.force_incoming_codec.as_deref() == Some(name.as_str()), codec_label(name)).clicked() {
+                                account.force_incoming_codec = Some(name.clone());
+                                edited = true;
+                            }
+                        }
+                    });
+                info_hint(ui, palette, "Negotiates this codec on an incoming call whenever the \
+                    caller offers it at all, ignoring the caller's own preference order.");
+            });
+
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                edited |= ui.checkbox(&mut account.vad_enabled, "Voice activity detection (comfort noise)").changed();
+                info_hint(ui, palette, "During silence, sends occasional comfort-noise packets \
+                    instead of continuous audio, and plays synthesized background noise for the \
+                    far end's silence instead of dead air. Only takes effect with a non-Opus codec.");
+            });
+
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.label("DTMF mode:");
+                egui::ComboBox::from_id_source("settings_dtmf_mode")
+                    .selected_text(match account.dtmf_mode {
+                        DtmfMode::Rfc2833 => "RFC 2833 (RTP telephone-event)",
+                        DtmfMode::SipInfo => "SIP INFO",
+                        DtmfMode::Inband  => "Inband (audio tone)",
+                        DtmfMode::Auto    => "Auto (RFC 2833 if negotiated, else SIP INFO)",
+                    })
+                    .show_ui(ui, |ui| {
+                        edited |= ui.selectable_value(&mut account.dtmf_mode, DtmfMode::Rfc2833, "RFC 2833 (RTP telephone-event)").changed();
+                        edited |= ui.selectable_value(&mut account.dtmf_mode, DtmfMode::SipInfo, "SIP INFO").changed();
+                        edited |= ui.selectable_value(&mut account.dtmf_mode, DtmfMode::Inband, "Inband (audio tone)").changed();
+                        edited |= ui.selectable_value(&mut account.dtmf_mode, DtmfMode::Auto, "Auto (RFC 2833 if negotiated, else SIP INFO)").changed();
+                    });
+            });
+
+            ui.add_space(6.0);
+            ui.label("Forward always (optional):");
+            ui.horizontal(|ui| {
+                edited |= optional_text_field(ui, &mut account.forward_always, "sip:reception@example.com");
+            });
+
+            ui.add_space(6.0);
+            ui.label("Forward when busy (optional):");
+            ui.horizontal(|ui| {
+                edited |= optional_text_field(ui, &mut account.forward_on_busy, "sip:voicemail@example.com");
+            });
+
+            ui.add_space(6.0);
+            ui.label("Forward if unanswered (optional):");
+            ui.horizontal(|ui| {
+                edited |= optional_text_field(ui, &mut account.no_answer_forward, "sip:voicemail@example.com");
+            });
+            ui.horizontal(|ui| {
+                ui.label("after (seconds):");
+                edited |= ui.add(egui::DragValue::new(&mut account.no_answer_timeout_secs).range(1..=300)).changed();
+            });
+
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                edited |= ui.checkbox(&mut account.auto_answer_enabled, "Auto-answer incoming calls (intercom mode)").changed();
+                info_hint(ui, palette, "Answers any incoming call on this account after the \
+                    timer below, regardless of who's calling -- distinct from Auto Answer \
+                    (Control Button) below, which only fires on a specific remote paging signal.");
+            });
+            if account.auto_answer_enabled {
+                ui.horizontal(|ui| {
+                    ui.label("after (seconds):");
+                    edited |= ui.add(egui::DragValue::new(&mut account.auto_answer_secs).range(0..=60)).changed();
+                });
+            }
+
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                edited |= ui.checkbox(&mut account.auto_answer_control_button, "Auto Answer (Control Button)").changed();
+                info_hint(ui, palette, "Auto-answer only when the incoming INVITE itself carries a \
+                    remote paging/intercom signal (a Call-Info: ...;answer-after=N header, as sent \
+                    by door-intercom/paging hardware) -- unlike the timer above, this doesn't fire \
+                    on an ordinary call and bypasses DND/forwarding when it does fire.");
+            });
+            ui.horizontal(|ui| {
+                edited |= ui.checkbox(&mut account.deny_incoming_control_button, "Deny Incoming (Control Button)").changed();
+                info_hint(ui, palette, "Reacts to the same remote paging/intercom signal as Auto \
+                    Answer (Control Button) above, but rejects the call instead. Takes priority if \
+                    both are somehow enabled.");
+            });
+
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.label("Voicemail mailbox for MWI (optional):");
+                info_hint(ui, palette, "Extension/mailbox this account subscribes to for \
+                    Message-Waiting-Indicator (MWI) NOTIFY -- new-voicemail count shown as the \
+                    badge next to the status bar. Leave blank to skip MWI subscription entirely.");
+            });
+            ui.horizontal(|ui| {
+                edited |= optional_text_field(ui, &mut account.mailbox, "1000");
+            });
+
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                edited |= ui.checkbox(&mut account.publish_presence, "Publish presence status").changed();
+                info_hint(ui, palette, "Publishes this account's own availability (open/closed, \
+                    following Do Not Disturb) via PUBLISH -- needs a server with a presence agent \
+                    that accepts it. Restart required to apply.");
+            });
+
+            ui.add_space(6.0);
+            ui.label("Dialing prefix (optional):");
+            ui.horizontal(|ui| {
+                edited |= optional_text_field(ui, &mut account.dialing_prefix, "e.g. 9");
+                info_hint(ui, palette, "Auto-prepended to bare numbers dialed from this account \
+                    (e.g. \"9\" for an outside line) -- not applied to a full SIP URI or an \
+                    explicit user@host entry. Only used as a fallback when no Dial Plan rule \
+                    below matches.");
+            });
+
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.label("Dial Plan:");
+                info_hint(ui, palette, "Ordered regex match/replace rules applied to a bare \
+                    dialed number before the Dialing prefix fallback above -- the first enabled \
+                    rule whose pattern matches wins. E.g. pattern \"^0(\\d+)$\", replacement \"$1\" \
+                    strips a leading trunk-access 0.");
+            });
+            if account.dial_plan.is_empty() {
+                empty_state(ui, palette, "No dial plan rules -- falls back to the prefix above.");
+            } else {
+                let mut remove_idx = None;
+                for (i, rule) in account.dial_plan.iter_mut().enumerate() {
+                    ui.horizontal(|ui| {
+                        edited |= ui.checkbox(&mut rule.enabled, "").changed();
+                        edited |= ui.add(egui::TextEdit::singleline(&mut rule.pattern)
+                            .hint_text("pattern").desired_width(120.0)).changed();
+                        ui.label("→");
+                        edited |= ui.add(egui::TextEdit::singleline(&mut rule.replacement)
+                            .hint_text("replacement").desired_width(100.0)).changed();
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.small_button("Remove").clicked() {
+                                remove_idx = Some(i);
+                            }
+                        });
+                    });
+                }
+                if let Some(i) = remove_idx {
+                    account.dial_plan.remove(i);
+                    edited = true;
+                }
+            }
+            ui.horizontal(|ui| {
+                ui.add(egui::TextEdit::singleline(&mut self.dialplan_pattern_input)
+                    .hint_text("pattern, e.g. ^0(\\d+)$").desired_width(120.0));
+                ui.label("→");
+                ui.add(egui::TextEdit::singleline(&mut self.dialplan_replacement_input)
+                    .hint_text("replacement, e.g. $1").desired_width(100.0));
+                if ui.button("Add rule").clicked() && !self.dialplan_pattern_input.trim().is_empty() {
+                    account.dial_plan.push(DialPlanRule {
+                        pattern: self.dialplan_pattern_input.trim().to_string(),
+                        replacement: self.dialplan_replacement_input.trim().to_string(),
+                        enabled: true,
+                    });
+                    self.dialplan_pattern_input.clear();
+                    self.dialplan_replacement_input.clear();
+                    edited = true;
+                }
+            });
+
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                edited |= ui.checkbox(&mut account.hide_caller_id, "Hide caller ID (send Privacy: id)").changed();
+                info_hint(ui, palette, "Requests the server withhold your identity from the \
+                    callee -- only effective if the server/provider actually honors Privacy: id; \
+                    this app can't force it on an uncooperative server.");
+            });
+
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.label("Register refresh (seconds):");
+                edited |= ui.add(egui::DragValue::new(&mut account.register_expires).range(60..=86400)).changed();
+                info_hint(ui, palette, "Requested REGISTER Expires -- the server may return a \
+                    shorter value, which re-registration timing always honors regardless of this.");
+            });
+
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                let mut session_timers_on = account.session_timers_enabled;
+                if ui.checkbox(&mut session_timers_on, "Session Timers (RFC 4028)").changed() {
+                    account.session_timers_enabled = session_timers_on;
+                    edited = true;
+                }
+                info_hint(ui, palette, "Periodic re-INVITE keep-alives so a dead signaling path \
+                    (no BYE ever arrives) can still be detected. On by default; disabling sends \
+                    no Session-Expires/Min-SE at all.");
+            });
+
+            ui.add_space(6.0);
+            let mut keepalive_on = account.keepalive_secs.is_some();
+            if ui.checkbox(&mut keepalive_on, "NAT keepalive").changed() {
+                account.keepalive_secs = if keepalive_on { Some(15) } else { None };
+                edited = true;
+            }
+            if let Some(secs) = &mut account.keepalive_secs {
+                ui.horizontal(|ui| {
+                    ui.label("every (seconds):");
+                    edited |= ui.add(egui::DragValue::new(secs).range(5..=300)).changed();
+                    info_hint(ui, palette, "Sends a lone empty packet to the registrar on this \
+                        interval, to hold a NAT/firewall's outbound binding open between registrations.");
+                });
+            }
+
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.label("Media encryption:");
+                egui::ComboBox::from_id_source("settings_media_encryption")
+                    .selected_text(match account.media_encryption {
+                        MediaEncryption::MatchTransport => "Match transport (default)",
+                        MediaEncryption::Disabled => "Disabled",
+                        MediaEncryption::Enabled => "Always (SRTP)",
+                        MediaEncryption::Zrtp => "ZRTP (experimental)",
+                    })
+                    .show_ui(ui, |ui| {
+                        edited |= ui.selectable_value(&mut account.media_encryption, MediaEncryption::MatchTransport, "Match transport (default)").changed();
+                        edited |= ui.selectable_value(&mut account.media_encryption, MediaEncryption::Disabled, "Disabled").changed();
+                        edited |= ui.selectable_value(&mut account.media_encryption, MediaEncryption::Enabled, "Always (SRTP)").changed();
+                        edited |= ui.selectable_value(&mut account.media_encryption, MediaEncryption::Zrtp, "ZRTP (experimental)").changed();
+                    });
+            });
+            info_hint(ui, palette, "\"Match transport\" offers SRTP exactly when the signaling \
+                transport is TLS (today's behavior); the other two are independent of transport. \
+                ZRTP is a from-scratch implementation, verified only against itself (two DeeLip \
+                instances) in this codebase's own test suite -- not against any other ZRTP client. \
+                Not supported in conference calls (falls back to no encryption for the merged call).");
+
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                edited |= ui.checkbox(&mut account.video_enabled, "Enable video (H.264)").changed();
+                info_hint(ui, palette, "Offers/accepts a video leg (H.264, 640x480 @15fps) \
+                    alongside audio for calls on this account. Needs a working camera (see the \
+                    Video section below) to send video; you can still receive and view the other \
+                    party's video without one. Not supported in conference calls.");
+            });
+
+            ui.add_space(6.0);
+            ui.label("Public address (optional):");
+            ui.horizontal(|ui| {
+                edited |= optional_text_field(ui, &mut account.public_address, "e.g. 203.0.113.5");
+                info_hint(ui, palette, "Overrides the address advertised in Contact/SDP for this \
+                    account, instead of the globally STUN-discovered external IP.");
+            });
+
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                edited |= ui.checkbox(&mut account.allow_ip_rewrite, "Allow IP Rewrite").changed();
+                info_hint(ui, palette, "Rewrites the advertised Contact/SDP IP from the \
+                    registrar's own received= feedback on each (re-)registration -- a STUN-free \
+                    way to self-discover a public address. Ignored while Public address is set.");
+            });
+
+            ui.add_space(6.0);
+            let mut ice_override_on = account.ice_enabled.is_some();
+            ui.horizontal(|ui| {
+                if ui.checkbox(&mut ice_override_on, "Override global ICE setting for this account").changed() {
+                    account.ice_enabled = if ice_override_on { Some(self.config.ice_enabled) } else { None };
+                    edited = true;
+                }
+                info_hint(ui, palette, "Lets this one account use a different ICE setting than \
+                    the global one in Network below -- e.g. disable ICE for a local-only PBX \
+                    while keeping it on for other accounts.");
+            });
+            if let Some(ice_on) = &mut account.ice_enabled {
+                edited |= ui.checkbox(ice_on, "Use ICE (RFC 8445) for this account").changed();
+            }
+        });
+
+        if !self.config.accounts.iter().any(|a| a.enabled) {
+            ui.label(RichText::new(
+                "Warning: no accounts are enabled — DeeLip won't be able to register on restart."
+            ).color(palette.ringing));
+        }
+
+        edited
+    }
+
+    /// Restart required -- returns whether anything changed.
+    fn show_audio_section(&mut self, ui: &mut Ui, palette: &Palette) -> bool {
+        let mut edited = false;
+        ui.label(RichText::new("Audio").font(theme::font_heading(13.5)));
+        theme::full_width_card(ui, *palette, |ui| {
+            let (input_names, output_names) = self.audio_device_cache
+                .get_or_insert_with(|| (list_device_names(true), list_device_names(false)))
+                .clone();
+
+            if ui.button("Refresh device list").clicked() {
+                self.audio_device_cache = Some((list_device_names(true), list_device_names(false)));
+            }
+
+            egui::Grid::new("settings_audio_grid")
+                .num_columns(2)
+                .spacing([8.0, 4.0])
+                .show(ui, |ui| {
+                    edited |= device_picker(ui, "settings_input_device", "Input device:", &mut self.config.audio.input_device, &input_names);
+                    ui.end_row();
+                    edited |= device_picker(ui, "settings_output_device", "Output device:", &mut self.config.audio.output_device, &output_names);
+                    ui.end_row();
+                    edited |= device_picker(ui, "settings_ringtone_device", "Ringing device:", &mut self.config.audio.ringtone_device, &output_names);
+                    ui.end_row();
+                });
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Ringing device").color(palette.ink_muted).small());
+                info_hint(ui, palette, "Independent of the Output device above -- lets the \
+                    ringtone play on a different device than call audio, e.g. ring on \
+                    speakers, talk on a headset.");
+            });
+
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.label("Custom ringtone (WAV):");
+                let name = self.config.audio.ringtone_file.as_deref()
+                    .and_then(|p| std::path::Path::new(p).file_name())
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "Built-in tone".into());
+                ui.label(RichText::new(name).color(palette.ink_muted));
+                if ui.small_button("Choose…").clicked() {
+                    if let Some(path) = rfd::FileDialog::new().add_filter("WAV", &["wav"]).pick_file() {
+                        self.config.audio.ringtone_file = Some(path.to_string_lossy().into_owned());
+                        edited = true;
+                    }
+                }
+                if self.config.audio.ringtone_file.is_some() && ui.small_button("Clear").clicked() {
+                    self.config.audio.ringtone_file = None;
+                    edited = true;
+                }
+            });
+
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.label("Ringtone volume:");
+                edited |= ui.add(egui::Slider::new(&mut self.config.audio.ringtone_volume, 0.0..=2.0)
+                    .fixed_decimals(2)).changed();
+            });
+
+            ui.add_space(6.0);
+            edited |= ui.checkbox(&mut self.config.audio.echo_cancellation, "Echo cancellation").changed();
+            ui.horizontal(|ui| {
+                edited |= ui.checkbox(&mut self.config.audio.agc_enabled, "Automatic microphone gain control").changed();
+                info_hint(ui, palette, "Adaptively boosts a quiet mic signal and limits a loud one.");
+            });
+
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                edited |= ui.checkbox(&mut self.config.recording_enabled, "Record calls").changed();
+                info_hint(ui, palette, "Saves locally to ~/.config/deelip/recordings by default \
+                    (see Save to below) -- never uploaded anywhere. Check your local laws on \
+                    call-recording consent before enabling.");
+            });
+            if self.config.recording_enabled {
+                ui.horizontal(|ui| {
+                    ui.label("Format:");
+                    egui::ComboBox::from_id_source("settings_recording_format")
+                        .selected_text(match self.config.recording_format {
+                            RecordingFormat::Wav => "WAV (lossless, larger files)",
+                            RecordingFormat::Mp3 => "MP3 (lossy, smaller files)",
+                        })
+                        .show_ui(ui, |ui| {
+                            edited |= ui.selectable_value(&mut self.config.recording_format, RecordingFormat::Wav, "WAV (lossless, larger files)").changed();
+                            edited |= ui.selectable_value(&mut self.config.recording_format, RecordingFormat::Mp3, "MP3 (lossy, smaller files)").changed();
+                        });
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Save to:");
+                    let shown = self.config.recordings_dir_override.as_deref()
+                        .unwrap_or("~/.config/deelip/recordings (default)");
+                    ui.label(RichText::new(shown).color(palette.ink_muted));
+                    if ui.small_button("Choose…").clicked() {
+                        if let Some(dir) = rfd::FileDialog::new().pick_folder() {
+                            self.config.recordings_dir_override = Some(dir.to_string_lossy().into_owned());
+                            edited = true;
+                        }
+                    }
+                    if self.config.recordings_dir_override.is_some() && ui.small_button("Reset").clicked() {
+                        self.config.recordings_dir_override = None;
+                        edited = true;
+                    }
+                });
+            }
+        });
+        edited
+    }
+
+    /// Restart required -- returns whether anything changed.
+    fn show_video_section(&mut self, ui: &mut Ui, palette: &Palette) -> bool {
+        let mut edited = false;
+        ui.label(RichText::new("Video").font(theme::font_heading(13.5)));
+        theme::full_width_card(ui, *palette, |ui| {
+            let cameras = self.camera_device_cache
+                .get_or_insert_with(|| deelip_media::video_capture::list_cameras()
+                    .into_iter().map(|(_, name)| name).collect())
+                .clone();
+
+            if ui.button("Refresh camera list").clicked() {
+                self.camera_device_cache = Some(deelip_media::video_capture::list_cameras()
+                    .into_iter().map(|(_, name)| name).collect());
+            }
+
+            ui.horizontal(|ui| {
+                edited |= device_picker(ui, "settings_camera_device", "Camera:", &mut self.config.audio.camera_device, &cameras);
+                info_hint(ui, palette, "Only affects outgoing video -- receiving and displaying \
+                    the other party's video works with no camera at all. Has no effect unless \
+                    Enable video (H.264) is also on for the account placing/answering the call.");
+            });
+            if cameras.is_empty() {
+                empty_state(ui, palette, "No cameras detected -- video calls will still \
+                    receive and display the other party's video without one.");
+            }
+        });
+        edited
+    }
+
+    /// Restart required -- returns whether anything changed.
+    fn show_network_section(&mut self, ui: &mut Ui, palette: &Palette) -> bool {
+        let mut edited = false;
+        ui.label(RichText::new("Network").font(theme::font_heading(13.5)));
+        theme::full_width_card(ui, *palette, |ui| {
+            egui::Grid::new("settings_network_grid")
+                .num_columns(2)
+                .spacing([8.0, 4.0])
+                .show(ui, |ui| {
+                    ui.label("Local SIP port:");
+                    ui.horizontal(|ui| {
+                        edited |= ui.add(egui::DragValue::new(&mut self.config.local_sip_port)).changed();
+                        info_hint(ui, palette, "Base port this app binds for signaling. Each \
+                            additional enabled account (Accounts above) uses the next port up. \
+                            Restart required to apply.");
+                    });
+                    ui.end_row();
+
+                    ui.label("STUN server:");
+                    ui.horizontal(|ui| {
+                        edited |= optional_text_field(ui, &mut self.config.stun_server, "e.g. stun.l.google.com:19302");
+                        info_hint(ui, palette, "Discovers your public IP/port for NAT traversal -- \
+                            used as ICE's fallback (or directly, if ICE above is off).");
+                    });
+                    ui.end_row();
+
+                    ui.label("TURN server:");
+                    ui.horizontal(|ui| {
+                        edited |= optional_text_field(ui, &mut self.config.turn_server, "e.g. turn.example.com:3478");
+                        info_hint(ui, palette, "Relay server used when direct/STUN NAT traversal \
+                            fails (e.g. symmetric NAT on both ends). Needs the Username/Password \
+                            below if the server requires auth.");
+                    });
+                    ui.end_row();
+
+                    ui.label("TURN username:");
+                    edited |= optional_text_field(ui, &mut self.config.turn_username, "");
+                    ui.end_row();
+
+                    ui.label("TURN password:");
+                    edited |= optional_password_field(ui, &mut self.config.turn_password);
+                    ui.end_row();
+
+                    ui.label("Custom nameserver:");
+                    ui.horizontal(|ui| {
+                        edited |= optional_text_field(ui, &mut self.config.custom_nameserver, "e.g. 1.1.1.1");
+                        info_hint(ui, palette, "DNS server used for SIP server / SRV lookups, \
+                            instead of the OS-configured resolver.");
+                    });
+                    ui.end_row();
+                });
+            ui.horizontal(|ui| {
+                edited |= ui.checkbox(&mut self.config.dns_srv_enabled,
+                    "Use DNS SRV records to locate the SIP server"
+                ).changed();
+                info_hint(ui, palette, "Looks up _sip._udp/_tcp or _sips._tcp for each \
+                    account's server host before falling back to a plain A/AAAA lookup. \
+                    Restart required to apply.");
+            });
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                edited |= ui.checkbox(&mut self.config.ice_enabled,
+                    "Use ICE (RFC 8445) for NAT traversal, falling back to the above if it fails"
+                ).changed();
+                info_hint(ui, palette, "Takes effect on the next call placed or answered, \
+                    not calls already in progress.");
+            });
+            ui.add_space(6.0);
+            let mut use_rtp_range = self.config.rtp_port_min.is_some() || self.config.rtp_port_max.is_some();
+            ui.horizontal(|ui| {
+                if ui.checkbox(&mut use_rtp_range, "Restrict RTP to a port range").changed() {
+                    if use_rtp_range {
+                        self.config.rtp_port_min.get_or_insert(10000);
+                        self.config.rtp_port_max.get_or_insert(20000);
+                    } else {
+                        self.config.rtp_port_min = None;
+                        self.config.rtp_port_max = None;
+                    }
+                    edited = true;
+                }
+                info_hint(ui, palette, "Pin RTP media to a fixed port range for firewall/NAT \
+                    port-forwarding, instead of an OS-assigned port every call. Restart required to apply.");
+            });
+            if use_rtp_range {
+                let mut min = self.config.rtp_port_min.unwrap_or(10000);
+                let mut max = self.config.rtp_port_max.unwrap_or(20000);
+                ui.horizontal(|ui| {
+                    ui.label("Min:");
+                    edited |= ui.add(egui::DragValue::new(&mut min).range(1..=65534)).changed();
+                    ui.label("Max:");
+                    edited |= ui.add(egui::DragValue::new(&mut max).range(1..=65535)).changed();
+                });
+                self.config.rtp_port_min = Some(min);
+                self.config.rtp_port_max = Some(max.max(min));
+            }
+        });
+        edited
+    }
+
+    /// Restart required -- returns whether anything changed.
+    fn show_directory_section(&mut self, ui: &mut Ui, palette: &Palette) -> bool {
+        let mut edited = false;
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Directory (LDAP)").font(theme::font_heading(13.5)));
+            info_hint(ui, palette, "Corporate/LDAP directory lookup, shown in the Directory tab \
+                -- read-only search, never writes back to the directory. Restart required to apply.");
+        });
+        theme::full_width_card(ui, *palette, |ui| {
+            egui::Grid::new("settings_ldap_grid")
+                .num_columns(2)
+                .spacing([8.0, 4.0])
+                .show(ui, |ui| {
+                    ui.label("Server:");
+                    edited |= optional_text_field(ui, &mut self.config.ldap_server, "e.g. ldap.example.com");
+                    ui.end_row();
+
+                    ui.label("Port:");
+                    edited |= ui.add(egui::DragValue::new(&mut self.config.ldap_port)).changed();
+                    ui.end_row();
+
+                    ui.label("Base DN:");
+                    edited |= optional_text_field(ui, &mut self.config.ldap_base_dn, "e.g. dc=example,dc=com");
+                    ui.end_row();
+
+                    ui.label("Bind DN (optional):");
+                    ui.horizontal(|ui| {
+                        edited |= optional_text_field(ui, &mut self.config.ldap_bind_dn, "e.g. cn=readonly,dc=example,dc=com");
+                        info_hint(ui, palette, "Leave blank for an anonymous bind, if the \
+                            directory allows unauthenticated search.");
+                    });
+                    ui.end_row();
+
+                    ui.label("Bind password:");
+                    edited |= optional_password_field(ui, &mut self.config.ldap_bind_password);
+                    ui.end_row();
+                });
+            ui.horizontal(|ui| {
+                edited |= ui.checkbox(&mut self.config.ldap_use_tls, "Use TLS (ldaps://)").changed();
+                info_hint(ui, palette, "Connect via implicit TLS instead of plain ldap://.");
+            });
+            ui.add_space(4.0);
+            ui.label("Search filter template (optional):");
+            ui.horizontal(|ui| {
+                edited |= optional_text_field(ui, &mut self.config.ldap_search_filter, "(|(cn=*{query}*)(mail=*{query}*))");
+                info_hint(ui, palette, "\"{query}\" is replaced with the (escaped) search text. \
+                    Empty: falls back to a built-in filter matching cn/displayName/mail/sn/givenName.");
+            });
+        });
+        edited
+    }
+
+    /// Restart required -- returns whether anything changed.
+    fn show_global_hotkeys_section(&mut self, ui: &mut Ui, palette: &Palette) -> bool {
+        let mut edited = false;
+        ui.label(RichText::new("Global Hotkeys").font(theme::font_heading(13.5)));
+        theme::full_width_card(ui, *palette, |ui| {
+            ui.horizontal(|ui| {
+                edited |= ui.checkbox(&mut self.config.global_hotkeys_enabled,
+                    "Enable system-wide Answer/Hangup/Mute hotkeys (Linux: X11 only)"
+                ).changed();
+                info_hint(ui, palette, "Format: \"Ctrl+Alt+A\" style. Restart required to apply.");
+            });
+            if self.config.global_hotkeys_enabled {
+                egui::Grid::new("hotkeys_grid").num_columns(2).show(ui, |ui| {
+                    ui.label("Answer:");
+                    edited |= ui.text_edit_singleline(&mut self.config.hotkey_answer).changed();
+                    ui.end_row();
+                    ui.label("Hangup:");
+                    edited |= ui.text_edit_singleline(&mut self.config.hotkey_hangup).changed();
+                    ui.end_row();
+                    ui.label("Mute:");
+                    edited |= ui.text_edit_singleline(&mut self.config.hotkey_mute).changed();
+                    ui.end_row();
+                });
+            }
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                edited |= ui.checkbox(&mut self.config.handle_media_buttons,
+                    "Handle Media Buttons (headset Play/Pause answers/hangs up)"
+                ).changed();
+                info_hint(ui, palette, "Independent of the toggle above -- grabs the hardware \
+                    media Play/Pause key (Linux: X11 only) to answer a ringing call or hang up \
+                    the active one, like a headset's hook button. Restart required to apply.");
+            });
+        });
+        edited
+    }
+}
+
+/// The Settings window's own OS-level icon -- same source image as the main
+/// window's (`src/main.rs::load_window_icon`), duplicated here rather than
+/// shared since that helper lives in the binary crate, not this library
+/// one. Loaded fresh each time `show_settings_modal` opens the viewport
+/// (only happens on the open-Settings click, not per frame) rather than
+/// cached, since decoding a small PNG once per open is not worth the extra
+/// state to avoid.
+fn settings_window_icon() -> egui::IconData {
+    const ICON_BYTES: &[u8] = include_bytes!("../../../../assets/icon.png");
+    let img = image::load_from_memory(ICON_BYTES)
+        .expect("assets/icon.png must be a valid image")
+        .into_rgba8();
+    let (width, height) = img.dimensions();
+    egui::IconData {
+        rgba: img.into_raw(),
+        width,
+        height,
     }
 }
 

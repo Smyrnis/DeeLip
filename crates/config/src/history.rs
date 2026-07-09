@@ -71,13 +71,13 @@ impl CallHistory {
         )?;
         let records = stmt
             .query_map([], |row| {
-                let direction_str: String = row.get(1)?;
-                let status_str: String = row.get(4)?;
+                let direction_str: String = row.get("direction")?;
+                let status_str: String = row.get("status")?;
                 Ok(CallRecord {
-                    remote_uri: row.get(0)?,
+                    remote_uri: row.get("remote_uri")?,
                     direction: call_direction_from_str(&direction_str),
-                    timestamp: row.get(2)?,
-                    duration_secs: row.get(3)?,
+                    timestamp: row.get("timestamp")?,
+                    duration_secs: row.get("duration_secs")?,
                     status: call_status_from_str(&status_str),
                 })
             })?

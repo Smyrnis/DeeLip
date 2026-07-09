@@ -9,9 +9,14 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 
 /// The GitHub `owner/repo` slug releases are checked against.
 pub const REPO: &str = "Smyrnis/DeeLip";
+
+/// The checksums file `.github/workflows/package.yml` publishes alongside
+/// every release's other assets (plain `sha256sum *` output).
+const CHECKSUMS_ASSET_NAME: &str = "SHA256SUMS.txt";
 
 #[derive(Debug, Clone)]
 pub struct ReleaseInfo {
@@ -19,6 +24,14 @@ pub struct ReleaseInfo {
     pub version: String,
     pub html_url: String,
     tar_gz_url: Option<String>,
+    /// Expected SHA-256 of the `.tar.gz` asset, parsed from this release's
+    /// `SHA256SUMS.txt` asset -- `None` if that asset is missing (e.g. a
+    /// release published before this checksum step existed) or didn't
+    /// contain a line matching the tar.gz's filename. `download_and_replace`
+    /// treats `None` as "nothing to verify against" and warns rather than
+    /// refusing to update, so an older release doesn't get permanently
+    /// stuck unable to self-update.
+    tar_gz_sha256: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -54,18 +67,55 @@ pub fn check_latest(current: &str) -> anyhow::Result<Option<ReleaseInfo>> {
         return Ok(None);
     };
 
-    let tar_gz_url = release
-        .assets
-        .iter()
-        .find(|a| a.name.ends_with(".tar.gz"))
-        .map(|a| a.browser_download_url.clone());
+    let tar_gz_asset = release.assets.iter().find(|a| a.name.ends_with(".tar.gz"));
+    let tar_gz_url = tar_gz_asset.map(|a| a.browser_download_url.clone());
+    let tar_gz_sha256 = tar_gz_asset.and_then(|asset| {
+        let checksums_url = release
+            .assets
+            .iter()
+            .find(|a| a.name == CHECKSUMS_ASSET_NAME)?
+            .browser_download_url
+            .as_str();
+        fetch_expected_sha256(checksums_url, &asset.name)
+    });
 
     Ok(Some(ReleaseInfo {
         tag: release.tag_name,
         version,
         html_url: release.html_url,
         tar_gz_url,
+        tar_gz_sha256,
     }))
+}
+
+/// Fetches `checksums_url` (a `SHA256SUMS.txt` asset) and returns the hex
+/// digest for the line matching `filename`, if any -- `None` on any
+/// failure (network error, missing asset, no matching line) rather than
+/// propagating an error, since a release without a usable checksum just
+/// means nothing to verify against later, not a failed update check.
+fn fetch_expected_sha256(checksums_url: &str, filename: &str) -> Option<String> {
+    let body = ureq::get(checksums_url)
+        .header("User-Agent", "deelip-updater")
+        .call()
+        .ok()?
+        .body_mut()
+        .read_to_string()
+        .ok()?;
+    parse_sha256sums(&body, filename)
+}
+
+/// The pure parsing half of `fetch_expected_sha256`, split out so it's
+/// testable against a hand-built string instead of a real network fetch.
+/// `body` is plain `sha256sum` output (one `<hash>  <name>` line per file);
+/// tolerates both its text-mode (`<hash>  <name>`) and binary-mode
+/// (`<hash> *<name>`) line formats.
+fn parse_sha256sums(body: &str, filename: &str) -> Option<String> {
+    body.lines().find_map(|line| {
+        let mut parts = line.splitn(2, char::is_whitespace);
+        let hash = parts.next()?;
+        let name = parts.next()?.trim_start_matches([' ', '*']);
+        (name == filename).then(|| hash.to_ascii_lowercase())
+    })
 }
 
 /// Returns `tag`'s version string (leading `v` stripped) if it parses as
@@ -113,9 +163,11 @@ fn dir_is_writable(dir: &Path) -> bool {
     }
 }
 
-/// Downloads `release`'s `.tar.gz` asset, extracts the `deelip` binary from
-/// it, and atomically swaps it in for the currently running executable.
-/// Only meaningful (and only ever called) when `can_self_replace()` is true.
+/// Downloads `release`'s `.tar.gz` asset, verifies its checksum (if one was
+/// published -- see `ReleaseInfo::tar_gz_sha256`), extracts the `deelip`
+/// binary from it, and atomically swaps it in for the currently running
+/// executable. Only meaningful (and only ever called) when
+/// `can_self_replace()` is true.
 ///
 /// Linux allows replacing/unlinking the file backing an already-running
 /// process -- this process keeps executing fine off its old (now-unlinked)
@@ -145,10 +197,35 @@ pub fn download_and_replace(release: &ReleaseInfo) -> anyhow::Result<()> {
             .context("Saving downloaded archive")?;
     }
 
-    let current_exe = std::env::current_exe().context("Locating running executable")?;
-    let result = install_from_archive(&archive_path, &current_exe);
+    let result = verify_checksum(&archive_path, release.tar_gz_sha256.as_deref()).and_then(|()| {
+        let current_exe = std::env::current_exe().context("Locating running executable")?;
+        install_from_archive(&archive_path, &current_exe)
+    });
     let _ = std::fs::remove_dir_all(&tmp_dir);
     result
+}
+
+/// Verifies `archive_path`'s SHA-256 matches `expected` before anything
+/// gets extracted/installed from it -- the actual integrity check guarding
+/// against a corrupted download or a tampered release asset. `expected ==
+/// None` (no checksum was published for this release) only warns and lets
+/// the install proceed, rather than hard-failing -- see
+/// `ReleaseInfo::tar_gz_sha256`'s doc comment for why.
+fn verify_checksum(archive_path: &Path, expected: Option<&str>) -> anyhow::Result<()> {
+    let Some(expected) = expected else {
+        tracing::warn!("No published checksum for this release -- installing unverified");
+        return Ok(());
+    };
+    let mut file =
+        std::fs::File::open(archive_path).context("Reopening archive to verify checksum")?;
+    let mut hasher = Sha256::new();
+    std::io::copy(&mut file, &mut hasher).context("Hashing downloaded archive")?;
+    let actual = format!("{:x}", hasher.finalize());
+    if actual.eq_ignore_ascii_case(expected) {
+        Ok(())
+    } else {
+        anyhow::bail!("Checksum mismatch (expected {expected}, got {actual}) -- refusing to install")
+    }
 }
 
 /// The pure extract-and-swap-in half of [`download_and_replace`], split out

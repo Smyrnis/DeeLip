@@ -1,5 +1,3 @@
-use deelip_config::{CallStatus, SipAccount};
-use deelip_sip::AudioCodec;
 use egui::{RichText, Ui};
 
 use crate::theme::{self, Palette};
@@ -10,11 +8,11 @@ use crate::theme::{self, Palette};
 /// everything shares one row, MicroSIP-style.
 pub(crate) fn status_bar(ui: &mut Ui, palette: &Palette, text: &str, ok: bool, held: bool) {
     let color = if held {
-        palette.warn
+        palette.ringing
     } else if ok {
-        palette.accent
+        palette.signal
     } else {
-        palette.warn
+        palette.ringing
     };
     ui.label(RichText::new("●").color(color));
     ui.label(text);
@@ -31,7 +29,7 @@ pub(crate) fn list_row_divider(ui: &Ui, palette: &Palette, row_rect: egui::Rect)
     ui.painter().hline(
         row_rect.x_range(),
         row_rect.bottom(),
-        egui::Stroke::new(1.0, palette.divider),
+        egui::Stroke::new(1.0, palette.border),
     );
 }
 
@@ -64,19 +62,77 @@ pub(crate) fn list_row(
     if row.hovered() {
         ui.painter().set(
             bg_idx,
-            egui::Shape::rect_filled(row.rect, 0.0, palette.row_hover),
+            egui::Shape::rect_filled(row.rect, 0.0, palette.surface_hover),
         );
     }
     list_row_divider(ui, palette, row.rect);
 }
 
-/// A small "ⓘ" icon that reveals `text` as a tooltip on hover -- Settings'
-/// replacement for always-visible small-gray-text footnotes ("Applies
-/// immediately -- no restart needed.", etc.), so each section/field reads as
-/// one line with the explanation tucked away instead of a wall of captions.
+/// Same as `list_row`, but also attaches a right-click context menu to the
+/// row background -- History/Contacts use this instead of `list_row` now
+/// that their per-row actions (Call/Message/Copy/Delete/etc.) live behind a
+/// right-click menu (MicroSIP-style) rather than always-visible inline
+/// buttons. `row.interact(Sense::click())` upgrades the row's default
+/// hover-only sense so `context_menu` can detect a right click on it, per
+/// egui's own documented pattern (`Response::interact`'s doc example) --
+/// this doesn't steal clicks from child widgets like the name label, since
+/// those sense clicks independently by their own id/rect.
+///
+/// `menu_contents` must not capture anything `add_contents` also mutably
+/// captures -- the two closures are constructed together at the call site
+/// but only one runs per frame (the menu only opens on right-click), so
+/// borrowing the same `&mut` from both won't compile.
+pub(crate) fn list_row_menu(
+    ui: &mut Ui,
+    palette: &Palette,
+    id_source: impl std::hash::Hash,
+    add_contents: impl FnOnce(&mut Ui),
+    menu_contents: impl FnOnce(&mut Ui),
+) {
+    let bg_idx = ui.painter().add(egui::Shape::Noop);
+    let row = ui
+        .push_id(id_source, |ui| ui.horizontal(add_contents))
+        .inner
+        .response;
+    if row.hovered() {
+        ui.painter().set(
+            bg_idx,
+            egui::Shape::rect_filled(row.rect, 0.0, palette.surface_hover),
+        );
+    }
+    list_row_divider(ui, palette, row.rect);
+    row.interact(egui::Sense::click()).context_menu(menu_contents);
+}
+
+/// A row's primary name/number label, double-click-sensing so
+/// History/Contacts can trigger `AppConfig::default_list_action` --
+/// deliberately just this one label (not the whole row): a plain
+/// `ui.label()` senses only hover by default, and upgrading a *whole row*
+/// to `Sense::click()` would compete with the row's own quick-action
+/// buttons for clicks (egui's hit-testing gives the *last*-added widget at
+/// a position priority, and the buttons are added first) -- staying
+/// scoped to a single non-overlapping label sidesteps that entirely.
+/// Returns whether it was just double-clicked.
+pub(crate) fn double_clickable_label(ui: &mut Ui, text: impl Into<egui::WidgetText>) -> bool {
+    ui.add(egui::Label::new(text).sense(egui::Sense::click()))
+        .double_clicked()
+}
+
+/// A small "(i)" marker that reveals `text` as a tooltip on hover --
+/// Settings' replacement for always-visible small-gray-text footnotes
+/// ("Applies immediately -- no restart needed.", etc.), so each
+/// section/field reads as one line with the explanation tucked away
+/// instead of a wall of captions. Plain text, not
+/// `egui_phosphor::regular::INFO` -- that codepoint is one of the broken
+/// ones in the bundled icon font (see `theme.rs`'s module doc); it
+/// silently rendered as scattered dots instead of a circled "i".
 pub(crate) fn info_hint(ui: &mut Ui, palette: &Palette, text: &str) {
-    ui.label(RichText::new(egui_phosphor::regular::INFO).color(palette.muted))
-        .on_hover_text(text);
+    ui.label(
+        RichText::new("(i)")
+            .font(egui::FontId::new(10.5, egui::FontFamily::Monospace))
+            .color(palette.ink_muted),
+    )
+    .on_hover_text(text);
 }
 
 /// One Settings section: a bold title (with an optional `info_hint` beside
@@ -92,7 +148,7 @@ pub(crate) fn settings_section<R>(
     add_contents: impl FnOnce(&mut Ui) -> R,
 ) -> R {
     ui.horizontal(|ui| {
-        ui.label(RichText::new(title).strong());
+        ui.label(RichText::new(title).font(theme::font_heading(13.5)));
         if let Some(hint) = hint {
             info_hint(ui, palette, hint);
         }
@@ -137,7 +193,7 @@ pub(crate) fn device_picker(
 /// that gains this treatment later can't render as a differently-styled
 /// plain label by accident.
 pub(crate) fn empty_state(ui: &mut Ui, palette: &Palette, text: &str) {
-    ui.label(RichText::new(text).color(palette.muted).small());
+    ui.label(RichText::new(text).color(palette.ink_muted).small());
 }
 
 /// Prompt for a save location (via `rfd`) and write `content` to it,
@@ -163,9 +219,9 @@ pub(crate) fn save_text_file(
     }
 }
 
-/// A registration-status dot (`palette.accent` green when registered,
-/// `palette.muted` otherwise) followed by the plain-colored account label,
-/// as one `LayoutJob` -- so account pickers read the same "online" green as
+/// A registration-status dot (`palette.signal` when registered,
+/// `palette.ink_muted` otherwise) followed by the plain-colored account label,
+/// as one `LayoutJob` -- so account pickers read the same "online" color as
 /// the main status bar's dot instead of an uncolored `●`/`○` character
 /// baked into a plain string.
 pub(crate) fn account_status_label(
@@ -176,9 +232,9 @@ pub(crate) fn account_status_label(
 ) -> egui::text::LayoutJob {
     let font_id = egui::TextStyle::Body.resolve(ui.style());
     let dot_color = if reg_ok {
-        palette.accent
+        palette.signal
     } else {
-        palette.muted
+        palette.ink_muted
     };
     let mut job = egui::text::LayoutJob::default();
     job.append(
@@ -213,19 +269,30 @@ pub(crate) fn phone_keypad(ui: &mut Ui, palette: Palette, mut on_press: impl FnM
         ['7', '8', '9'],
         ['*', '0', '#'],
     ];
-    ui.vertical_centered(|ui| {
-        for row in ROWS {
-            ui.horizontal(|ui| {
-                for digit in row {
-                    let button = egui::Button::new(keypad_button_text(digit, palette))
-                        .rounding(egui::Rounding::same(28.0));
-                    if ui.add_sized([56.0, 56.0], button).clicked() {
-                        on_press(digit);
-                    }
+    // v2: a rounded-square calculator-style key, not a circle -- one of
+    // the concrete "less playful" changes -- and smaller, for the denser
+    // v2 layout.
+    const BUTTON: f32 = 48.0;
+    // `ui.vertical_centered` only centers single fixed-size children -- a
+    // nested `ui.horizontal` row reports its own min_rect starting flush at
+    // the container's left edge, so relying on it left every row jammed
+    // against the left edge instead of centered. Centering each row's
+    // exact known width (3 buttons + 2 gaps) via an explicit leading
+    // `add_space` is the robust way to center a *group* of widgets.
+    let row_width = 3.0 * BUTTON + 2.0 * ui.spacing().item_spacing.x;
+    for row in ROWS {
+        ui.horizontal(|ui| {
+            let margin = ((ui.available_width() - row_width) / 2.0).max(0.0);
+            ui.add_space(margin);
+            for digit in row {
+                let button = egui::Button::new(keypad_button_text(digit, palette))
+                    .rounding(egui::Rounding::same(6.0));
+                if ui.add_sized([BUTTON, BUTTON], button).clicked() {
+                    on_press(digit);
                 }
-            });
-        }
-    });
+            }
+        });
+    }
 }
 
 fn keypad_button_text(digit: char, palette: Palette) -> egui::text::LayoutJob {
@@ -237,7 +304,8 @@ fn keypad_button_text(digit: char, palette: Palette) -> egui::text::LayoutJob {
         &digit.to_string(),
         0.0,
         egui::TextFormat {
-            font_id: egui::FontId::proportional(20.0),
+            font_id: theme::font_mono_medium(17.0),
+            color: palette.ink,
             ..Default::default()
         },
     );
@@ -247,8 +315,8 @@ fn keypad_button_text(digit: char, palette: Palette) -> egui::text::LayoutJob {
             &format!("\n{letters}"),
             0.0,
             egui::TextFormat {
-                font_id: egui::FontId::proportional(9.0),
-                color: palette.muted,
+                font_id: egui::FontId::new(7.5, egui::FontFamily::Proportional),
+                color: palette.ink_muted,
                 ..Default::default()
             },
         );
@@ -270,142 +338,6 @@ fn digit_letters(digit: char) -> &'static str {
     }
 }
 
-/// Display label for an account picker — `display_name` if set, else `user@server`.
-pub(crate) fn account_label(account: &SipAccount) -> String {
-    match account
-        .account_name
-        .as_deref()
-        .filter(|s| !s.is_empty())
-        .or_else(|| account.display_name.as_deref().filter(|s| !s.is_empty()))
-    {
-        Some(name) => name.to_string(),
-        None => format!("{}@{}", account.username, account.server),
-    }
-}
-
-pub(crate) fn status_filter_label(filter: &Option<CallStatus>) -> &'static str {
-    match filter {
-        None => "All",
-        Some(CallStatus::Answered) => "Answered",
-        Some(CallStatus::Missed) => "Missed",
-        Some(CallStatus::Rejected) => "Rejected",
-        Some(CallStatus::Failed) => "Failed",
-    }
-}
-
-/// Quote a CSV field if it contains a comma, quote, or newline.
-pub(crate) fn csv_escape(s: &str) -> String {
-    if s.contains(',') || s.contains('"') || s.contains('\n') {
-        format!("\"{}\"", s.replace('"', "\"\""))
-    } else {
-        s.to_string()
-    }
-}
-
-/// Shorten a SIP URI for display: `sip:alice@example.com` → `alice@example.com`.
-pub(crate) fn short_uri(uri: &str) -> String {
-    uri.strip_prefix("sip:")
-        .or_else(|| uri.strip_prefix("sips:"))
-        .unwrap_or(uri)
-        .to_string()
-}
-
-/// Extract the user/number portion of a SIP URI for blocklist comparison,
-/// e.g. `sip:5551234@host;user=phone` -> `"5551234"`. Bare entries (no
-/// scheme/`@`) pass through unchanged (lowercased), so a blocklist entry can
-/// be typed as either a plain number or a full SIP URI.
-pub(crate) fn extract_user_part(uri: &str) -> String {
-    let lower = uri.trim().to_ascii_lowercase();
-    let stripped = lower
-        .strip_prefix("sip:")
-        .or_else(|| lower.strip_prefix("sips:"))
-        .unwrap_or(&lower);
-    let before_at = stripped.split('@').next().unwrap_or(stripped);
-    before_at.split(';').next().unwrap_or(before_at).to_string()
-}
-
-/// Display label for a `SipAccount::codec_order` entry in Settings.
-pub(crate) fn codec_label(s: &str) -> &'static str {
-    match s {
-        "opus" => "Opus",
-        "g722" => "G.722",
-        "pcmu" => "PCMU (G.711 μ-law)",
-        "pcma" => "PCMA (G.711 A-law)",
-        "gsm" => "GSM 06.10",
-        "ilbc" => "iLBC",
-        "g729" => "G.729",
-        _ => "Unknown",
-    }
-}
-
-/// Same table as `codec_label`, keyed by `AudioCodec` directly -- for
-/// displaying an already-negotiated codec (e.g. call statistics) rather
-/// than a `SipAccount::codec_order` entry.
-pub(crate) fn audio_codec_label(codec: AudioCodec) -> &'static str {
-    codec_label(match codec {
-        AudioCodec::Opus => "opus",
-        AudioCodec::G722 => "g722",
-        AudioCodec::Pcmu => "pcmu",
-        AudioCodec::Pcma => "pcma",
-        AudioCodec::Gsm => "gsm",
-        AudioCodec::Ilbc => "ilbc",
-        AudioCodec::G729 => "g729",
-    })
-}
-
-/// Normalize a dial-box entry into a full SIP URI. Bare numbers/usernames
-/// (no scheme, no "@") are dialed against the account's own domain, matching
-/// how MicroSIP and other softphones resolve local extensions.
-pub(crate) fn normalize_target(raw: &str, domain: &str) -> String {
-    normalize_target_with_prefix(raw, domain, "")
-}
-
-/// Same as `normalize_target`, but auto-prepends `prefix` (e.g. "9" for an
-/// outside line) to a bare number before appending the domain -- only the
-/// bare-number case gets it, since a full SIP URI or an explicit `user@host`
-/// entry is already a specific destination, not a local extension to dial
-/// out from.
-pub(crate) fn normalize_target_with_prefix(raw: &str, domain: &str, prefix: &str) -> String {
-    let raw = raw.trim();
-    let lower = raw.to_ascii_lowercase();
-    if lower.starts_with("sip:") || lower.starts_with("sips:") {
-        raw.to_string()
-    } else if raw.contains('@') {
-        format!("sip:{raw}")
-    } else {
-        format!("sip:{prefix}{raw}@{domain}")
-    }
-}
-
-pub(crate) fn unix_now() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-}
-
-pub(crate) fn format_duration(secs: u32) -> String {
-    if secs < 60 {
-        format!("{secs}s")
-    } else {
-        format!("{}m {:02}s", secs / 60, secs % 60)
-    }
-}
-
-pub(crate) fn format_age(ts: u64) -> String {
-    let age = unix_now().saturating_sub(ts);
-    match age {
-        0..=59 => format!("{age}s ago"),
-        60..=3599 => format!("{}m ago", age / 60),
-        3600..=86399 => format!("{}h ago", age / 3600),
-        _ => format!("{}d ago", age / 86400),
-    }
-}
-
 pub(crate) fn ctx_key_enter(ui: &Ui) -> bool {
     ui.input(|i| i.key_pressed(egui::Key::Enter))
 }
-
-#[cfg(test)]
-#[path = "../tests/unit/helpers.rs"]
-mod tests;

@@ -6,7 +6,7 @@ use crate::{
     client::{SipStack, REG_RECV_TIMEOUT},
     wire::auth::build_challenge_response,
     wire::message::SipMessage,
-    wire::util::{extract_expires, new_branch},
+    wire::util::{extract_expires, new_branch, parse_via_received},
 };
 
 impl SipStack {
@@ -17,6 +17,7 @@ impl SipStack {
         match resp.status_code() {
             Some(200) => {
                 info!("Registered (no auth)");
+                self.maybe_rewrite_advertised_ip(&resp);
                 return Ok(extract_expires(&resp).unwrap_or(self.account.register_expires));
             }
             Some(401) | Some(407) => {}
@@ -49,10 +50,36 @@ impl SipStack {
         match resp2.status_code() {
             Some(200) => {
                 info!("Registered");
+                self.maybe_rewrite_advertised_ip(&resp2);
                 Ok(extract_expires(&resp2).unwrap_or(self.account.register_expires))
             }
             Some(c) => Err(anyhow::anyhow!("REGISTER rejected: {c}")),
             None => Err(anyhow::anyhow!("Expected response")),
+        }
+    }
+
+    /// `SipAccount::allow_ip_rewrite`: adopt the `received=` address the
+    /// registrar's response reports on our own `Via:` header as the
+    /// advertised Contact/SDP IP going forward -- a self-discovery
+    /// alternative to a separate STUN server, re-checked on every
+    /// (re-)registration so it also self-corrects if a NAT rebinding
+    /// changes our observed address mid-session. A no-op if
+    /// `public_address` is set (an explicit override always wins) or the
+    /// response carries no `received=` param (e.g. no NAT in the path).
+    fn maybe_rewrite_advertised_ip(&mut self, resp: &SipMessage) {
+        if !self.account.allow_ip_rewrite || self.account.public_address.is_some() {
+            return;
+        }
+        let Some(via) = resp.header("Via") else {
+            return;
+        };
+        let (received, _rport) = parse_via_received(via);
+        let Some(ip) = received else {
+            return;
+        };
+        if ip != self.advertised_ip {
+            info!("Allow IP Rewrite: advertised address {} -> {ip}", self.advertised_ip);
+            self.advertised_ip = ip;
         }
     }
 

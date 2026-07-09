@@ -2,6 +2,7 @@
 
 mod contacts;
 mod dialer;
+pub(crate) mod directory;
 mod history;
 mod messages;
 mod settings;

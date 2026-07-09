@@ -3,6 +3,7 @@
 //! everything else in this crate is built on top of this layer.
 
 pub mod auth;
+pub mod dns;
 pub(crate) mod framing;
 pub mod message;
 pub mod sdp;

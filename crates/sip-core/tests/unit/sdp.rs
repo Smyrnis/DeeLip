@@ -209,3 +209,80 @@ fn vad_enabled_answer_includes_comfort_noise_for_narrowband_codec() {
     let parsed = parse_sdp(&sdp, &ALL_CODECS).unwrap();
     assert_eq!(parsed.cn_type, Some(CN_PAYLOAD_TYPE));
 }
+
+// ── Video (Phase 1 additive primitives) ─────────────────────────────────────
+
+const ALL_VIDEO_CODECS: [VideoCodec; 1] = [VideoCodec::H264];
+
+/// Concatenate an audio offer with a video media section, exactly the shape
+/// Phase 2 would eventually produce -- used only by these tests, since
+/// `build_offer` itself isn't touched in Phase 1.
+fn build_audio_video_offer() -> String {
+    let audio = build_offer("192.0.2.1", 40000, None, &ALL_CODECS, None, false);
+    let video = build_video_media_section("192.0.2.1", 40002, VideoCodec::H264, None, None);
+    format!("{audio}{video}")
+}
+
+#[test]
+fn video_media_section_round_trips() {
+    let sdp = build_audio_video_offer();
+    let sections = split_media_sections(&sdp);
+    assert_eq!(sections.len(), 2);
+    assert!(sections[0].0.starts_with("m=audio "));
+    assert!(sections[1].0.starts_with("m=video "));
+
+    let (video_m_line, video_attrs) = &sections[1];
+    let parsed = parse_video_section(video_m_line, video_attrs, &ALL_VIDEO_CODECS).unwrap();
+    assert_eq!(parsed.codec, VideoCodec::H264);
+    assert_eq!(parsed.payload_type, H264_PAYLOAD_TYPE);
+    assert_eq!(parsed.rtp_addr, "192.0.2.1:40002".parse().unwrap());
+    assert!(!parsed.is_sendonly);
+}
+
+#[test]
+fn split_media_sections_does_not_leak_attributes_across_sections() {
+    let sdp = build_audio_video_offer();
+    let sections = split_media_sections(&sdp);
+    let (_, audio_attrs) = &sections[0];
+    let (_, video_attrs) = &sections[1];
+
+    // The exact bug class this phase exists to prevent: video's own
+    // rtpmap/PT must never end up folded into the audio section (and
+    // vice versa) the way today's flat `parse_sdp_forcing` would if a
+    // second `m=` line were naively appended.
+    assert!(!audio_attrs.iter().any(|l| l.contains("H264")));
+    assert!(!audio_attrs.iter().any(|l| l.contains(&H264_PAYLOAD_TYPE.to_string())));
+    assert!(!video_attrs.iter().any(|l| l.to_ascii_lowercase().contains("opus")));
+    assert!(!video_attrs.iter().any(|l| l.contains(&OPUS_PAYLOAD_TYPE.to_string())));
+}
+
+#[test]
+fn video_section_with_srtp_and_ice() {
+    let srtp = SrtpParams::generate();
+    let ice = IceAttrs {
+        ufrag: "vfrag".into(),
+        pwd: "vpwd".into(),
+        candidates: vec!["1 1 UDP 2130706431 192.0.2.1 40002 typ host".into()],
+    };
+    let audio = build_offer("192.0.2.1", 40000, None, &ALL_CODECS, None, false);
+    let video = build_video_media_section("192.0.2.1", 40002, VideoCodec::H264, Some(&srtp), Some(&ice));
+    let sdp = format!("{audio}{video}");
+
+    let sections = split_media_sections(&sdp);
+    let (video_m_line, video_attrs) = &sections[1];
+    assert!(video_m_line.contains("RTP/SAVP"));
+    let parsed = parse_video_section(video_m_line, video_attrs, &ALL_VIDEO_CODECS).unwrap();
+    assert_eq!(parsed.srtp, Some(srtp));
+    assert_eq!(parsed.ice_ufrag.as_deref(), Some("vfrag"));
+    assert_eq!(parsed.ice_pwd.as_deref(), Some("vpwd"));
+    assert_eq!(parsed.ice_candidates.len(), 1);
+}
+
+#[test]
+fn video_payload_type_does_not_collide_with_existing_pts() {
+    for codec in ALL_CODECS {
+        assert_ne!(H264_PAYLOAD_TYPE, codec.payload_type());
+    }
+    assert_ne!(H264_PAYLOAD_TYPE, CN_PAYLOAD_TYPE);
+    assert_ne!(H264_PAYLOAD_TYPE, 101, "must not collide with the DTMF telephone-event PT");
+}

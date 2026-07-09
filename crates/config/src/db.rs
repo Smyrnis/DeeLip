@@ -49,7 +49,15 @@ CREATE TABLE IF NOT EXISTS accounts (
     public_address            TEXT,
     ice_enabled               INTEGER,
     force_incoming_codec      TEXT,
-    vad_enabled               INTEGER NOT NULL DEFAULT 0
+    vad_enabled               INTEGER NOT NULL DEFAULT 0,
+    publish_presence          INTEGER NOT NULL DEFAULT 0,
+    allow_ip_rewrite          INTEGER NOT NULL DEFAULT 0,
+    dial_plan                 TEXT NOT NULL DEFAULT '[]',
+    session_timers_enabled    INTEGER NOT NULL DEFAULT 1,
+    auto_answer_control_button INTEGER NOT NULL DEFAULT 0,
+    deny_incoming_control_button INTEGER NOT NULL DEFAULT 0,
+    local_account              INTEGER NOT NULL DEFAULT 0,
+    video_enabled              INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS contacts (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -72,6 +80,14 @@ CREATE TABLE IF NOT EXISTS messages (
     direction  TEXT NOT NULL,
     body       TEXT NOT NULL,
     timestamp  INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS zrtp_cache (
+    local_zid   TEXT NOT NULL,
+    remote_zid  TEXT NOT NULL,
+    rs1         BLOB NOT NULL,
+    rs2         BLOB NOT NULL,
+    verified    INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (local_zid, remote_zid)
 );
 "#;
 
@@ -128,6 +144,14 @@ impl Db {
             "ice_enabled INTEGER",
             "force_incoming_codec TEXT",
             "vad_enabled INTEGER NOT NULL DEFAULT 0",
+            "publish_presence INTEGER NOT NULL DEFAULT 0",
+            "allow_ip_rewrite INTEGER NOT NULL DEFAULT 0",
+            "dial_plan TEXT NOT NULL DEFAULT '[]'",
+            "session_timers_enabled INTEGER NOT NULL DEFAULT 1",
+            "auto_answer_control_button INTEGER NOT NULL DEFAULT 0",
+            "deny_incoming_control_button INTEGER NOT NULL DEFAULT 0",
+            "local_account INTEGER NOT NULL DEFAULT 0",
+            "video_enabled INTEGER NOT NULL DEFAULT 0",
         ];
         for col in COLUMNS {
             if let Err(e) = self

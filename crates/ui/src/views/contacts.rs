@@ -3,7 +3,9 @@ use deelip_sip::PresenceState;
 use egui::{RichText, Ui};
 
 use crate::app::DeelipApp;
-use crate::helpers::{account_status_label, empty_state, list_row, save_text_file};
+use crate::helpers::{
+    account_status_label, double_clickable_label, empty_state, list_row_menu, save_text_file,
+};
 
 impl DeelipApp {
     pub(crate) fn show_contacts(&mut self, ui: &mut Ui, _ctx: &egui::Context) {
@@ -26,14 +28,14 @@ impl DeelipApp {
                     self.import_contacts();
                 }
                 if ui
-                    .button(format!("{} vCard", egui_phosphor::regular::DOWNLOAD_SIMPLE))
+                    .button(format!("{} vCard", egui_phosphor::regular::EXPORT))
                     .on_hover_text("Export as vCard")
                     .clicked()
                 {
                     self.export_contacts_vcard();
                 }
                 if ui
-                    .button(format!("{} CSV", egui_phosphor::regular::DOWNLOAD_SIMPLE))
+                    .button(format!("{} CSV", egui_phosphor::regular::EXPORT))
                     .on_hover_text("Export as CSV")
                     .clicked()
                 {
@@ -47,6 +49,7 @@ impl DeelipApp {
         let mut message_target: Option<String> = None;
         let mut edit_idx: Option<usize> = None;
         let mut delete_idx: Option<usize> = None;
+        let mut default_action_target: Option<usize> = None;
 
         // Contact list
         let results: Vec<(usize, String, String, bool)> = self
@@ -65,46 +68,66 @@ impl DeelipApp {
                 for (idx, name, uri, watch_presence) in &results {
                     let palette = self.palette;
                     let presence = self.presence.get(uri).copied();
-                    list_row(ui, &palette, *idx, |ui| {
-                        ui.label(name);
-                        if *watch_presence {
-                            let color = match presence {
-                                Some(PresenceState::Available) => palette.accent,
-                                _ => palette.muted,
-                            };
-                            ui.label(RichText::new("●").color(color)).on_hover_text(
-                                match presence {
-                                    Some(PresenceState::Available) => "Available",
-                                    Some(PresenceState::Offline) => "Offline",
-                                    _ => "Unknown",
+                    list_row_menu(
+                        ui,
+                        &palette,
+                        *idx,
+                        |ui| {
+                            let name_text =
+                                RichText::new(name).font(crate::theme::font_medium(13.0));
+                            if double_clickable_label(ui, name_text) {
+                                default_action_target = Some(*idx);
+                            }
+                            if *watch_presence {
+                                let color = match presence {
+                                    Some(PresenceState::Available) => palette.signal,
+                                    _ => palette.ink_muted,
+                                };
+                                ui.label(RichText::new("●").color(color)).on_hover_text(
+                                    match presence {
+                                        Some(PresenceState::Available) => "Available",
+                                        Some(PresenceState::Offline) => "Offline",
+                                        _ => "Unknown",
+                                    },
+                                );
+                            }
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    ui.label(
+                                        RichText::new(uri)
+                                            .font(egui::FontId::new(
+                                                11.5,
+                                                egui::FontFamily::Monospace,
+                                            ))
+                                            .color(palette.ink_muted),
+                                    );
                                 },
                             );
-                        }
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.small_button(egui_phosphor::regular::PHONE).clicked() {
+                        },
+                        |ui| {
+                            if ui.button("Call").clicked() {
                                 call_target = Some(uri.clone());
+                                ui.close_menu();
                             }
-                            if ui.small_button(egui_phosphor::regular::CHAT_CIRCLE).clicked() {
+                            if ui.button("Message").clicked() {
                                 message_target = Some(uri.clone());
+                                ui.close_menu();
                             }
+                            if ui.button("Edit").clicked() {
+                                edit_idx = Some(*idx);
+                                ui.close_menu();
+                            }
+                            ui.separator();
                             if ui
-                                .small_button(
-                                    RichText::new(egui_phosphor::regular::TRASH)
-                                        .color(palette.danger),
-                                )
+                                .button(RichText::new("Delete").color(palette.danger))
                                 .clicked()
                             {
                                 delete_idx = Some(*idx);
+                                ui.close_menu();
                             }
-                            if ui
-                                .small_button(egui_phosphor::regular::PENCIL_SIMPLE)
-                                .clicked()
-                            {
-                                edit_idx = Some(*idx);
-                            }
-                            ui.label(RichText::new(uri).color(palette.muted));
-                        });
-                    });
+                        },
+                    );
                 }
             });
 
@@ -131,7 +154,7 @@ impl DeelipApp {
         } else {
             "Add Contact"
         };
-        ui.label(RichText::new(heading).strong());
+        ui.label(RichText::new(heading).font(crate::theme::font_heading(14.0)));
         ui.add_space(4.0);
         ui.horizontal(|ui| {
             ui.label("Name:");
@@ -140,6 +163,7 @@ impl DeelipApp {
             ui.add(
                 egui::TextEdit::singleline(&mut self.new_contact.sip_uri)
                     .hint_text("sip:alice@example.com")
+                    .font(egui::FontId::new(13.0, egui::FontFamily::Monospace))
                     .desired_width(f32::INFINITY),
             );
         });
@@ -210,6 +234,20 @@ impl DeelipApp {
         }
         if let Some(target) = message_target {
             self.message_from_list(target);
+        }
+        if let Some(idx) = default_action_target {
+            match self.config.default_list_action {
+                deelip_config::DefaultListAction::Call => {
+                    self.dial_from_list(self.contacts.contacts[idx].sip_uri.clone());
+                }
+                deelip_config::DefaultListAction::Message => {
+                    self.message_from_list(self.contacts.contacts[idx].sip_uri.clone());
+                }
+                deelip_config::DefaultListAction::Edit => {
+                    self.editing_contact_idx = Some(idx);
+                    self.new_contact = self.contacts.contacts[idx].clone();
+                }
+            }
         }
     }
 

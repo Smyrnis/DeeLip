@@ -12,15 +12,16 @@ use deelip_config::{SipAccount, TransportProtocol};
 use deelip_nat::{IceConnection, IceGathered, TurnRelay};
 
 use crate::{
-    call::dialog::{Dialog, PendingOfferMedia},
+    call::dialog::{Dialog, PendingOfferMedia, PendingVideoOffer},
     call::media_setup::NetworkConfig,
     events::{SipCommand, SipEvent},
     handle::SipHandle,
     subscription::mwi::MwiSubscription,
     subscription::presence::PresenceSubscription,
+    subscription::publish::PresencePublish,
     transport::SipTransport,
     wire::message::{SipMessage, SipMethod, SipStartLine},
-    wire::sdp::{AudioCodec, ParsedSdp, SrtpParams},
+    wire::sdp::{AudioCodec, ParsedSdp, ParsedVideoMedia, SrtpParams, VideoCodec},
     wire::util::local_ip_for,
 };
 
@@ -33,6 +34,13 @@ pub(crate) const PRESENCE_EVENT: &str = "presence";
 pub(crate) const PRESENCE_ACCEPT: &str = "application/pidf+xml";
 pub(crate) const MWI_EVENT: &str = "message-summary";
 pub(crate) const MWI_ACCEPT: &str = "application/simple-message-summary";
+/// RFC 4028 Session Timers: the interval we propose on our own outgoing
+/// INVITEs, and echo back (unmodified) when accepting an incoming one --
+/// 1800s (30 min) is RFC 4028's own worked example and a common default
+/// among real UAs.
+pub(crate) const SESSION_EXPIRES_DEFAULT: u32 = 1800;
+/// Floor we advertise via `Min-SE` -- RFC 4028's own suggested default.
+pub(crate) const SESSION_MIN_SE: u32 = 90;
 
 // ── Background call-setup results ─────────────────────────────────────────────
 
@@ -56,6 +64,9 @@ pub(crate) enum StackEvent {
         local_sdp:     String,
         pending_offer: PendingOfferMedia,
         ice_gathered:  Option<IceGathered>,
+        /// Video counterpart of `pending_offer`/`ice_gathered` -- `None`
+        /// whenever video wasn't offered (see `PendingVideoOffer`).
+        video: Option<PendingVideoOffer>,
     },
     /// `accept_call`'s answer is ready to send as the 200 OK.
     IncomingAnswerReady {
@@ -66,6 +77,10 @@ pub(crate) enum StackEvent {
         local_srtp: Option<SrtpParams>,
         relay:      Option<TurnRelay>,
         ice:        Option<IceConnection>,
+        /// Video counterpart of this event's audio fields, bundled into
+        /// one struct -- `None` whenever the remote didn't offer video, we
+        /// don't have it enabled, or video setup failed for this call.
+        video: Option<IncomingVideoAnswer>,
     },
     /// The offerer side's ICE connectivity checks (`on_response`'s answer
     /// handling) finished -- media is now fully resolved for an outgoing call.
@@ -80,7 +95,33 @@ pub(crate) enum StackEvent {
         cn_type:     Option<u8>,
         remote_rtp:  SocketAddr,
         remote_srtp: Option<SrtpParams>,
+        /// Video counterpart of this event's audio fields, bundled into
+        /// one struct -- `None` whenever we didn't offer video, the remote
+        /// didn't accept it, or video setup failed for this call.
+        video: Option<OutgoingVideoConnected>,
     },
+}
+
+/// Bundles `accept_call`'s resolved video-answer state for
+/// `StackEvent::IncomingAnswerReady` -- see that variant's doc comment.
+pub(crate) struct IncomingVideoAnswer {
+    pub parsed:     ParsedVideoMedia,
+    pub local_rtp:  u16,
+    pub local_srtp: Option<SrtpParams>,
+    pub relay:      Option<TurnRelay>,
+    pub ice:        Option<IceConnection>,
+}
+
+/// Bundles `on_response`'s resolved video-connected state for
+/// `StackEvent::OutgoingConnected` -- see that variant's doc comment.
+pub(crate) struct OutgoingVideoConnected {
+    pub local_rtp:   u16,
+    pub local_srtp:  Option<SrtpParams>,
+    pub relay:       Option<TurnRelay>,
+    pub ice:         Option<IceConnection>,
+    pub codec:       VideoCodec,
+    pub remote_rtp:  SocketAddr,
+    pub remote_srtp: Option<SrtpParams>,
 }
 
 // ── SIP Stack ─────────────────────────────────────────────────────────────────
@@ -93,6 +134,13 @@ pub struct SipStack {
     pub(crate) advertised_ip: String,
     pub(crate) local_port:    u16,
     pub(crate) server_addr:   SocketAddr,
+    /// Host (`account.domain()`, or `local_ip:local_port` when that's empty
+    /// -- only possible for `SipAccount::local_account`, which has no
+    /// `server`/`domain` to fall back to) used to build this account's own
+    /// From/Contact/To identity in outgoing requests. Computed once here
+    /// instead of calling `account.domain()` fresh at each call site so a
+    /// serverless account still gets a valid (non-empty) URI host.
+    pub(crate) identity_host: String,
     /// The concrete transport actually in use -- identical to
     /// `account.transport` unless that's `TransportProtocol::Auto`, in
     /// which case this is whichever of Udp/Tcp/Tls `connect_transport`
@@ -108,6 +156,10 @@ pub struct SipStack {
     pub(crate) dialogs:       HashMap<String, Dialog>,
     pub(crate) subscriptions: HashMap<String, PresenceSubscription>,
     pub(crate) mwi_subscriptions: HashMap<String, MwiSubscription>,
+    /// This account's own outgoing presence PUBLISH state -- `None` until
+    /// the first publish (see `subscription::publish`), regardless of
+    /// whether `SipAccount::publish_presence` is even enabled.
+    pub(crate) presence_publish: Option<PresencePublish>,
     /// Outstanding SIP MESSAGE requests awaiting their response, keyed by
     /// Call-ID -- MESSAGE (RFC 3428) is a standalone transaction, not part
     /// of any `Dialog`, so it can't be resolved via `dialogs`.
@@ -139,7 +191,7 @@ impl SipStack {
         cmd_rx:       CmdRx,
     ) -> Result<Self, (anyhow::Error, CmdRx)> {
         let (transport, local_ip, advertised_ip, server_addr, resolved_transport) =
-            match Self::connect_transport(&account, local_port, &external_ip).await {
+            match Self::connect_transport(&account, &network, local_port, &external_ip).await {
                 Ok(c) => c,
                 Err(e) => return Err((e, cmd_rx)),
             };
@@ -147,6 +199,11 @@ impl SipStack {
         let reg_call_id  = crate::wire::util::new_call_id(&local_ip);
         let reg_from_tag = crate::wire::util::new_tag();
         let (internal_tx, internal_rx) = mpsc::unbounded_channel();
+        let identity_host = if account.domain().is_empty() {
+            format!("{local_ip}:{local_port}")
+        } else {
+            account.domain().to_string()
+        };
 
         Ok(Self {
             transport,
@@ -156,6 +213,7 @@ impl SipStack {
             advertised_ip,
             local_port,
             server_addr,
+            identity_host,
             resolved_transport,
             reg_call_id,
             reg_from_tag,
@@ -163,6 +221,7 @@ impl SipStack {
             dialogs:   HashMap::new(),
             subscriptions: HashMap::new(),
             mwi_subscriptions: HashMap::new(),
+            presence_publish: None,
             pending_messages: HashMap::new(),
             event_tx,
             cmd_rx,
@@ -180,17 +239,67 @@ impl SipStack {
     /// retrying with.
     async fn connect_transport(
         account:     &SipAccount,
+        network:     &NetworkConfig,
         local_port:  u16,
         external_ip: &Option<String>,
     ) -> anyhow::Result<(Arc<SipTransport>, String, String, SocketAddr, TransportProtocol)> {
-        if account.transport == TransportProtocol::Auto {
-            Self::connect_transport_auto(account, local_port, external_ip).await
+        if account.local_account {
+            Self::connect_local(account, local_port, external_ip).await
+        } else if account.transport == TransportProtocol::Auto {
+            Self::connect_transport_auto(account, network, local_port, external_ip).await
         } else {
             let proto = account.transport;
             let (transport, local_ip, advertised_ip, server_addr) =
-                Self::connect_transport_concrete(account, proto, local_port, external_ip).await?;
+                Self::connect_transport_concrete(account, network, proto, local_port, external_ip).await?;
             Ok((transport, local_ip, advertised_ip, server_addr, proto))
         }
+    }
+
+    /// `SipAccount::local_account` (MicroSIP's "Local Account"/serverless
+    /// mode): bind a plain UDP listener with no registrar to resolve or
+    /// connect to at all -- there's no fixed peer, so `server_addr` is a
+    /// never-sent-to placeholder (port 0); `initiate_call` resolves each
+    /// outgoing call's real destination straight from the dialed target
+    /// instead (see `lifecycle::resolve_local_call_target`). Always UDP,
+    /// regardless of `account.transport`: TCP/TLS need a real persistent
+    /// connection to a live peer at socket-creation time (see
+    /// `SipTransport::connect`'s Tcp/Tls arms), which doesn't exist without
+    /// a fixed server.
+    async fn connect_local(
+        account:     &SipAccount,
+        local_port:  u16,
+        external_ip: &Option<String>,
+    ) -> anyhow::Result<(Arc<SipTransport>, String, String, SocketAddr, TransportProtocol)> {
+        // Ask the OS routing table which local IP it would use to reach the
+        // public internet -- purely a local routing-table lookup (a UDP
+        // `connect()` sends no packet), used here only as a stand-in for
+        // "this machine's own outbound-facing address" since there's no
+        // registrar to ask instead.
+        let local_ip =
+            local_ip_for("8.8.8.8", 80).unwrap_or_else(|_| "127.0.0.1".to_string());
+        let advertised_ip = account
+            .public_address
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .map(str::to_string)
+            .or_else(|| external_ip.clone())
+            .unwrap_or_else(|| local_ip.clone());
+
+        let bind_addr: SocketAddr = format!("0.0.0.0:{local_port}")
+            .parse()
+            .context("Invalid bind address")?;
+        let server_addr: SocketAddr = "0.0.0.0:0".parse().unwrap();
+        let transport = Arc::new(
+            SipTransport::connect(TransportProtocol::Udp, bind_addr, server_addr, "", false).await?,
+        );
+
+        info!(
+            local = %format!("{local_ip}:{local_port}"),
+            advertised = %advertised_ip,
+            "Local Account (serverless) SIP stack ready"
+        );
+
+        Ok((transport, local_ip, advertised_ip, server_addr, TransportProtocol::Udp))
     }
 
     /// Just the connection-establishing steps (DNS resolution, socket bind,
@@ -198,6 +307,7 @@ impl SipStack {
     /// direct (non-`Auto`) path and each candidate `connect_transport_auto` tries.
     async fn connect_transport_concrete(
         account:     &SipAccount,
+        network:     &NetworkConfig,
         proto:       TransportProtocol,
         local_port:  u16,
         external_ip: &Option<String>,
@@ -212,10 +322,14 @@ impl SipStack {
             .or_else(|| external_ip.clone())
             .unwrap_or_else(|| local_ip.clone());
 
-        let server_addr = tokio::net::lookup_host(format!("{connect_host}:{connect_port}"))
-            .await?
-            .next()
-            .ok_or_else(|| anyhow::anyhow!("DNS lookup failed for {connect_host}"))?;
+        let server_addr = crate::wire::dns::resolve_target(
+            &connect_host,
+            connect_port,
+            proto,
+            network.custom_nameserver.as_deref(),
+            network.dns_srv_enabled,
+        )
+        .await?;
 
         let bind_addr: SocketAddr = format!("0.0.0.0:{local_port}")
             .parse()
@@ -253,6 +367,7 @@ impl SipStack {
     /// (see `resolved_transport`).
     async fn connect_transport_auto(
         account:     &SipAccount,
+        network:     &NetworkConfig,
         local_port:  u16,
         external_ip: &Option<String>,
     ) -> anyhow::Result<(Arc<SipTransport>, String, String, SocketAddr, TransportProtocol)> {
@@ -265,7 +380,7 @@ impl SipStack {
 
         for proto in CANDIDATES {
             let connected =
-                Self::connect_transport_concrete(account, proto, local_port, external_ip).await;
+                Self::connect_transport_concrete(account, network, proto, local_port, external_ip).await;
             let (transport, local_ip, advertised_ip, server_addr) = match connected {
                 Ok(c) => c,
                 Err(e) => {
@@ -311,7 +426,7 @@ impl SipStack {
             .map_err(|(e, _)| e)?;
         let advertised_ip = stack.advertised_ip.clone();
         let secure = stack.resolved_transport == TransportProtocol::Tls;
-        let domain = stack.account.domain().to_string();
+        let domain = stack.identity_host.clone();
 
         tokio::spawn(async move {
             let mut stack: Option<SipStack> = Some(stack);
@@ -361,6 +476,14 @@ impl SipStack {
     // ── Main event loop ───────────────────────────────────────────────────────
 
     pub async fn run(mut self) -> Result<(), (anyhow::Error, CmdRx)> {
+        // `SipAccount::local_account` never registers (see the `sleep_until`
+        // branch's `if !self.account.local_account` guard below) -- without
+        // this, `ui` would wait forever for a `SipEvent::Registered` that's
+        // never coming, leaving `reg_ok` permanently false (blocking
+        // History/Contacts quick-dial and Redial, both gated on it).
+        if self.account.local_account {
+            let _ = self.event_tx.send(SipEvent::Registered { expires: 0 });
+        }
         let mut reregister_at = Instant::now();
         let mut retry_delay   = Duration::from_secs(5);
         let mut presence_tick = interval(PRESENCE_TICK);
@@ -379,17 +502,30 @@ impl SipStack {
                 _ = presence_tick.tick() => {
                     self.refresh_presence_subscriptions().await;
                     self.refresh_mwi_subscriptions().await;
+                    self.refresh_presence_publish().await;
+                    self.refresh_session_timers().await;
                 }
                 _ = async { keepalive_tick.as_mut().unwrap().tick().await }, if keepalive_tick.is_some() => {
                     self.send_keepalive().await;
                 }
-                _ = sleep_until(reregister_at) => {
+                // `SipAccount::local_account` never registers -- guarding
+                // the branch off entirely (rather than just skipping the
+                // send inside it) means `reregister_at`'s initial
+                // `Instant::now()` never fires and no retry/backoff
+                // machinery for it ever engages either.
+                _ = sleep_until(reregister_at), if !self.account.local_account => {
                     match self.register_once().await {
                         Ok(expires) => {
                             retry_delay   = Duration::from_secs(5);
                             reregister_at = Instant::now()
                                 + Duration::from_secs(expires.saturating_sub(REG_MARGIN) as u64);
                             let _ = self.event_tx.send(SipEvent::Registered { expires });
+                            // Initial publish only -- once `presence_publish`
+                            // exists, its own refresh timer (ticked above)
+                            // keeps it alive independently of registration.
+                            if self.account.publish_presence && self.presence_publish.is_none() {
+                                self.publish_own_presence(!self.account.dnd).await;
+                            }
                         }
                         Err(e) => {
                             error!("Registration failed: {e}");
@@ -525,6 +661,11 @@ impl SipStack {
             SipCommand::SendDtmfInfo { call_id, digit } => self.send_dtmf_info(&call_id, digit).await,
             SipCommand::SubscribeMwi { target_uri } => self.subscribe_mwi(&target_uri).await,
             SipCommand::SendMessage { to, body } => self.send_message(&to, &body).await,
+            SipCommand::PublishPresence { available } => {
+                if self.account.publish_presence {
+                    self.publish_own_presence(available).await;
+                }
+            }
         }
     }
 
@@ -583,7 +724,7 @@ impl SipStack {
         cseq:     u32,
         branch:   &str,
     ) -> String {
-        let server      = self.account.domain();
+        let server      = &self.identity_host;
         let username    = &self.account.username;
         let adv_ip      = &self.advertised_ip;
         let local_ip    = &self.local_ip;

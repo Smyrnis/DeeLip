@@ -1,10 +1,35 @@
 use std::time::Duration;
 
+use rand::Rng;
+
 use crate::app::DeelipApp;
 use crate::platform::hotkeys::HotkeyAction;
 use crate::platform::notify;
 use crate::platform::ringtone::{RingKind, Ringtone};
 use crate::theme;
+
+/// Random-position counterpart to `egui::ViewportCommand::center_on_screen`
+/// -- same monitor-size/window-size math, but a uniformly random spot
+/// instead of dead center. `None` under the same conditions
+/// `center_on_screen` gives up (no outer-rect or monitor-size info yet,
+/// e.g. the very first frame).
+fn random_position_on_screen(ctx: &egui::Context) -> Option<egui::ViewportCommand> {
+    ctx.input(|i| {
+        let outer_rect = i.viewport().outer_rect?;
+        let size = outer_rect.size();
+        let monitor_size = i.viewport().monitor_size?;
+        let max_x = monitor_size.x - size.x;
+        let max_y = monitor_size.y - size.y;
+        if max_x > 1.0 && max_y > 1.0 {
+            let mut rng = rand::thread_rng();
+            let x = rng.gen_range(0.0..max_x);
+            let y = rng.gen_range(0.0..max_y);
+            Some(egui::ViewportCommand::OuterPosition([x, y].into()))
+        } else {
+            None
+        }
+    })
+}
 
 impl DeelipApp {
     /// Start/stop the ringtone to match current call state — a no-op if it's
@@ -49,6 +74,11 @@ impl DeelipApp {
         match &self.pending_call {
             Some(p) if self.last_raised_call.as_deref() != Some(p.call_id.as_str()) => {
                 self.last_raised_call = Some(p.call_id.clone());
+                if self.config.random_popup_position {
+                    if let Some(cmd) = random_position_on_screen(ctx) {
+                        ctx.send_viewport_cmd(cmd);
+                    }
+                }
                 ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
                 ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             }
@@ -97,22 +127,45 @@ impl DeelipApp {
         };
 
         *ctx_slot.lock().unwrap() = Some(ctx.clone());
-        *quit_state.calls.lock().unwrap() = self
-            .calls
-            .iter()
-            .map(|c| {
-                (
-                    self.accounts[c.account].handle.cmd_tx.clone(),
-                    c.call_id.clone(),
-                )
-            })
-            .collect();
-        *quit_state.pending.lock().unwrap() = self.pending_call.as_ref().map(|p| {
-            (
-                self.accounts[p.account].handle.cmd_tx.clone(),
-                p.call_id.clone(),
-            )
-        });
+
+        // Only rebuild (clone Senders/call-ids, take the lock) when the set
+        // of live/pending calls actually changed since last frame -- this
+        // ran unconditionally every single frame before, regardless of
+        // whether `self.calls`/`self.pending_call` changed at all. The
+        // comparison itself borrows rather than allocates, so the common
+        // (unchanged) case costs nothing beyond a cheap scan.
+        let calls_changed = self.calls.len() != self.tray_calls_key.len()
+            || self
+                .calls
+                .iter()
+                .zip(&self.tray_calls_key)
+                .any(|(c, (acc, id))| c.account != *acc || c.call_id != *id);
+        if calls_changed {
+            self.tray_calls_key = self
+                .calls
+                .iter()
+                .map(|c| (c.account, c.call_id.clone()))
+                .collect();
+            *quit_state.calls.lock().unwrap() = self
+                .tray_calls_key
+                .iter()
+                .map(|(account, call_id)| {
+                    (self.accounts[*account].handle.cmd_tx.clone(), call_id.clone())
+                })
+                .collect();
+        }
+
+        let pending_changed = match (&self.pending_call, &self.tray_pending_key) {
+            (Some(p), Some((acc, id))) => p.account != *acc || p.call_id != *id,
+            (None, None) => false,
+            _ => true,
+        };
+        if pending_changed {
+            self.tray_pending_key = self.pending_call.as_ref().map(|p| (p.account, p.call_id.clone()));
+            *quit_state.pending.lock().unwrap() = self.tray_pending_key.as_ref().map(|(account, call_id)| {
+                (self.accounts[*account].handle.cmd_tx.clone(), call_id.clone())
+            });
+        }
 
         if ctx.input(|i| i.viewport().close_requested()) {
             tracing::debug!("Tray: close requested, hiding to tray instead");
@@ -148,6 +201,15 @@ impl DeelipApp {
                 HotkeyAction::Mute => {
                     if self.media.is_some() {
                         self.do_mute_toggle();
+                    }
+                }
+                HotkeyAction::MediaHook => {
+                    if self.pending_call.is_some() {
+                        self.do_accept();
+                    } else if let Some(idx) = self.focused_call {
+                        self.do_hangup(idx);
+                    } else if !self.calls.is_empty() {
+                        self.do_hangup(0);
                     }
                 }
             }
@@ -197,6 +259,7 @@ impl eframe::App for DeelipApp {
         self.process_hotkey_events();
         self.process_notification_actions();
         self.process_update_events();
+        self.process_directory_events();
 
         self.palette = theme::Palette::for_theme(self.config.dark_mode);
         let mut visuals = if self.config.dark_mode {
@@ -209,17 +272,19 @@ impl eframe::App for DeelipApp {
 
         // ── Tab bar ──────────────────────────────────────────────────────────
         // Selected tab gets an accent-tinted background for free, via
-        // `visuals.selection.bg_fill` (set to `palette.accent` in
+        // `visuals.selection.bg_fill` (set to `palette.signal` in
         // `theme::apply_style` above) -- the same highlight every other
         // selectable widget in the app uses, not a one-off tab-bar special case.
-        egui::TopBottomPanel::top("tabs").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.selectable_value(
-                    &mut self.tab,
-                    crate::app::Tab::Dialer,
-                    format!("{}  Dialer", egui_phosphor::regular::PHONE),
-                );
-                let history_label = if self.unseen_missed_calls > 0 {
+        //
+        // The History/Messages labels are recomputed only when their unseen
+        // count actually changed since last frame, instead of `format!()`ing
+        // a fresh String every single frame regardless (this runs at ~20fps
+        // continuously) -- same cache-and-compare idiom as
+        // `history_filter_key`/`audio_device_cache`.
+        if self.history_tab_label_cache.0 != self.unseen_missed_calls {
+            self.history_tab_label_cache = (
+                self.unseen_missed_calls,
+                if self.unseen_missed_calls > 0 {
                     format!(
                         "{}  History ({})",
                         egui_phosphor::regular::CLOCK_COUNTER_CLOCKWISE,
@@ -230,9 +295,13 @@ impl eframe::App for DeelipApp {
                         "{}  History",
                         egui_phosphor::regular::CLOCK_COUNTER_CLOCKWISE
                     )
-                };
-                ui.selectable_value(&mut self.tab, crate::app::Tab::History, history_label);
-                let messages_label = if self.unseen_messages > 0 {
+                },
+            );
+        }
+        if self.messages_tab_label_cache.0 != self.unseen_messages {
+            self.messages_tab_label_cache = (
+                self.unseen_messages,
+                if self.unseen_messages > 0 {
                     format!(
                         "{}  Messages ({})",
                         egui_phosphor::regular::CHAT_CIRCLE_TEXT,
@@ -240,8 +309,26 @@ impl eframe::App for DeelipApp {
                     )
                 } else {
                     format!("{}  Messages", egui_phosphor::regular::CHAT_CIRCLE_TEXT)
-                };
-                ui.selectable_value(&mut self.tab, crate::app::Tab::Messages, messages_label);
+                },
+            );
+        }
+        egui::TopBottomPanel::top("tabs").show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.selectable_value(
+                    &mut self.tab,
+                    crate::app::Tab::Dialer,
+                    format!("{}  Dialer", egui_phosphor::regular::PHONE),
+                );
+                ui.selectable_value(
+                    &mut self.tab,
+                    crate::app::Tab::History,
+                    self.history_tab_label_cache.1.as_str(),
+                );
+                ui.selectable_value(
+                    &mut self.tab,
+                    crate::app::Tab::Messages,
+                    self.messages_tab_label_cache.1.as_str(),
+                );
                 ui.selectable_value(
                     &mut self.tab,
                     crate::app::Tab::Contacts,
@@ -249,9 +336,21 @@ impl eframe::App for DeelipApp {
                 );
                 ui.selectable_value(
                     &mut self.tab,
-                    crate::app::Tab::Settings,
-                    format!("{}  Settings", egui_phosphor::regular::GEAR),
+                    crate::app::Tab::Directory,
+                    format!("{}  Directory", egui_phosphor::regular::BUILDINGS),
                 );
+                // Settings lives in its own modal dialog (MicroSIP-style),
+                // not a tab -- opened via this gear button, right-aligned
+                // like MicroSIP's own tab-row "more" affordance.
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .button(egui_phosphor::regular::GEAR)
+                        .on_hover_text("Settings")
+                        .clicked()
+                    {
+                        self.settings_open = true;
+                    }
+                });
             });
         });
 
@@ -290,7 +389,7 @@ impl eframe::App for DeelipApp {
                     if let Some(idx) = self.selected_account_idx() {
                         ui.label(
                             egui::RichText::new(&self.accounts[idx].label)
-                                .color(self.palette.muted)
+                                .color(self.palette.ink_muted)
                                 .small(),
                         );
                         ui.add_space(8.0);
@@ -298,7 +397,7 @@ impl eframe::App for DeelipApp {
                         let (icon, color) = if dnd {
                             (egui_phosphor::regular::BELL_SLASH, self.palette.danger)
                         } else {
-                            (egui_phosphor::regular::BELL, self.palette.muted)
+                            (egui_phosphor::regular::BELL, self.palette.ink_muted)
                         };
                         if ui
                             .small_button(egui::RichText::new(icon).color(color))
@@ -319,7 +418,7 @@ impl eframe::App for DeelipApp {
                                 "{} {new_voicemail}",
                                 egui_phosphor::regular::VOICEMAIL
                             ))
-                            .color(self.palette.accent),
+                            .color(self.palette.signal),
                         );
                     }
                 });
@@ -331,9 +430,10 @@ impl eframe::App for DeelipApp {
             crate::app::Tab::History => self.show_history(ui, ctx),
             crate::app::Tab::Messages => self.show_messages(ui),
             crate::app::Tab::Contacts => self.show_contacts(ui, ctx),
-            crate::app::Tab::Settings => self.show_settings(ui),
+            crate::app::Tab::Directory => self.show_directory(ui, ctx),
         });
 
+        self.show_settings_modal(ctx);
         self.show_update_popup(ctx);
 
         ctx.request_repaint_after(Duration::from_millis(50));

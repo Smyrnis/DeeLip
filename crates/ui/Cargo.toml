@@ -23,3 +23,5 @@ rodio = { version = "0.19", default-features = false, features = ["wav"] }
 rfd = "0.17.2"
 egui-phosphor = { workspace = true }
 global-hotkey = { workspace = true }
+rand = { workspace = true }
+ldap3 = { workspace = true }

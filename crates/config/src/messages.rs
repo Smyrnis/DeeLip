@@ -44,12 +44,12 @@ impl MessageLog {
         )?;
         let messages = stmt
             .query_map([], |row| {
-                let direction_str: String = row.get(1)?;
+                let direction_str: String = row.get("direction")?;
                 Ok(Message {
-                    peer_uri: row.get(0)?,
+                    peer_uri: row.get("peer_uri")?,
                     direction: direction_from_str(&direction_str),
-                    body: row.get(2)?,
-                    timestamp: row.get(3)?,
+                    body: row.get("body")?,
+                    timestamp: row.get("timestamp")?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()

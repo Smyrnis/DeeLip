@@ -83,6 +83,76 @@ fn install_from_archive_swaps_in_the_new_binary() {
 }
 
 #[test]
+fn parse_sha256sums_finds_the_matching_line() {
+    let body = "aaaa111  deelip-0.1.0-x86_64-linux.tar.gz\nbbbb222  deelip-0.1.0-x86_64.AppImage\n";
+    assert_eq!(
+        parse_sha256sums(body, "deelip-0.1.0-x86_64-linux.tar.gz"),
+        Some("aaaa111".to_string())
+    );
+}
+
+#[test]
+fn parse_sha256sums_tolerates_binary_mode_asterisk() {
+    let body = "aaaa111 *deelip-0.1.0-x86_64-linux.tar.gz\n";
+    assert_eq!(
+        parse_sha256sums(body, "deelip-0.1.0-x86_64-linux.tar.gz"),
+        Some("aaaa111".to_string())
+    );
+}
+
+#[test]
+fn parse_sha256sums_is_case_insensitive_on_hash_but_not_filename() {
+    let body = "AAAA111  deelip-0.1.0-x86_64-linux.tar.gz\n";
+    assert_eq!(
+        parse_sha256sums(body, "deelip-0.1.0-x86_64-linux.tar.gz"),
+        Some("aaaa111".to_string())
+    );
+}
+
+#[test]
+fn parse_sha256sums_returns_none_when_no_line_matches() {
+    let body = "aaaa111  some-other-file.tar.gz\n";
+    assert_eq!(parse_sha256sums(body, "deelip-0.1.0-x86_64-linux.tar.gz"), None);
+}
+
+#[test]
+fn verify_checksum_accepts_a_matching_hash() {
+    use sha2::{Digest, Sha256};
+
+    let dir = tempfile::tempdir().unwrap();
+    let archive_path = dir.path().join("update.tar.gz");
+    build_fixture_archive(&archive_path, b"new binary bytes");
+
+    let real_hash = {
+        let mut hasher = Sha256::new();
+        hasher.update(std::fs::read(&archive_path).unwrap());
+        format!("{:x}", hasher.finalize())
+    };
+
+    verify_checksum(&archive_path, Some(&real_hash)).unwrap();
+}
+
+#[test]
+fn verify_checksum_rejects_a_mismatched_hash() {
+    let dir = tempfile::tempdir().unwrap();
+    let archive_path = dir.path().join("update.tar.gz");
+    build_fixture_archive(&archive_path, b"new binary bytes");
+
+    let err = verify_checksum(&archive_path, Some("0000000000000000000000000000000000000000000000000000000000000000"))
+        .unwrap_err();
+    assert!(err.to_string().contains("Checksum mismatch"));
+}
+
+#[test]
+fn verify_checksum_proceeds_when_none_published() {
+    let dir = tempfile::tempdir().unwrap();
+    let archive_path = dir.path().join("update.tar.gz");
+    build_fixture_archive(&archive_path, b"new binary bytes");
+
+    verify_checksum(&archive_path, None).unwrap();
+}
+
+#[test]
 fn install_from_archive_errors_when_binary_missing_from_tarball() {
     let dir = tempfile::tempdir().unwrap();
     let archive_path = dir.path().join("update.tar.gz");

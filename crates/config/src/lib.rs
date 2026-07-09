@@ -6,16 +6,18 @@ mod account;
 mod autostart;
 mod contacts;
 mod db;
+mod dialplan;
 mod history;
 mod messages;
 
 pub use account::{
-    AppConfig, AudioConfig, DtmfMode, MediaEncryption, RecordingFormat, SipAccount,
-    TransportProtocol, UpdateCheckFrequency,
+    AppConfig, AudioConfig, DefaultListAction, DtmfMode, MediaEncryption, RecordingFormat,
+    SipAccount, TransportProtocol, UpdateCheckFrequency,
 };
 pub use autostart::{is_autostart_enabled, set_autostart};
 pub use contacts::{Contact, ContactBook};
 pub use db::{default_db_path, Db};
+pub use dialplan::{apply_dial_plan, DialPlanRule};
 pub use history::{CallDirection, CallHistory, CallRecord, CallStatus};
 pub use messages::{Message, MessageDirection, MessageLog};
 
@@ -44,5 +46,15 @@ pub fn recordings_dir(override_dir: Option<&str>) -> anyhow::Result<PathBuf> {
     };
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("Creating recordings dir {}", dir.display()))?;
+    Ok(dir)
+}
+
+/// Returns `~/.config/deelip/crashes`, creating it if it doesn't exist yet --
+/// used by `src/main.rs`'s panic hook (`AppConfig::crash_reporting_enabled`)
+/// to save local crash-report files. Never uploaded/transmitted anywhere.
+pub fn crashes_dir() -> anyhow::Result<PathBuf> {
+    let dir = deelip_dir()?.join("crashes");
+    std::fs::create_dir_all(&dir)
+        .with_context(|| format!("Creating crashes dir {}", dir.display()))?;
     Ok(dir)
 }

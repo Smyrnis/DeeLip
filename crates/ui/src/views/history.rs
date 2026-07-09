@@ -3,8 +3,8 @@ use egui::{RichText, Ui};
 
 use crate::app::DeelipApp;
 use crate::helpers::{
-    csv_escape, empty_state, extract_user_part, format_age, format_duration, list_row, short_uri,
-    status_filter_label,
+    csv_escape, double_clickable_label, empty_state, extract_user_part, format_age,
+    format_duration, list_row_menu, short_uri, status_filter_label,
 };
 
 impl DeelipApp {
@@ -50,7 +50,8 @@ impl DeelipApp {
                     );
                 });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let export = format!("{}  Export CSV…", egui_phosphor::regular::DOWNLOAD_SIMPLE);
+                // EXPORT, not DOWNLOAD_SIMPLE -- see the broken-icon note in `theme.rs`.
+                let export = format!("{}  Export CSV…", egui_phosphor::regular::EXPORT);
                 if ui.button(export).clicked() {
                     self.export_history_csv();
                 }
@@ -93,6 +94,7 @@ impl DeelipApp {
         let mut message_target: Option<String> = None;
         let mut copy_target: Option<String> = None;
         let mut delete_idx: Option<usize> = None;
+        let mut default_action_target: Option<String> = None;
 
         if self.history_filtered.is_empty() {
             empty_state(ui, &self.palette, "No matching calls.");
@@ -125,18 +127,18 @@ impl DeelipApp {
                         let record = &records[real_idx];
                         let (dir_icon, dir_color) = match record.direction {
                             CallDirection::Inbound => {
-                                (egui_phosphor::regular::PHONE_INCOMING, self.palette.info)
+                                (egui_phosphor::regular::PHONE_INCOMING, self.palette.ink_muted)
                             }
                             CallDirection::Outbound => {
-                                (egui_phosphor::regular::PHONE_OUTGOING, self.palette.accent)
+                                (egui_phosphor::regular::PHONE_OUTGOING, self.palette.signal)
                             }
                         };
                         let (status_icon, status_color) = match record.status {
                             CallStatus::Answered => {
-                                (egui_phosphor::regular::CHECK_CIRCLE, self.palette.accent)
+                                (egui_phosphor::regular::CHECK_CIRCLE, self.palette.signal)
                             }
                             CallStatus::Missed => {
-                                (egui_phosphor::regular::PHONE_X, self.palette.warn)
+                                (egui_phosphor::regular::PHONE_X, self.palette.ringing)
                             }
                             CallStatus::Rejected => {
                                 (egui_phosphor::regular::X_CIRCLE, self.palette.danger)
@@ -151,43 +153,81 @@ impl DeelipApp {
                             CallStatus::Rejected => "Rejected".into(),
                             CallStatus::Failed => "Failed".into(),
                         };
-                        let display_name = self
+                        let contact_name = self
                             .contacts
                             .find_by_uri(&record.remote_uri)
-                            .map(|c| c.name.clone())
-                            .unwrap_or_else(|| short_uri(&record.remote_uri));
+                            .map(|c| c.name.clone());
+                        let is_name = contact_name.is_some();
+                        let display_name =
+                            contact_name.unwrap_or_else(|| short_uri(&record.remote_uri));
 
                         let palette = self.palette;
-                        list_row(ui, &palette, idx, |ui| {
-                            ui.label(RichText::new(dir_icon).color(dir_color));
-                            ui.label(display_name);
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    if ui.small_button(egui_phosphor::regular::TRASH).clicked() {
-                                        delete_idx = Some(real_idx);
-                                    }
-                                    if ui.small_button(egui_phosphor::regular::COPY).clicked() {
-                                        copy_target = Some(record.remote_uri.clone());
-                                    }
-                                    if ui.small_button(egui_phosphor::regular::CHAT_CIRCLE).clicked() {
-                                        message_target = Some(record.remote_uri.clone());
-                                    }
-                                    if ui.small_button("Call").clicked() {
-                                        call_target = Some(record.remote_uri.clone());
-                                    }
-                                    if ui.small_button("Block").clicked() {
-                                        block_target = Some(record.remote_uri.clone());
-                                    }
-                                    ui.label(
-                                        RichText::new(format_age(record.timestamp))
-                                            .color(palette.muted),
-                                    );
-                                    ui.label(RichText::new(&status_str).color(palette.muted));
-                                    ui.label(RichText::new(status_icon).color(status_color));
-                                },
-                            );
-                        });
+                        let remote_uri = record.remote_uri.clone();
+                        list_row_menu(
+                            ui,
+                            &palette,
+                            idx,
+                            |ui| {
+                                ui.label(RichText::new(dir_icon).color(dir_color));
+                                let name_font = if is_name {
+                                    crate::theme::font_medium(13.0)
+                                } else {
+                                    egui::FontId::new(12.0, egui::FontFamily::Monospace)
+                                };
+                                if double_clickable_label(
+                                    ui,
+                                    RichText::new(display_name).font(name_font),
+                                ) {
+                                    default_action_target = Some(record.remote_uri.clone());
+                                }
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        let mono = egui::FontId::new(
+                                            11.5,
+                                            egui::FontFamily::Monospace,
+                                        );
+                                        ui.label(
+                                            RichText::new(format_age(record.timestamp))
+                                                .font(mono.clone())
+                                                .color(palette.ink_muted),
+                                        );
+                                        ui.label(
+                                            RichText::new(&status_str)
+                                                .font(mono)
+                                                .color(palette.ink_muted),
+                                        );
+                                        ui.label(RichText::new(status_icon).color(status_color));
+                                    },
+                                );
+                            },
+                            |ui| {
+                                if ui.button("Call").clicked() {
+                                    call_target = Some(remote_uri.clone());
+                                    ui.close_menu();
+                                }
+                                if ui.button("Message").clicked() {
+                                    message_target = Some(remote_uri.clone());
+                                    ui.close_menu();
+                                }
+                                if ui.button("Copy").clicked() {
+                                    copy_target = Some(remote_uri.clone());
+                                    ui.close_menu();
+                                }
+                                if ui.button("Block").clicked() {
+                                    block_target = Some(remote_uri.clone());
+                                    ui.close_menu();
+                                }
+                                ui.separator();
+                                if ui
+                                    .button(RichText::new("Delete").color(palette.danger))
+                                    .clicked()
+                                {
+                                    delete_idx = Some(real_idx);
+                                    ui.close_menu();
+                                }
+                            },
+                        );
                     }
                 });
         }
@@ -218,6 +258,16 @@ impl DeelipApp {
             self.history_filter_key = None; // force the filtered list to recompute against the new indices
             if let Err(e) = self.history.save(&self.db) {
                 tracing::error!("Failed to save call history: {e}");
+            }
+        }
+        if let Some(target) = default_action_target {
+            // `Edit` isn't meaningful for a History entry -- falls back to
+            // `Call`, same as `DefaultListAction::Edit`'s own doc comment.
+            match self.config.default_list_action {
+                deelip_config::DefaultListAction::Message => self.message_from_list(target),
+                deelip_config::DefaultListAction::Call | deelip_config::DefaultListAction::Edit => {
+                    self.dial_from_list(target);
+                }
             }
         }
     }

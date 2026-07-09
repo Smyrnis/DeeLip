@@ -6,6 +6,23 @@ use crate::helpers::{normalize_target_with_prefix, short_uri, unix_now};
 impl DeelipApp {
     // ── Call actions ─────────────────────────────────────────────────────────
 
+    /// Domain to resolve a bare (non-"@", non-URI) dial-box/transfer/message
+    /// target against -- this account's own identity domain, or empty for a
+    /// `SipAccount::local_account`. A serverless account has no
+    /// local-extension concept: every bare target dialed from one *is* the
+    /// destination itself (see `normalize_target_with_prefix`'s empty-domain
+    /// case), not a number to resolve against some PBX domain -- unlike
+    /// `SipHandle.domain`, which is never empty (it falls back to
+    /// `local_ip:local_port` precisely so headers stay valid), so that
+    /// fallback alone can't be used to detect this.
+    pub(crate) fn dial_domain(&self, acc: usize) -> String {
+        if self.accounts[acc].account.local_account {
+            String::new()
+        } else {
+            self.accounts[acc].handle.domain.clone()
+        }
+    }
+
     /// Core dialing mechanics shared by ordinary dialing and the attended-
     /// transfer consultation call -- no gating here; callers check their
     /// own preconditions before calling this, mirroring this codebase's
@@ -18,9 +35,10 @@ impl DeelipApp {
     /// `try_gather_ice`'s doc comment), conference/transfer legs keep the
     /// plain STUN/TURN-fallback path unchanged.
     pub(crate) fn place_call(&mut self, acc: usize, target: &str, attempt_ice: bool) {
-        let domain = self.accounts[acc].handle.domain.clone();
+        let domain = self.dial_domain(acc);
         let prefix = self.accounts[acc].account.dialing_prefix.clone().unwrap_or_default();
-        let t = normalize_target_with_prefix(target, &domain, &prefix);
+        let dial_plan = self.accounts[acc].account.dial_plan.clone();
+        let t = normalize_target_with_prefix(target, &domain, &prefix, &dial_plan);
         self.accounts[acc].handle.make_call(&t, attempt_ice);
         self.last_dialed = Some(t.clone());
         self.pending_outbound = Some(PendingOutbound {
@@ -205,6 +223,9 @@ impl DeelipApp {
             if let Some(engine) = self.media.take() {
                 self.rt.block_on(engine.stop());
             }
+            if let Some(v) = self.video.take() {
+                self.rt.block_on(v.engine.stop());
+            }
             self.focused_call = None;
         }
         self.refresh_call_status();
@@ -223,6 +244,9 @@ impl DeelipApp {
             self.send_hold(cur);
             if let Some(engine) = self.media.take() {
                 self.rt.block_on(engine.stop());
+            }
+            if let Some(v) = self.video.take() {
+                self.rt.block_on(v.engine.stop());
             }
             self.focused_call = None;
         }
@@ -245,6 +269,15 @@ impl DeelipApp {
         let Some(idx) = self.focused_call else { return };
         let call = &self.calls[idx];
         let mode = self.accounts[call.account].account.dtmf_mode;
+        // `Auto` picks per-call from the already-negotiated media: RFC 2833
+        // if the far end offered a telephone-event payload type, else SIP
+        // INFO (doesn't depend on SDP negotiation at all, so it's always
+        // available as the fallback).
+        let mode = match mode {
+            DtmfMode::Auto if call.media.dtmf_type.is_some() => DtmfMode::Rfc2833,
+            DtmfMode::Auto => DtmfMode::SipInfo,
+            other => other,
+        };
         match mode {
             DtmfMode::Rfc2833 => {
                 if let Some(engine) = &self.media {
@@ -261,6 +294,7 @@ impl DeelipApp {
                     .handle
                     .send_dtmf_info(&call.call_id, digit);
             }
+            DtmfMode::Auto => unreachable!("resolved to Rfc2833 or SipInfo above"),
         }
     }
 
@@ -317,9 +351,10 @@ impl DeelipApp {
             return;
         }
         let acc = self.calls[idx].account;
-        let domain = self.accounts[acc].handle.domain.clone();
+        let domain = self.dial_domain(acc);
         let prefix = self.accounts[acc].account.dialing_prefix.clone().unwrap_or_default();
-        let target = normalize_target_with_prefix(&raw, &domain, &prefix);
+        let dial_plan = self.accounts[acc].account.dial_plan.clone();
+        let target = normalize_target_with_prefix(&raw, &domain, &prefix, &dial_plan);
         let call_id = self.calls[idx].call_id.clone();
         self.accounts[acc].handle.blind_transfer(&call_id, target);
         self.status_line = "Transferring…".into();

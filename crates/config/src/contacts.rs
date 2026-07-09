@@ -33,10 +33,10 @@ impl ContactBook {
         let contacts = stmt
             .query_map([], |row| {
                 Ok(Contact {
-                    name: row.get(0)?,
-                    sip_uri: row.get(1)?,
-                    watch_presence: sql_int_to_bool(row.get(2)?),
-                    presence_account: row.get(3)?,
+                    name: row.get("name")?,
+                    sip_uri: row.get("sip_uri")?,
+                    watch_presence: sql_int_to_bool(row.get("watch_presence")?),
+                    presence_account: row.get("presence_account")?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()

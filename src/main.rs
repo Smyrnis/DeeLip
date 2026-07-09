@@ -57,6 +57,10 @@ fn main() -> anyhow::Result<()> {
 
     tracing::info!("DeeLip v{}", env!("CARGO_PKG_VERSION"));
 
+    if config.crash_reporting_enabled {
+        install_crash_hook();
+    }
+
     let enabled_accounts: Vec<_> = config
         .accounts
         .iter()
@@ -107,6 +111,9 @@ fn main() -> anyhow::Result<()> {
         turn_username: config.turn_username.clone().unwrap_or_default(),
         turn_password: config.turn_password.clone().unwrap_or_default(),
         ice_enabled: config.ice_enabled,
+        rtp_port_range: config.rtp_port_min.zip(config.rtp_port_max),
+        custom_nameserver: config.custom_nameserver.clone(),
+        dns_srv_enabled: config.dns_srv_enabled,
     };
 
     // Each enabled account gets its own independent stack (own transport,
@@ -210,6 +217,58 @@ fn main() -> anyhow::Result<()> {
     )
     .map_err(|e| anyhow::anyhow!("eframe error: {e}"))?;
 
+    Ok(())
+}
+
+/// Install a panic hook that saves a local crash-report file (see
+/// `write_crash_report`) before falling through to the previous hook
+/// (still prints to stderr -- chained, not replaced, so console/log
+/// behavior is unchanged). Gated on `AppConfig::crash_reporting_enabled`;
+/// purely local, nothing here ever transmits anywhere.
+fn install_crash_hook() {
+    let previous_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        if let Err(e) = write_crash_report(info) {
+            eprintln!("Failed to write crash report: {e:#}");
+        }
+        previous_hook(info);
+    }));
+}
+
+fn write_crash_report(info: &std::panic::PanicHookInfo) -> anyhow::Result<()> {
+    let dir = deelip_config::crashes_dir()?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let location = info
+        .location()
+        .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+        .unwrap_or_else(|| "<unknown>".into());
+    let message = info
+        .payload()
+        .downcast_ref::<&str>()
+        .map(|s| s.to_string())
+        .or_else(|| info.payload().downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "<non-string panic payload>".into());
+    let backtrace = std::backtrace::Backtrace::force_capture();
+
+    let report = format!(
+        "DeeLip crash report\n\
+         Version: {}\n\
+         Unix time: {now}\n\
+         OS: {} {}\n\
+         \n\
+         Panic: {message}\n\
+         Location: {location}\n\
+         \n\
+         Backtrace:\n{backtrace}\n",
+        env!("CARGO_PKG_VERSION"),
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+    );
+    std::fs::write(dir.join(format!("crash-{now}.txt")), report)?;
     Ok(())
 }
 

@@ -54,6 +54,62 @@ pub fn extract_expires(msg: &crate::wire::message::SipMessage) -> Option<u32> {
     None
 }
 
+/// Extract the `received=`/`rport=` params from a response's own `Via:`
+/// header -- what the server actually saw as our source IP/port, distinct
+/// from the `local_ip:local_port` we sent it in that same header. Used by
+/// `SipAccount::allow_ip_rewrite` to self-discover a public address from
+/// the registrar's own feedback, without a separate STUN server.
+pub fn parse_via_received(via: &str) -> (Option<String>, Option<u16>) {
+    let mut received = None;
+    let mut rport = None;
+    for part in via.split(';').skip(1) {
+        let part = part.trim();
+        if let Some(v) = part.strip_prefix("received=") {
+            received = Some(v.trim().to_string());
+        } else if let Some(v) = part.strip_prefix("rport=") {
+            rport = v.trim().parse().ok();
+        }
+    }
+    (received, rport)
+}
+
+/// Parse a `Session-Expires:` header (RFC 4028) into its interval (seconds)
+/// and optional `refresher=` param (`"uac"`/`"uas"`, lowercased) --
+/// used to negotiate `SipAccount::session_timers_enabled`'s periodic
+/// re-INVITE keep-alives.
+pub fn parse_session_expires(header: &str) -> Option<(u32, Option<String>)> {
+    let mut parts = header.split(';');
+    let interval = parts.next()?.trim().parse::<u32>().ok()?;
+    let mut refresher = None;
+    for part in parts {
+        if let Some(v) = part.trim().strip_prefix("refresher=") {
+            refresher = Some(v.trim().to_ascii_lowercase());
+        }
+    }
+    Some((interval, refresher))
+}
+
+/// Extract the `answer-after=N` param from a `Call-Info` header -- a common
+/// intercom/paging-hardware convention (Algo/CyberData/Grandstream paging
+/// adapters, Asterisk's chan_pjsip auto-answer support) signaling that this
+/// INVITE should be auto-answered after N seconds rather than rung normally.
+/// Not an IETF-standardized header parameter; scans every `Call-Info` header
+/// line (a message may carry several, and each may itself be a
+/// comma-separated list per RFC 3261 header-field syntax) for the first one
+/// carrying it.
+pub fn parse_call_info_answer_after(msg: &crate::wire::message::SipMessage) -> Option<u32> {
+    msg.headers_all("Call-Info").into_iter().find_map(|header| {
+        header.split(',').find_map(|entry| {
+            entry.split(';').skip(1).find_map(|param| {
+                param
+                    .trim()
+                    .strip_prefix("answer-after=")
+                    .and_then(|v| v.trim().parse::<u32>().ok())
+            })
+        })
+    })
+}
+
 /// Extract the `tag=` param from a `To`/`From` header value.
 pub fn parse_tag(header: &str) -> Option<String> {
     for part in header.split(';') {
@@ -75,6 +131,41 @@ pub fn parse_uri(header: &str) -> Option<String> {
     Some(header.split(';').next()?.trim().to_string())
 }
 
+/// Extract `(host, port)` from a bare or `sip:`/`sips:`-prefixed URI's
+/// authority part -- e.g. `sip:192.168.1.50:5060`, `192.168.1.50`,
+/// `sip:bob@192.168.1.50`, or `sip:[::1]:5060`. Defaults to port 5060 when
+/// absent. Used by `SipAccount::local_account` (serverless) calls to resolve
+/// the initial INVITE's destination straight from the dialed target, since
+/// there's no outbound proxy to route it via `self.server_addr` for.
+pub fn uri_host_port(uri: &str) -> Option<(String, u16)> {
+    let rest = uri
+        .strip_prefix("sips:")
+        .or_else(|| uri.strip_prefix("sip:"))
+        .unwrap_or(uri);
+    let authority = rest.rsplit_once('@').map(|(_, h)| h).unwrap_or(rest);
+    let authority = authority
+        .split([';', '?'])
+        .next()
+        .unwrap_or(authority)
+        .trim();
+    if authority.is_empty() {
+        return None;
+    }
+    if let Some(rest) = authority.strip_prefix('[') {
+        // IPv6 literal: "[::1]" or "[::1]:5060".
+        let (host, after) = rest.split_once(']')?;
+        let port = after
+            .strip_prefix(':')
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(5060);
+        return Some((host.to_string(), port));
+    }
+    match authority.split_once(':') {
+        Some((host, port_str)) => Some((host.to_string(), port_str.parse().unwrap_or(5060))),
+        None => Some((authority.to_string(), 5060)),
+    }
+}
+
 /// Percent-encode a `Replaces` value (RFC 3891) for embedding as a URI
 /// parameter. Our own generated call-ids/tags are plain hex and never
 /// actually contain these characters, but this is correct regardless.
@@ -86,3 +177,7 @@ pub fn encode_replaces_param(s: &str) -> String {
         .replace(',', "%2C")
         .replace('@', "%40")
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/util.rs"]
+mod tests;

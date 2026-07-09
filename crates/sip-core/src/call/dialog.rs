@@ -1,6 +1,6 @@
 use deelip_nat::{IceConnection, IceGathered, TurnRelay};
 
-use crate::wire::sdp::{AudioCodec, SrtpParams};
+use crate::wire::sdp::{AudioCodec, SrtpParams, VideoCodec};
 
 /// State of a SIP call dialog (simplified early/confirmed dialog).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,6 +31,22 @@ pub struct CallMedia {
     pub dtmf_type: Option<u8>,
     /// Comfort-noise PT the remote signaled, if any -- see `ParsedSdp::cn_type`.
     pub cn_type: Option<u8>,
+    /// Negotiated video leg, if `SipAccount::video_enabled` and the remote
+    /// both offered/accepted one -- `None` for every audio-only call (i.e.
+    /// every call today, since this field's introduction). Negotiation
+    /// only as of this field's introduction: nothing in `media-engine` yet
+    /// reads this to actually capture/encode/send/receive/decode video.
+    pub video: Option<VideoMedia>,
+}
+
+/// Video counterpart of `CallMedia` -- no `dtmf_type`/`cn_type` (neither
+/// applies to video).
+pub struct VideoMedia {
+    pub local_rtp: u16,
+    pub local_srtp: Option<SrtpParams>,
+    pub relay: Option<TurnRelay>,
+    pub ice: Option<IceConnection>,
+    pub codec: VideoCodec,
 }
 
 /// Offerer-side media state resolved before the INVITE was sent (local RTP
@@ -44,6 +60,20 @@ pub struct PendingOfferMedia {
     pub local_rtp: u16,
     pub local_srtp: Option<SrtpParams>,
     pub relay: Option<TurnRelay>,
+}
+
+/// Offerer-side video-leg state resolved before the INVITE was sent,
+/// mirroring `PendingOfferMedia` -- kept separately (rather than folding
+/// into `PendingOfferMedia`) since it's `None` whenever
+/// `SipAccount::video_enabled` is off (every account today) or video setup
+/// failed for this call, unlike the always-present audio leg. Also carries
+/// its own `ice_gathered` since video's ICE gather runs independently of
+/// audio's, alongside it in the same background task.
+pub struct PendingVideoOffer {
+    pub local_rtp: u16,
+    pub local_srtp: Option<SrtpParams>,
+    pub relay: Option<TurnRelay>,
+    pub ice_gathered: Option<IceGathered>,
 }
 
 pub struct Dialog {
@@ -92,6 +122,46 @@ pub struct Dialog {
     /// for an incoming call (the answerer path populates `media` directly,
     /// never this). See `PendingOfferMedia`'s doc comment.
     pub pending_offer: Option<PendingOfferMedia>,
+    /// Video counterpart of `pending_offer` -- `None` whenever video wasn't
+    /// offered at all (the common case today). See `PendingVideoOffer`.
+    pub pending_offer_video: Option<PendingVideoOffer>,
+    /// RFC 4028 Session Timers: the negotiated refresh interval in seconds
+    /// -- `None` if either side doesn't support/want them (no
+    /// `Session-Expires` ended up negotiated).
+    pub session_expires: Option<u32>,
+    /// Whether *we* are responsible for sending the periodic refresh
+    /// re-INVITE (`refresher=uac` when we placed the call and proposed it,
+    /// `refresher=uas` when we accepted an incoming call that asked us to
+    /// refresh) -- meaningless if `session_expires` is `None`.
+    pub we_are_refresher: bool,
+    /// Deadline for our next refresh re-INVITE (`we_are_refresher` only,
+    /// scheduled at half `session_expires`, matching common UA behavior).
+    /// The periodic scan in `client::run` only acts on entries already
+    /// past due, same idiom as `PresenceSubscription::refresh_after`.
+    pub session_refresh_at: Option<tokio::time::Instant>,
+    /// Set right before sending a session-refresh re-INVITE so the
+    /// Confirmed-state re-INVITE-response handler in `on_response` doesn't
+    /// mistake it for a hold/resume ack (`hold_pending`) -- taken (reset to
+    /// `false`) once that response arrives.
+    pub session_refresh_pending: bool,
+    /// Set once we've retried our own initial INVITE with a larger
+    /// `Session-Expires` after a 422 (Session Interval Too Small) response,
+    /// so a second 422 is treated as a final failure rather than retried
+    /// forever -- mirrors `auth_retried`'s shape for the 401/407 path.
+    pub session_expires_retried: bool,
+    /// Parsed from an incoming INVITE's own `Session-Expires`/`refresher=`
+    /// (RFC 4028), held here between `on_invite` (parses it) and
+    /// `on_incoming_answer_ready` (echoes it back in the 200 OK and folds
+    /// it into `session_expires`/`we_are_refresher` above) -- `None` if the
+    /// incoming INVITE didn't propose session timers at all.
+    pub incoming_session_expires: Option<(u32, Option<String>)>,
+    /// Whether *we* sent the original INVITE for this dialog (`true`) or
+    /// received it (`false`) -- fixed for the dialog's lifetime, unlike
+    /// who currently sends the periodic refresh (`we_are_refresher`). RFC
+    /// 4028's `refresher=uac`/`refresher=uas` param always refers to these
+    /// original roles, not to whoever happens to send a given re-INVITE, so
+    /// `send_session_refresh` needs this to pick the right literal value.
+    pub original_role_is_uac: bool,
 }
 
 impl Dialog {
@@ -115,6 +185,14 @@ impl Dialog {
             media: None,
             ice_gathered: None,
             pending_offer: None,
+            pending_offer_video: None,
+            session_expires: None,
+            we_are_refresher: false,
+            session_refresh_at: None,
+            session_refresh_pending: false,
+            session_expires_retried: false,
+            incoming_session_expires: None,
+            original_role_is_uac: true,
         }
     }
 
@@ -146,6 +224,14 @@ impl Dialog {
             media: None,
             ice_gathered: None,
             pending_offer: None,
+            pending_offer_video: None,
+            session_expires: None,
+            we_are_refresher: false,
+            session_refresh_at: None,
+            session_refresh_pending: false,
+            session_expires_retried: false,
+            incoming_session_expires: None,
+            original_role_is_uac: false,
         }
     }
 

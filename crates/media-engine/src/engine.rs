@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use tokio::net::UdpSocket;
@@ -14,10 +14,12 @@ use webrtc_srtp::protection_profile::ProtectionProfile;
 use webrtc_util::Conn;
 
 use deelip_config::RecordingFormat;
+use deelip_sip::zrtp::{is_zrtp_packet, Role};
 use deelip_sip::{AudioCodec, SrtpSession};
 
 use crate::aec::EchoCanceller;
 use crate::agc::AutomaticGainControl;
+use crate::zrtp_session::{client_id as zrtp_client_id, ZrtpOutcome, ZrtpParams, ZrtpRuntime};
 use crate::audio::{open_streams, AudioStreams, PlaybackTx, FRAME_SAMPLES};
 use crate::codec::{
     decode_pcma, decode_pcmu, encode_pcma, encode_pcmu, G722Decoder, G722Encoder, G729Decoder,
@@ -29,6 +31,99 @@ use crate::dtmf::{
 use crate::recording::{RecordingOptions, RecordingWriter};
 use crate::rtp::{RtpPacket, RtpSender};
 use crate::vad::{ComfortNoiseState, VadDecision, VoiceActivityDetector, synthesize_comfort_noise};
+
+/// One live encoder for whichever `AudioCodec` a leg negotiated -- replaces
+/// 5 separate `Option<XEncoder>` locals plus a 7-arm `match codec { ... }`
+/// repeated at every call site with a single value and one `.encode()`
+/// call. `leg_label` is `""` for leg 1 or `" (leg2)"` for leg 2, threaded
+/// through so construction-failure messages read exactly as they did
+/// before this was consolidated (only Opus/iLBC can actually fail here).
+enum AudioEncoder {
+    Opus(OpusEncoder),
+    // Boxed: G.722/G.729's encoder structs are far larger than the other
+    // variants (lookup-table-heavy ADPCM/CELP state) -- boxing keeps every
+    // `AudioEncoder` value itself small regardless of which codec is active.
+    G722(Box<G722Encoder>),
+    Gsm(GsmEncoder),
+    Ilbc(IlbcEncoder),
+    G729(Box<G729Encoder>),
+    Pcma,
+    Pcmu,
+}
+
+impl AudioEncoder {
+    fn new(codec: AudioCodec, leg_label: &str) -> anyhow::Result<Self> {
+        Ok(match codec {
+            AudioCodec::Opus => Self::Opus(
+                OpusEncoder::new().with_context(|| format!("Creating Opus encoder{leg_label}"))?,
+            ),
+            AudioCodec::G722 => Self::G722(Box::default()),
+            AudioCodec::Gsm => Self::Gsm(GsmEncoder::new()),
+            AudioCodec::Ilbc => Self::Ilbc(
+                IlbcEncoder::new().with_context(|| format!("Creating iLBC encoder{leg_label}"))?,
+            ),
+            AudioCodec::G729 => Self::G729(Box::default()),
+            AudioCodec::Pcma => Self::Pcma,
+            AudioCodec::Pcmu => Self::Pcmu,
+        })
+    }
+
+    fn encode(&mut self, pcm: &[i16]) -> Vec<u8> {
+        match self {
+            Self::Opus(e) => e.encode(pcm),
+            Self::G722(e) => e.encode(pcm),
+            Self::Gsm(e) => e.encode(pcm),
+            Self::Ilbc(e) => e.encode(pcm),
+            Self::G729(e) => e.encode(pcm),
+            Self::Pcma => encode_pcma(pcm),
+            Self::Pcmu => encode_pcmu(pcm),
+        }
+    }
+}
+
+/// Decoder counterpart of `AudioEncoder` -- see its doc comment.
+enum AudioDecoder {
+    Opus(OpusDecoder),
+    // Boxed for the same reason as `AudioEncoder::G729` -- G722's decoder
+    // struct (a lookup-table-heavy ADPCM state machine) is far larger than
+    // the other small variants here.
+    G722(Box<G722Decoder>),
+    Gsm(GsmDecoder),
+    Ilbc(IlbcDecoder),
+    G729(Box<G729Decoder>),
+    Pcma,
+    Pcmu,
+}
+
+impl AudioDecoder {
+    fn new(codec: AudioCodec, leg_label: &str) -> anyhow::Result<Self> {
+        Ok(match codec {
+            AudioCodec::Opus => Self::Opus(
+                OpusDecoder::new().with_context(|| format!("Creating Opus decoder{leg_label}"))?,
+            ),
+            AudioCodec::G722 => Self::G722(Box::default()),
+            AudioCodec::Gsm => Self::Gsm(GsmDecoder::new()),
+            AudioCodec::Ilbc => Self::Ilbc(
+                IlbcDecoder::new().with_context(|| format!("Creating iLBC decoder{leg_label}"))?,
+            ),
+            AudioCodec::G729 => Self::G729(Box::default()),
+            AudioCodec::Pcma => Self::Pcma,
+            AudioCodec::Pcmu => Self::Pcmu,
+        })
+    }
+
+    fn decode(&mut self, payload: &[u8]) -> Vec<i16> {
+        match self {
+            Self::Opus(d) => d.decode(payload),
+            Self::G722(d) => d.decode(payload),
+            Self::Gsm(d) => d.decode(payload),
+            Self::Ilbc(d) => d.decode(payload),
+            Self::G729(d) => d.decode(payload),
+            Self::Pcma => decode_pcma(payload),
+            Self::Pcmu => decode_pcmu(payload),
+        }
+    }
+}
 
 /// Per-packet RTP timestamp increment for a 20ms frame, in units of the
 /// codec's declared RTP clock rate. G.711's clock is 8000 Hz; Opus's RTP
@@ -46,17 +141,74 @@ fn ts_increment_for(codec: AudioCodec) -> u32 {
     }
 }
 
+/// Act on whatever `ZrtpRuntime::handle_incoming`/`tick` just produced:
+/// send any outgoing handshake bytes on the same RTP socket, publish a
+/// freshly-computed SAS, or -- once the handshake completes -- swap the
+/// recv task's own `decrypt_ctx` in-place and hand the encrypt side's key
+/// material to the send task over `encrypt_tx` (the two tasks each own
+/// their own `SrtpContext`, so this is the only way to update both).
+async fn handle_zrtp_outcomes(
+    outcomes: Vec<ZrtpOutcome>,
+    sock: &RtpSocket,
+    remote_rtp: SocketAddr,
+    decrypt_ctx: &mut Option<SrtpContext>,
+    encrypt_tx: &mpsc::UnboundedSender<([u8; 16], [u8; 14])>,
+    sas: &Arc<Mutex<Option<String>>>,
+) {
+    for outcome in outcomes {
+        match outcome {
+            ZrtpOutcome::SendBytes(bytes) => {
+                if let Err(e) = sock.send_to(&bytes, remote_rtp).await {
+                    warn!("Failed to send ZRTP packet: {e:#}");
+                }
+            }
+            ZrtpOutcome::Sas(value) => {
+                *sas.lock().unwrap() = Some(value);
+            }
+            ZrtpOutcome::Secure {
+                srtp_key_i,
+                srtp_salt_i,
+                srtp_key_r,
+                srtp_salt_r,
+                role,
+            } => {
+                let (encrypt_key, encrypt_salt, decrypt_key, decrypt_salt) = match role {
+                    Role::Initiator => (srtp_key_i, srtp_salt_i, srtp_key_r, srtp_salt_r),
+                    Role::Responder => (srtp_key_r, srtp_salt_r, srtp_key_i, srtp_salt_i),
+                };
+                match SrtpContext::new(
+                    &decrypt_key,
+                    &decrypt_salt,
+                    ProtectionProfile::Aes128CmHmacSha1_80,
+                    Some(srtp_replay_protection(64)),
+                    None,
+                ) {
+                    Ok(ctx) => {
+                        debug!("ZRTP: switching to SRTP-encrypted recv");
+                        *decrypt_ctx = Some(ctx);
+                    }
+                    Err(e) => error!("ZRTP: failed to build SRTP decrypt context: {e}"),
+                }
+                let _ = encrypt_tx.send((encrypt_key, encrypt_salt));
+            }
+            ZrtpOutcome::Failed(reason) => {
+                warn!("ZRTP handshake failed, continuing without encryption: {reason}");
+            }
+        }
+    }
+}
+
 /// The RTP wire transport: a plain local UDP socket, or a TURN-relayed `Conn`
 /// (see `deelip_nat::allocate_relay`). Both shapes speak send_to/recv_from, so
 /// everything downstream (codec dispatch, SRTP, DTMF, jitter buffer) is
 /// identical regardless of which one is active.
-enum RtpSocket {
+pub(crate) enum RtpSocket {
     Direct(UdpSocket),
     Relay(Arc<dyn Conn + Send + Sync>),
 }
 
 impl RtpSocket {
-    async fn send_to(&self, buf: &[u8], addr: SocketAddr) -> anyhow::Result<()> {
+    pub(crate) async fn send_to(&self, buf: &[u8], addr: SocketAddr) -> anyhow::Result<()> {
         match self {
             Self::Direct(s) => {
                 s.send_to(buf, addr).await?;
@@ -68,7 +220,7 @@ impl RtpSocket {
         Ok(())
     }
 
-    async fn recv_from(&self, buf: &mut [u8]) -> anyhow::Result<(usize, SocketAddr)> {
+    pub(crate) async fn recv_from(&self, buf: &mut [u8]) -> anyhow::Result<(usize, SocketAddr)> {
         match self {
             Self::Direct(s) => Ok(s.recv_from(buf).await?),
             Self::Relay(c) => Ok(c.recv_from(buf).await?),
@@ -201,51 +353,86 @@ pub struct MediaEngine {
     output_gain: crate::audio::SharedGain,
     input_gain: crate::audio::SharedGain,
     stats: SharedStats,
+    /// Set once the ZRTP handshake (if `ZrtpParams` was given to `start`)
+    /// completes -- `None` throughout an unencrypted or SDES-SRTP call, or
+    /// until the handshake finishes.
+    zrtp_sas: Arc<Mutex<Option<String>>>,
+}
+
+/// Parameters for `MediaEngine::start` -- a named-field struct instead of a
+/// 15-argument positional list, so a call site reads its own intent (and a
+/// newly-added field can't silently shift the meaning of the ones after it,
+/// the same risk the `ARCHITECTURE_GAPS.md` audit flagged for `config`'s
+/// positional SQL column mapping).
+pub struct MediaEngineOptions<'a> {
+    /// Local UDP port for RTP.
+    pub local_rtp_port: u16,
+    /// Remote RTP endpoint.
+    pub remote_rtp: SocketAddr,
+    /// Negotiated voice codec (PCMU/PCMA/Opus/...).
+    pub codec: AudioCodec,
+    /// DTMF telephone-event payload type (typically `Some(101)`).
+    pub dtmf_pt: Option<u8>,
+    /// RFC 3389 comfort-noise payload type the remote signaled, if any --
+    /// enables VAD-gated silence suppression on leg 1 only (a conference's
+    /// second leg always sends continuously, see `crate::vad`'s module doc
+    /// for the inter-SID-gap simplification this makes).
+    pub cn_pt: Option<u8>,
+    /// Local/remote SDES-SRTP keys, if the call negotiated encrypted media.
+    pub srtp: Option<SrtpSession>,
+    /// A TURN-allocated relay `Conn` (see `deelip_nat::allocate_relay`), if
+    /// the call is relaying media instead of using a direct local socket.
+    pub relay: Option<Arc<dyn Conn + Send + Sync>>,
+    /// Run acoustic echo cancellation on the mic path (see `crate::aec`) --
+    /// only useful on speakers/mic, not headsets.
+    pub echo_cancellation: bool,
+    /// Run adaptive microphone gain control on the mic path (see `crate::agc`).
+    pub agc_enabled: bool,
+    /// Specific cpal input device name, falling back to the system default
+    /// if unset or not found.
+    pub input_device: Option<&'a str>,
+    /// Specific cpal output device name, falling back to the system default
+    /// if unset or not found.
+    pub output_device: Option<&'a str>,
+    /// Whether/how/where to record this call to a stereo file (left =
+    /// near-end mic, right = far-end/mixed received audio) -- see
+    /// `RecordingOptions`.
+    pub recording: RecordingOptions,
+    /// Used to name the recording file; ignored if recording is disabled.
+    pub call_id: &'a str,
+    /// `Some` to bridge a second remote party into a 3-way conference,
+    /// sharing this same mic/speaker pair -- `None` (every existing call
+    /// site) is the ordinary single-leg call, unchanged.
+    pub second_leg: Option<ConferenceLeg>,
+    /// Attempt RFC 6189 ZRTP key agreement on leg 1's RTP socket instead of
+    /// (or alongside a no-op) `srtp` -- `None` for a plain or SDES-SRTP call
+    /// (today's behavior). Not supported alongside `second_leg` (conference
+    /// legs stay SDES/plain-only).
+    pub zrtp: Option<ZrtpParams>,
 }
 
 impl MediaEngine {
-    /// Start the media engine.
-    /// - `local_rtp_port`: local UDP port for RTP.
-    /// - `remote_rtp`:     remote RTP endpoint.
-    /// - `codec`:          negotiated voice codec (PCMU/PCMA/Opus).
-    /// - `dtmf_pt`:        DTMF telephone-event payload type (typically Some(101)).
-    /// - `cn_pt`:          RFC 3389 comfort-noise payload type the remote signaled, if
-    ///   any -- enables VAD-gated silence suppression on leg 1 only (a conference's
-    ///   second leg always sends continuously, see `crate::vad`'s module doc for the
-    ///   inter-SID-gap simplification this makes).
-    /// - `srtp`:           local/remote SDES-SRTP keys, if the call negotiated encrypted media.
-    /// - `relay`:          a TURN-allocated relay `Conn` (see `deelip_nat::allocate_relay`),
-    ///   if the call is relaying media instead of using a direct local socket.
-    /// - `echo_cancellation`: run acoustic echo cancellation on the mic path
-    ///   (see `crate::aec`) — only useful on speakers/mic, not headsets.
-    /// - `agc_enabled`: run adaptive microphone gain control on the mic path
-    ///   (see `crate::agc`).
-    /// - `input_device`/`output_device`: specific cpal device names to use,
-    ///   falling back to the system default if unset or not found.
-    /// - `recording`: whether/how/where to record this call to a stereo
-    ///   file (left = near-end mic, right = far-end/mixed received audio) —
-    ///   see `RecordingOptions`.
-    /// - `call_id`: used to name the recording file; ignored if recording is disabled.
-    /// - `second_leg`: `Some` to bridge a second remote party into a 3-way
-    ///   conference, sharing this same mic/speaker pair — `None` (every
-    ///   existing call site) is the ordinary single-leg call, unchanged.
-    #[allow(clippy::too_many_arguments)]
-    pub async fn start(
-        local_rtp_port: u16,
-        remote_rtp: SocketAddr,
-        codec: AudioCodec,
-        dtmf_pt: Option<u8>,
-        cn_pt: Option<u8>,
-        srtp: Option<SrtpSession>,
-        relay: Option<Arc<dyn Conn + Send + Sync>>,
-        echo_cancellation: bool,
-        agc_enabled: bool,
-        input_device: Option<&str>,
-        output_device: Option<&str>,
-        recording: RecordingOptions,
-        call_id: &str,
-        second_leg: Option<ConferenceLeg>,
-    ) -> anyhow::Result<Self> {
+    /// Start the media engine -- see `MediaEngineOptions`'s own field docs
+    /// for what each option controls.
+    pub async fn start(opts: MediaEngineOptions<'_>) -> anyhow::Result<Self> {
+        let MediaEngineOptions {
+            local_rtp_port,
+            remote_rtp,
+            codec,
+            dtmf_pt,
+            cn_pt,
+            srtp,
+            relay,
+            echo_cancellation,
+            agc_enabled,
+            input_device,
+            output_device,
+            recording,
+            call_id,
+            second_leg,
+            zrtp,
+        } = opts;
+
         let (audio_streams, mut cap_rx, hw_playback_tx, echo_ref, output_gain) =
             open_streams(input_device, output_device, echo_cancellation)
                 .context("Opening audio streams")?;
@@ -303,6 +490,38 @@ impl MediaEngine {
             })
             .transpose()
             .context("Creating SRTP decrypt context")?;
+
+        // ── ZRTP (leg 1 only -- see `start`'s doc comment) ───────────────────────
+        let zrtp_sas: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+        let (zrtp_encrypt_tx, mut zrtp_encrypt_rx) =
+            mpsc::unbounded_channel::<([u8; 16], [u8; 14])>();
+        let mut zrtp_runtime: Option<ZrtpRuntime> = None;
+        let mut zrtp_pending_sends: Vec<Vec<u8>> = Vec::new();
+        if let Some(params) = zrtp {
+            match ZrtpRuntime::new(
+                params.role,
+                params.local_zid,
+                zrtp_client_id(),
+                &deelip_config::default_db_path().context("Resolving DB path for ZRTP cache")?,
+            ) {
+                Ok((runtime, initial_outcomes)) => {
+                    zrtp_runtime = Some(runtime);
+                    for outcome in initial_outcomes {
+                        if let ZrtpOutcome::SendBytes(bytes) = outcome {
+                            zrtp_pending_sends.push(bytes);
+                        }
+                    }
+                }
+                Err(e) => error!("Failed to start ZRTP session: {e:#}"),
+            }
+        }
+        // Send ZRTP's initial Hello now, before the send/recv tasks exist --
+        // reuses the same socket they'll each get their own clone of.
+        for bytes in zrtp_pending_sends {
+            if let Err(e) = socket.send_to(&bytes, remote_rtp).await {
+                warn!("Failed to send initial ZRTP packet: {e:#}");
+            }
+        }
 
         // ── Leg 2 (conference), if present ────────────────────────────────────
         let mut leg2_socket: Option<Arc<RtpSocket>> = None;
@@ -393,55 +612,8 @@ impl MediaEngine {
         let mut rtp_send = RtpSender::new(payload_type, ts_increment_for(codec));
         let dtmf_ssrc = rtp_send.ssrc;
         let mut dtmf_seq = 0u16;
-        let mut opus_enc = if codec == AudioCodec::Opus {
-            Some(OpusEncoder::new().context("Creating Opus encoder")?)
-        } else {
-            None
-        };
-        let mut g722_enc = if codec == AudioCodec::G722 {
-            Some(G722Encoder::new())
-        } else {
-            None
-        };
-        let mut gsm_enc = if codec == AudioCodec::Gsm {
-            Some(GsmEncoder::new())
-        } else {
-            None
-        };
-        let mut ilbc_enc = if codec == AudioCodec::Ilbc {
-            Some(IlbcEncoder::new().context("Creating iLBC encoder")?)
-        } else {
-            None
-        };
-        let mut g729_enc = if codec == AudioCodec::G729 {
-            Some(G729Encoder::new())
-        } else {
-            None
-        };
-        let mut opus_enc2 = match leg2_codec {
-            Some(AudioCodec::Opus) => {
-                Some(OpusEncoder::new().context("Creating Opus encoder (leg2)")?)
-            }
-            _ => None,
-        };
-        let mut g722_enc2 = match leg2_codec {
-            Some(AudioCodec::G722) => Some(G722Encoder::new()),
-            _ => None,
-        };
-        let mut gsm_enc2 = match leg2_codec {
-            Some(AudioCodec::Gsm) => Some(GsmEncoder::new()),
-            _ => None,
-        };
-        let mut ilbc_enc2 = match leg2_codec {
-            Some(AudioCodec::Ilbc) => {
-                Some(IlbcEncoder::new().context("Creating iLBC encoder (leg2)")?)
-            }
-            _ => None,
-        };
-        let mut g729_enc2 = match leg2_codec {
-            Some(AudioCodec::G729) => Some(G729Encoder::new()),
-            _ => None,
-        };
+        let mut encoder = AudioEncoder::new(codec, "")?;
+        let mut encoder2 = leg2_codec.map(|c| AudioEncoder::new(c, " (leg2)")).transpose()?;
         let mut rtp_send2 =
             leg2_codec.map(|c| RtpSender::new(c.payload_type(), ts_increment_for(c)));
         let dtmf_ssrc2 = rtp_send2.as_ref().map(|r| r.ssrc);
@@ -487,18 +659,24 @@ impl MediaEngine {
                                 (Some(canceller), Some(echo_ref)) => canceller.process(&pcm, echo_ref),
                                 _ => pcm,
                             };
-                            let pcm = match agc.as_mut() {
+                            let mut pcm = match agc.as_mut() {
                                 Some(agc) => agc.process(&pcm),
                                 None => pcm,
                             };
+                            // Scale in place rather than collecting into a
+                            // fresh Vec -- `pcm` is already an owned buffer
+                            // here, so there's no allocation-free way to
+                            // avoid this that's actually cheaper than just
+                            // mutating what we already own. This is the
+                            // common case once a user touches the input
+                            // gain slider (default is unity, skipped below).
                             let g = crate::audio::load_gain(&send_input_gain);
-                            if g == 1.0 {
-                                pcm
-                            } else {
-                                pcm.iter()
-                                    .map(|&s| (s as f32 * g).clamp(i16::MIN as f32, i16::MAX as f32) as i16)
-                                    .collect()
+                            if g != 1.0 {
+                                for s in pcm.iter_mut() {
+                                    *s = (*s as f32 * g).clamp(i16::MIN as f32, i16::MAX as f32) as i16;
+                                }
                             }
+                            pcm
                         };
 
                         // A DTMF tone is never subject to VAD gating -- it's
@@ -516,15 +694,7 @@ impl MediaEngine {
                         // skip entirely -- see `vad_decision`).
                         match vad_decision {
                             VadDecision::Talking => {
-                                let encoded = match codec {
-                                    AudioCodec::Opus => opus_enc.as_mut().unwrap().encode(&pcm),
-                                    AudioCodec::G722 => g722_enc.as_mut().unwrap().encode(&pcm),
-                                    AudioCodec::Gsm  => gsm_enc.as_mut().unwrap().encode(&pcm),
-                                    AudioCodec::Ilbc => ilbc_enc.as_mut().unwrap().encode(&pcm),
-                                    AudioCodec::G729 => g729_enc.as_mut().unwrap().encode(&pcm),
-                                    AudioCodec::Pcma => encode_pcma(&pcm),
-                                    AudioCodec::Pcmu => encode_pcmu(&pcm),
-                                };
+                                let encoded = encoder.encode(&pcm);
                                 let bytes = rtp_send.next_packet(encoded).encode();
                                 let out = match encrypt_ctx.as_mut() {
                                     Some(ctx) => match ctx.encrypt_rtp(&bytes) {
@@ -567,18 +737,10 @@ impl MediaEngine {
                         // Leg 2 (conference): encode independently (may differ
                         // codec) + send, without aborting leg 1's already-sent
                         // packet or the mix/playback step below on failure.
-                        if let (Some(sock2), Some(remote2), Some(c2), Some(sender2)) =
-                            (send_sock2.as_ref(), leg2_remote, leg2_codec, rtp_send2.as_mut())
+                        if let (Some(sock2), Some(remote2), Some(enc2), Some(sender2)) =
+                            (send_sock2.as_ref(), leg2_remote, encoder2.as_mut(), rtp_send2.as_mut())
                         {
-                            let encoded2 = match c2 {
-                                AudioCodec::Opus => opus_enc2.as_mut().unwrap().encode(&pcm),
-                                AudioCodec::G722 => g722_enc2.as_mut().unwrap().encode(&pcm),
-                                AudioCodec::Gsm  => gsm_enc2.as_mut().unwrap().encode(&pcm),
-                                AudioCodec::Ilbc => ilbc_enc2.as_mut().unwrap().encode(&pcm),
-                                AudioCodec::G729 => g729_enc2.as_mut().unwrap().encode(&pcm),
-                                AudioCodec::Pcma => encode_pcma(&pcm),
-                                AudioCodec::Pcmu => encode_pcmu(&pcm),
-                            };
+                            let encoded2 = enc2.encode(&pcm);
                             let bytes2 = sender2.next_packet(encoded2).encode();
                             let out2 = match leg2_encrypt_ctx.as_mut() {
                                 Some(ctx) => match ctx.encrypt_rtp(&bytes2) {
@@ -662,6 +824,15 @@ impl MediaEngine {
                             inband_phase = 0;
                         }
                     }
+                    Some((key, salt)) = zrtp_encrypt_rx.recv() => {
+                        match SrtpContext::new(&key, &salt, ProtectionProfile::Aes128CmHmacSha1_80, None, None) {
+                            Ok(ctx) => {
+                                debug!("ZRTP: switching to SRTP-encrypted send");
+                                encrypt_ctx = Some(ctx);
+                            }
+                            Err(e) => error!("ZRTP: failed to build SRTP encrypt context: {e}"),
+                        }
+                    }
                     Ok(()) = stop_send.changed() => {
                         if *stop_send.borrow() { break; }
                     }
@@ -672,33 +843,11 @@ impl MediaEngine {
 
         // ── Recv task (leg 1) ─────────────────────────────────────────────────
         let recv_sock = socket;
-        let mut opus_dec = if codec == AudioCodec::Opus {
-            Some(OpusDecoder::new().context("Creating Opus decoder")?)
-        } else {
-            None
-        };
-        let mut g722_dec = if codec == AudioCodec::G722 {
-            Some(G722Decoder::new())
-        } else {
-            None
-        };
-        let mut gsm_dec = if codec == AudioCodec::Gsm {
-            Some(GsmDecoder::new())
-        } else {
-            None
-        };
-        let mut ilbc_dec = if codec == AudioCodec::Ilbc {
-            Some(IlbcDecoder::new().context("Creating iLBC decoder")?)
-        } else {
-            None
-        };
-        let mut g729_dec = if codec == AudioCodec::G729 {
-            Some(G729Decoder::new())
-        } else {
-            None
-        };
+        let mut decoder = AudioDecoder::new(codec, "")?;
         let recv_stats = stats.clone();
         let recv_clock_hz = clock_hz_for(codec);
+        let zrtp_sas_recv = zrtp_sas.clone();
+        let mut zrtp_retransmit_tick = tokio::time::interval(Duration::from_millis(100));
 
         let recv_task = tokio::spawn(async move {
             let mut jitter = JitterTracker::default();
@@ -707,6 +856,20 @@ impl MediaEngine {
             loop {
                 tokio::select! {
                     Ok((len, _from)) = recv_sock.recv_from(&mut buf) => {
+                        if is_zrtp_packet(&buf[..len]) {
+                            if let Some(runtime) = zrtp_runtime.as_mut() {
+                                let outcomes = runtime.handle_incoming(&buf[..len]);
+                                handle_zrtp_outcomes(
+                                    outcomes,
+                                    &recv_sock,
+                                    remote_rtp,
+                                    &mut decrypt_ctx,
+                                    &zrtp_encrypt_tx,
+                                    &zrtp_sas_recv,
+                                ).await;
+                            }
+                            continue;
+                        }
                         let decrypted;
                         let plain: &[u8] = if let Some(ctx) = decrypt_ctx.as_mut() {
                             match ctx.decrypt_rtp(&buf[..len]) {
@@ -736,17 +899,22 @@ impl MediaEngine {
                                 let level = pkt.payload.first().copied().unwrap_or(127);
                                 synthesize_comfort_noise(level, FRAME_SAMPLES, &mut cn_state)
                             } else {
-                                match codec {
-                                    AudioCodec::Opus => opus_dec.as_mut().unwrap().decode(&pkt.payload),
-                                    AudioCodec::G722 => g722_dec.as_mut().unwrap().decode(&pkt.payload),
-                                    AudioCodec::Gsm  => gsm_dec.as_mut().unwrap().decode(&pkt.payload),
-                                    AudioCodec::Ilbc => ilbc_dec.as_mut().unwrap().decode(&pkt.payload),
-                                    AudioCodec::G729 => g729_dec.as_mut().unwrap().decode(&pkt.payload),
-                                    AudioCodec::Pcma => decode_pcma(&pkt.payload),
-                                    AudioCodec::Pcmu => decode_pcmu(&pkt.payload),
-                                }
+                                decoder.decode(&pkt.payload)
                             };
                             push_to_jitter(&leg1_buf, &pcm);
+                        }
+                    }
+                    _ = zrtp_retransmit_tick.tick(), if zrtp_runtime.is_some() => {
+                        if let Some(runtime) = zrtp_runtime.as_mut() {
+                            let outcomes = runtime.tick(Instant::now());
+                            handle_zrtp_outcomes(
+                                outcomes,
+                                &recv_sock,
+                                remote_rtp,
+                                &mut decrypt_ctx,
+                                &zrtp_encrypt_tx,
+                                &zrtp_sas_recv,
+                            ).await;
                         }
                     }
                     Ok(()) = stop_recv.changed() => {
@@ -760,31 +928,7 @@ impl MediaEngine {
         // ── Recv task (leg 2, conference only) ────────────────────────────────
         let recv_task2 = if let Some(leg) = &second_leg {
             let recv_sock2 = leg2_socket.clone().unwrap();
-            let mut opus_dec2 = if leg.codec == AudioCodec::Opus {
-                Some(OpusDecoder::new().context("Creating Opus decoder (leg2)")?)
-            } else {
-                None
-            };
-            let mut g722_dec2 = if leg.codec == AudioCodec::G722 {
-                Some(G722Decoder::new())
-            } else {
-                None
-            };
-            let mut gsm_dec2 = if leg.codec == AudioCodec::Gsm {
-                Some(GsmDecoder::new())
-            } else {
-                None
-            };
-            let mut ilbc_dec2 = if leg.codec == AudioCodec::Ilbc {
-                Some(IlbcDecoder::new().context("Creating iLBC decoder (leg2)")?)
-            } else {
-                None
-            };
-            let mut g729_dec2 = if leg.codec == AudioCodec::G729 {
-                Some(G729Decoder::new())
-            } else {
-                None
-            };
+            let mut decoder2 = AudioDecoder::new(leg.codec, " (leg2)")?;
             let codec2 = leg.codec;
             let pt2 = leg2_dtmf_pt.unwrap();
             let mut decrypt_ctx2 = leg2_decrypt_ctx;
@@ -820,15 +964,7 @@ impl MediaEngine {
                                         jitter2.observe(leg2, &pkt, recv_clock_hz2);
                                     }
                                 }
-                                let pcm = match codec2 {
-                                    AudioCodec::Opus => opus_dec2.as_mut().unwrap().decode(&pkt.payload),
-                                    AudioCodec::G722 => g722_dec2.as_mut().unwrap().decode(&pkt.payload),
-                                    AudioCodec::Gsm  => gsm_dec2.as_mut().unwrap().decode(&pkt.payload),
-                                    AudioCodec::Ilbc => ilbc_dec2.as_mut().unwrap().decode(&pkt.payload),
-                                    AudioCodec::G729 => g729_dec2.as_mut().unwrap().decode(&pkt.payload),
-                                    AudioCodec::Pcma => decode_pcma(&pkt.payload),
-                                    AudioCodec::Pcmu => decode_pcmu(&pkt.payload),
-                                };
+                                let pcm = decoder2.decode(&pkt.payload);
                                 push_to_jitter(&leg2_buf_recv, &pcm);
                             }
                         }
@@ -859,7 +995,16 @@ impl MediaEngine {
             output_gain,
             input_gain,
             stats,
+            zrtp_sas,
         })
+    }
+
+    /// Live-verification string ("SAS") for this call's ZRTP-derived key
+    /// agreement -- read out over the phone to each side's user to confirm
+    /// neither is mid-conversation with a MITM; `None` until the handshake
+    /// completes, or for the whole call if ZRTP wasn't attempted.
+    pub fn zrtp_sas(&self) -> Option<String> {
+        self.zrtp_sas.lock().unwrap().clone()
     }
 
     /// Queue a DTMF digit for immediate out-of-band RTP transmission.

@@ -14,9 +14,9 @@ use deelip_config::SipAccount;
 use deelip_nat::{IceConnection, IceGathered, TurnRelay};
 use webrtc_util::Conn;
 
-use crate::call::dialog::CallMedia;
-use crate::events::CallMediaReady;
-use crate::wire::sdp::{AudioCodec, IceAttrs, ParsedSdp, SrtpParams, SrtpSession, ALL_CODECS};
+use crate::call::dialog::{CallMedia, VideoMedia};
+use crate::events::{CallMediaReady, VideoMediaReady};
+use crate::wire::sdp::{AudioCodec, IceAttrs, ParsedSdp, SrtpParams, SrtpSession, VideoCodec, ALL_CODECS};
 
 /// Bounded wait for ICE candidate gathering (host candidates are instant;
 /// server-reflexive/relay each cost one STUN/TURN round trip) -- generous
@@ -41,6 +41,22 @@ pub struct NetworkConfig {
     /// decision as an explicit `enabled` parameter rather than reading this
     /// field directly.
     pub ice_enabled: bool,
+    /// Restrict local RTP port allocation (`deelip_nat::alloc_rtp_port`) to
+    /// this inclusive range instead of an OS-assigned ephemeral port --
+    /// lets a firewall/NAT port-forward be pinned to a fixed range covering
+    /// every call. `None`: today's ephemeral-port behavior.
+    pub rtp_port_range: Option<(u16, u16)>,
+    /// Override DNS server ("ip" or "ip:port", default port 53) used to
+    /// resolve the SIP server host and, if `dns_srv_enabled`, SRV records --
+    /// see `crate::wire::dns`. `None`: system resolver, either directly
+    /// (`tokio::net::lookup_host`) or via `/etc/resolv.conf` if SRV lookup
+    /// is enabled.
+    pub custom_nameserver: Option<String>,
+    /// Attempt a SIP SRV-record lookup (RFC 3263) for the configured server
+    /// host before falling back to a plain A/AAAA lookup on host:port --
+    /// see `crate::wire::dns::resolve_target`. Off by default, matching
+    /// today's behavior.
+    pub dns_srv_enabled: bool,
 }
 
 impl NetworkConfig {
@@ -136,11 +152,26 @@ pub async fn try_gather_ice(network: &NetworkConfig, enabled: bool, is_controlli
 /// without working media in that case, same as any other NAT-traversal
 /// failure this codebase never protected against pre-ICE either.
 pub async fn finish_ice_connect(gathered: Option<IceGathered>, is_controlling: bool, parsed: &ParsedSdp) -> Option<IceConnection> {
+    finish_ice_connect_raw(gathered, is_controlling, parsed.ice_ufrag.as_deref(), parsed.ice_pwd.as_deref(), &parsed.ice_candidates).await
+}
+
+/// Same as `finish_ice_connect`, but takes the three ICE parameters
+/// directly instead of a whole `ParsedSdp` -- used for the video leg's
+/// negotiation, whose parsed offer/answer is a `ParsedVideoMedia` (a
+/// distinct type from `ParsedSdp`, deliberately -- see `wire::sdp`'s
+/// module doc). `finish_ice_connect` is now a thin wrapper around this.
+pub async fn finish_ice_connect_raw(
+    gathered: Option<IceGathered>,
+    is_controlling: bool,
+    ufrag: Option<&str>,
+    pwd: Option<&str>,
+    candidates: &[String],
+) -> Option<IceConnection> {
     let gathered = gathered?;
-    let ufrag = parsed.ice_ufrag.clone()?;
-    let pwd = parsed.ice_pwd.clone()?;
-    if parsed.ice_candidates.is_empty() { return None; }
-    match deelip_nat::ice::connect(gathered, is_controlling, &ufrag, &pwd, &parsed.ice_candidates).await {
+    let ufrag = ufrag?;
+    let pwd = pwd?;
+    if candidates.is_empty() { return None; }
+    match deelip_nat::ice::connect(gathered, is_controlling, ufrag, pwd, candidates).await {
         Ok(conn) => Some(conn),
         Err(e) => { tracing::warn!("ICE connectivity checks failed, falling back: {e}"); None }
     }
@@ -155,14 +186,28 @@ pub async fn finish_ice_connect(gathered: Option<IceGathered>, is_controlling: b
 /// default candidate's address for the plain c=/m= line, and the winning
 /// connection -- all three or nothing.
 pub async fn try_answer_with_ice(network: &NetworkConfig, enabled: bool, offer: &ParsedSdp) -> Option<(IceAttrs, SocketAddr, IceConnection)> {
+    try_answer_with_ice_raw(network, enabled, offer.ice_ufrag.as_deref(), offer.ice_pwd.as_deref(), &offer.ice_candidates).await
+}
+
+/// Same as `try_answer_with_ice`, but takes the three ICE parameters
+/// directly instead of a whole `ParsedSdp` -- same reasoning as
+/// `finish_ice_connect_raw`. `try_answer_with_ice` is now a thin wrapper
+/// around this.
+pub async fn try_answer_with_ice_raw(
+    network: &NetworkConfig,
+    enabled: bool,
+    ufrag: Option<&str>,
+    pwd: Option<&str>,
+    candidates: &[String],
+) -> Option<(IceAttrs, SocketAddr, IceConnection)> {
     if !enabled { return None; }
-    let ufrag = offer.ice_ufrag.as_deref()?;
-    let pwd = offer.ice_pwd.as_deref()?;
-    if offer.ice_candidates.is_empty() { return None; }
+    let ufrag = ufrag?;
+    let pwd = pwd?;
+    if candidates.is_empty() { return None; }
     let gathered = try_gather_ice(network, enabled, false).await?;
     let attrs = IceAttrs { ufrag: gathered.local_ufrag.clone(), pwd: gathered.local_pwd.clone(), candidates: gathered.candidates.clone() };
     let default_addr = gathered.default_addr;
-    match deelip_nat::ice::connect(gathered, false, ufrag, pwd, &offer.ice_candidates).await {
+    match deelip_nat::ice::connect(gathered, false, ufrag, pwd, candidates).await {
         Ok(conn) => Some((attrs, default_addr, conn)),
         Err(e) => { tracing::warn!("ICE connectivity checks failed, falling back: {e}"); None }
     }
@@ -177,6 +222,32 @@ pub async fn try_answer_with_ice(network: &NetworkConfig, enabled: bool, offer: 
 /// `accept_call`'s and the background-task result handlers for
 /// `initiate_call`/`on_response`'s answer path, so the SRTP-session/relay-
 /// selection logic isn't duplicated three ways.
+/// Shared by `resolve_call_media`/`resolve_video_media`: derive the actual
+/// SRTP session (both sides' keys, if both offered one) and the connected
+/// transport to hand to `MediaEngine::start` (an ICE connection if one was
+/// negotiated, else a TURN relay if configured, else `None` for plain
+/// direct UDP) -- codec-agnostic, so identical for audio and video legs.
+fn resolve_srtp_and_relay(
+    local_srtp:  &Option<SrtpParams>,
+    remote_srtp: &Option<SrtpParams>,
+    relay:       &Option<TurnRelay>,
+    ice:         &Option<IceConnection>,
+    wants_srtp:  bool,
+) -> (Option<SrtpSession>, Option<Arc<dyn Conn + Send + Sync>>) {
+    let srtp_session = match (local_srtp, remote_srtp) {
+        (Some(local), Some(remote)) => Some(SrtpSession { local: local.clone(), remote: remote.clone() }),
+        _ => {
+            if wants_srtp {
+                tracing::warn!("SRTP requested but remote SDP has no a=crypto -- falling back to plaintext RTP");
+            }
+            None
+        }
+    };
+    let relay_conn: Option<Arc<dyn Conn + Send + Sync>> = ice.as_ref().map(|c| c.conn.clone())
+        .or_else(|| relay.as_ref().map(|r| r.conn.clone()));
+    (srtp_session, relay_conn)
+}
+
 #[allow(clippy::too_many_arguments)] // each param is a distinct, meaningfully-named
                                       // piece of one call leg's negotiated
                                       // media state -- bundling them into a
@@ -193,20 +264,35 @@ pub fn resolve_call_media(
     remote_srtp:    Option<SrtpParams>,
     wants_srtp:     bool,
 ) -> (CallMedia, CallMediaReady) {
-    let srtp_session = match (&local_srtp, &remote_srtp) {
-        (Some(local), Some(remote)) => Some(SrtpSession { local: local.clone(), remote: remote.clone() }),
-        _ => {
-            if wants_srtp {
-                tracing::warn!("SRTP requested but remote SDP has no a=crypto -- falling back to plaintext RTP");
-            }
-            None
-        }
-    };
-    let relay_conn: Option<Arc<dyn Conn + Send + Sync>> = ice.as_ref().map(|c| c.conn.clone())
-        .or_else(|| relay.as_ref().map(|r| r.conn.clone()));
+    let (srtp_session, relay_conn) =
+        resolve_srtp_and_relay(&local_srtp, &remote_srtp, &relay, &ice, wants_srtp);
 
-    let media = CallMedia { local_rtp, local_srtp, relay, ice, codec, dtmf_type, cn_type };
-    let ready = CallMediaReady { codec, dtmf_type, cn_type, local_rtp, remote_rtp, srtp: srtp_session, relay: relay_conn };
+    let media = CallMedia { local_rtp, local_srtp, relay, ice, codec, dtmf_type, cn_type, video: None };
+    let ready = CallMediaReady { codec, dtmf_type, cn_type, local_rtp, remote_rtp, srtp: srtp_session, relay: relay_conn, video: None };
+    (media, ready)
+}
+
+/// Video counterpart of `resolve_call_media` -- same shared SRTP/relay
+/// derivation, no `dtmf_type`/`cn_type` (neither applies to video). A
+/// sibling function rather than growing `resolve_call_media`'s already-long
+/// argument list further, matching this file's existing convention (see
+/// that function's own `#[allow(clippy::too_many_arguments)]` comment).
+#[allow(clippy::too_many_arguments)]
+pub fn resolve_video_media(
+    local_rtp:   u16,
+    local_srtp:  Option<SrtpParams>,
+    relay:       Option<TurnRelay>,
+    ice:         Option<IceConnection>,
+    codec:       VideoCodec,
+    remote_rtp:  SocketAddr,
+    remote_srtp: Option<SrtpParams>,
+    wants_srtp:  bool,
+) -> (VideoMedia, VideoMediaReady) {
+    let (srtp_session, relay_conn) =
+        resolve_srtp_and_relay(&local_srtp, &remote_srtp, &relay, &ice, wants_srtp);
+
+    let media = VideoMedia { local_rtp, local_srtp, relay, ice, codec };
+    let ready = VideoMediaReady { codec, local_rtp, remote_rtp, srtp: srtp_session, relay: relay_conn };
     (media, ready)
 }
 

@@ -7,11 +7,12 @@ mod registration;
 mod subscription;
 pub mod transport;
 mod wire;
+pub mod zrtp;
 
 pub use call::dialog;
 pub use call::media_setup;
 pub use client::SipStack;
-pub use events::{CallMediaReady, SipCommand, SipEvent};
+pub use events::{CallMediaReady, SipCommand, SipEvent, VideoMediaReady};
 pub use handle::SipHandle;
 pub use subscription::mwi;
 pub use subscription::mwi::MwiState;

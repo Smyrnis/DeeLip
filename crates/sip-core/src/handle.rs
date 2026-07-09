@@ -106,4 +106,9 @@ impl SipHandle {
             body: body.to_string(),
         });
     }
+    /// (Re-)publish this account's own presence status -- a no-op inside
+    /// `SipStack` unless `SipAccount::publish_presence` is enabled.
+    pub fn publish_presence(&self, available: bool) {
+        let _ = self.cmd_tx.send(SipCommand::PublishPresence { available });
+    }
 }

@@ -29,13 +29,12 @@ impl DeelipApp {
                 |ui, row_range| {
                     for idx in row_range {
                         let m = &self.messages.messages[idx];
+                        // Plain Unicode arrows, not ARROW_DOWN_LEFT/ARROW_UP_RIGHT
+                        // -- both are in the broken subset of the bundled icon
+                        // font (see `theme.rs`'s module doc).
                         let (icon, color) = match m.direction {
-                            MessageDirection::Inbound => {
-                                (egui_phosphor::regular::ARROW_DOWN_LEFT, self.palette.info)
-                            }
-                            MessageDirection::Outbound => {
-                                (egui_phosphor::regular::ARROW_UP_RIGHT, self.palette.accent)
-                            }
+                            MessageDirection::Inbound => ("↙", self.palette.ink_muted),
+                            MessageDirection::Outbound => ("↗", self.palette.signal),
                         };
                         let peer_uri = m.peer_uri.clone();
                         let body = m.body.clone();
@@ -44,7 +43,10 @@ impl DeelipApp {
                         let palette = self.palette;
                         list_row(ui, &palette, idx, |ui| {
                             ui.label(RichText::new(icon).color(color));
-                            ui.label(short_uri(&uri));
+                            ui.label(
+                                RichText::new(short_uri(&uri))
+                                    .font(egui::FontId::new(12.0, egui::FontFamily::Monospace)),
+                            );
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
@@ -53,7 +55,7 @@ impl DeelipApp {
                                     {
                                         reply_target = Some(peer_uri.clone());
                                     }
-                                    ui.label(RichText::new(&body).color(palette.muted));
+                                    ui.label(RichText::new(&body).color(palette.ink_muted));
                                 },
                             );
                         });
@@ -67,13 +69,15 @@ impl DeelipApp {
 
         ui.add_space(8.0);
         ui.separator();
-        ui.label(RichText::new("Send message").strong());
+        ui.add_space(4.0);
+        ui.label(RichText::new("Send message").font(crate::theme::font_heading(14.0)));
         ui.add_space(4.0);
         ui.horizontal(|ui| {
             ui.label("To:");
             ui.add(
                 egui::TextEdit::singleline(&mut self.message_to)
                     .hint_text("sip:bob@example.com")
+                    .font(egui::FontId::new(13.0, egui::FontFamily::Monospace))
                     .desired_width(f32::INFINITY),
             );
         });
@@ -101,7 +105,7 @@ impl DeelipApp {
         let Some(acc) = self.selected_account_idx() else {
             return;
         };
-        let domain = self.accounts[acc].handle.domain.clone();
+        let domain = self.dial_domain(acc);
         let to = normalize_target(self.message_to.trim(), &domain);
         let body = self.message_body.trim().to_string();
         self.accounts[acc].handle.send_message(&to, &body);

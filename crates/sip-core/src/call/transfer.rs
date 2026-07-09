@@ -23,7 +23,7 @@ impl SipStack {
         let cseq = dialog.next_local_cseq();
         let branch = new_branch();
 
-        let server = self.account.domain().to_string();
+        let server = self.identity_host.clone();
         let username = self.account.username.clone();
         let display = self
             .account
@@ -94,7 +94,7 @@ impl SipStack {
         let cseq = dialog.next_local_cseq();
         let branch = new_branch();
 
-        let server = self.account.domain().to_string();
+        let server = self.identity_host.clone();
         let username = self.account.username.clone();
         let display = self
             .account
@@ -148,7 +148,7 @@ impl SipStack {
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(self.server_addr);
             let username = &self.account.username;
-            let server = self.account.domain();
+            let server = &self.identity_host;
             let display = self.account.display_name.as_deref().unwrap_or(username);
             let local_tag = &dialog.local_tag;
             let remote_uri = &dialog.remote_uri;

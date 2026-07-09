@@ -5,7 +5,7 @@ use webrtc_util::Conn;
 
 use crate::subscription::mwi::MwiState;
 use crate::subscription::presence::PresenceState;
-use crate::wire::sdp::{AudioCodec, SrtpSession};
+use crate::wire::sdp::{AudioCodec, SrtpSession, VideoCodec};
 
 /// Everything `deelip_media::MediaEngine::start` needs, ready to use --
 /// SDP parsing, codec negotiation, and STUN/TURN/ICE endpoint resolution
@@ -27,6 +27,21 @@ pub struct CallMediaReady {
     /// The connected transport to hand to `MediaEngine::start`'s `relay`
     /// param -- an ICE connection if one was negotiated, else a TURN relay
     /// if one is configured, else `None` (plain direct UDP).
+    pub relay: Option<Arc<dyn Conn + Send + Sync>>,
+    /// Negotiated video leg, if `SipAccount::video_enabled` and the remote
+    /// both offered/accepted one -- `None` for every call today. See
+    /// `VideoMediaReady`; nothing in `media-engine` reads this yet.
+    pub video: Option<VideoMediaReady>,
+}
+
+/// Video counterpart of `CallMediaReady` -- no `dtmf_type`/`cn_type` (neither
+/// applies to video).
+#[derive(Clone)]
+pub struct VideoMediaReady {
+    pub codec: VideoCodec,
+    pub local_rtp: u16,
+    pub remote_rtp: SocketAddr,
+    pub srtp: Option<SrtpSession>,
     pub relay: Option<Arc<dyn Conn + Send + Sync>>,
 }
 
@@ -52,6 +67,13 @@ pub enum SipEvent {
     IncomingCall {
         call_id: String,
         from: String,
+        /// `answer-after=N` from a `Call-Info` header, if present -- an
+        /// intercom/paging-hardware convention (see
+        /// `wire::util::parse_call_info_answer_after`). Only acted on by
+        /// `ui` when the account's own `auto_answer_control_button`/
+        /// `deny_incoming_control_button` opts in; otherwise ignored like
+        /// today.
+        remote_answer_after: Option<u32>,
     },
     CallEnded {
         call_id: String,
@@ -199,5 +221,12 @@ pub enum SipCommand {
     SendMessage {
         to: String,
         body: String,
+    },
+    /// (Re-)publish this account's own presence status (RFC 3903 PUBLISH) --
+    /// sent when the user toggles DND while `SipAccount::publish_presence`
+    /// is on. The initial publish after registration happens inside
+    /// `SipStack` itself, with no command needed.
+    PublishPresence {
+        available: bool,
     },
 }

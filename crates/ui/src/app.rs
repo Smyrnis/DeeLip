@@ -22,7 +22,7 @@ pub(crate) enum Tab {
     History,
     Messages,
     Contacts,
-    Settings,
+    Directory,
 }
 
 // ── App state ─────────────────────────────────────────────────────────────────
@@ -34,6 +34,12 @@ pub struct DeelipApp {
     pub(crate) rt: Handle,
 
     pub(crate) tab: Tab,
+    /// Whether the Settings dialog is open -- MicroSIP-style separate modal
+    /// window rather than a tab, since a settings screen the size of this
+    /// one competing for tab-bar space with Dialer/History/etc. read as
+    /// "just another view" rather than the distinct, out-of-the-way
+    /// configuration surface MicroSIP's own Settings dialog is.
+    pub(crate) settings_open: bool,
 
     // Dialer
     pub(crate) call_target: String,
@@ -57,6 +63,10 @@ pub struct DeelipApp {
     /// time). `None` means every call in `calls` is held.
     pub(crate) focused_call: Option<usize>,
     pub(crate) media: Option<MediaEngine>,
+    /// Video counterpart of `media` -- `None` whenever the focused call has
+    /// no negotiated video leg (every call today unless
+    /// `SipAccount::video_enabled`), or while none is focused.
+    pub(crate) video: Option<VideoCallState>,
     /// Not-yet-answered outgoing call (between `make_call` and `CallConnected`/
     /// `CallFailed`) — dialing a 2nd number is blocked while this is `Some`.
     pub(crate) pending_outbound: Option<PendingOutbound>,
@@ -136,6 +146,10 @@ pub struct DeelipApp {
     /// (egui repaints continuously) hammered every ALSA/jack backend dozens
     /// of times a second, producing log spam and a real UI slowdown.
     pub(crate) audio_device_cache: Option<(Vec<String>, Vec<String>)>,
+    /// Same idiom as `audio_device_cache`, for the Settings tab's camera
+    /// picker -- `nokhwa` enumeration is likewise too expensive to run
+    /// every frame.
+    pub(crate) camera_device_cache: Option<Vec<String>>,
     /// Mirrors whether `~/.config/autostart/deelip.desktop` currently exists
     /// -- a separate on-disk file, not part of `config.toml`, so it needs
     /// its own bit of UI-bound state (checked once at startup, then kept in
@@ -158,6 +172,14 @@ pub struct DeelipApp {
     /// mirrored to the tray icon's badge (see `sync_tray_badge`) whenever
     /// it changes; reset to 0 on switching to the History tab.
     pub(crate) unseen_missed_calls: u32,
+    /// `(account, call_id)` for every entry in `calls`/`pending_call` as
+    /// last mirrored into the tray's `QuitState` -- lets
+    /// `process_tray_events` skip re-cloning Senders/call-ids and re-locking
+    /// the shared state on every frame when nothing has actually changed
+    /// since the last one. Mirrors `audio_device_cache`'s cache-and-compare
+    /// idiom.
+    pub(crate) tray_calls_key: Vec<(usize, String)>,
+    pub(crate) tray_pending_key: Option<(usize, String)>,
 
     /// System-wide Answer/Hangup/Mute hotkeys (see `hotkeys` module docs) --
     /// `None` if disabled in config, or if registration failed (logged, not
@@ -179,18 +201,30 @@ pub struct DeelipApp {
     /// Indices into `history.records` matching the current search/status
     /// filter, most-recent-first (same order as `history.records` itself).
     pub(crate) history_filtered: Vec<usize>,
+    /// `(unseen_missed_calls, label)` as last rendered for the tab bar --
+    /// recomputed only when the count changes, instead of `format!()`ing a
+    /// fresh label every frame regardless. Same cache-and-compare idiom as
+    /// `history_filter_key`.
+    pub(crate) history_tab_label_cache: (u32, String),
 
     // Messages
     pub(crate) messages: MessageLog,
     /// Unseen received messages -- mirrors `unseen_missed_calls`, reset to 0
     /// on switching to the Messages tab.
     pub(crate) unseen_messages: u32,
+    /// Same idiom as `history_tab_label_cache`, for the Messages tab label.
+    pub(crate) messages_tab_label_cache: (u32, String),
     /// Compose box state for the Messages tab.
     pub(crate) message_to: String,
     pub(crate) message_body: String,
 
     // Blocklist
     pub(crate) blocklist_input: String,
+
+    // Dial Plan rule editor (Settings' account editor) -- new-rule input
+    // fields, mirroring `blocklist_input`'s shape.
+    pub(crate) dialplan_pattern_input: String,
+    pub(crate) dialplan_replacement_input: String,
 
     // Contacts
     pub(crate) contacts: ContactBook,
@@ -209,6 +243,12 @@ pub struct DeelipApp {
     /// re-created (old one just dropped) each time a new one is spawned,
     /// same one-shot-channel-per-async-op idiom as elsewhere in this app.
     pub(crate) update_rx: Option<std::sync::mpsc::Receiver<crate::update::UpdateMsg>>,
+
+    // Directory (LDAP) -- see `views::directory`.
+    pub(crate) directory_query: String,
+    pub(crate) directory_state: crate::views::directory::DirectoryState,
+    pub(crate) directory_rx:
+        Option<std::sync::mpsc::Receiver<crate::views::directory::DirectoryMsg>>,
 }
 
 /// A not-yet-answered incoming call.
@@ -262,6 +302,26 @@ pub(crate) struct CallSlot {
     pub(crate) media: CallMediaReady,
 }
 
+/// Live video state for the focused call, mirroring `MediaEngine`/`self.media`'s
+/// placement -- only the focused call has a running `VideoEngine`. Bundles
+/// the engine, an optional camera capture handle (`None` if no camera was
+/// available -- video still receives/displays the remote side in that
+/// case, see `media.rs::start_video`), and per-side cached-frame+texture
+/// state so `dialer.rs`'s per-repaint render doesn't reconvert/re-upload a
+/// YUV420 frame that hasn't changed since the last one.
+pub(crate) struct VideoCallState {
+    pub(crate) engine: deelip_media::video_engine::VideoEngine,
+    pub(crate) camera: Option<deelip_media::video_capture::CaptureHandle>,
+    pub(crate) remote: VideoViewCache,
+    pub(crate) local: VideoViewCache,
+}
+
+#[derive(Default)]
+pub(crate) struct VideoViewCache {
+    pub(crate) frame: Option<deelip_media::video_codec::Yuv420Frame>,
+    pub(crate) texture: Option<egui::TextureHandle>,
+}
+
 /// A single registered SIP identity: its stack handle plus the registration
 /// status shown next to it in the account picker.
 pub(crate) struct AccountState {
@@ -302,12 +362,13 @@ impl DeelipApp {
         let contacts = ContactBook::load(&db).unwrap_or_default();
         let messages = MessageLog::load(&db).unwrap_or_default();
 
-        let hotkeys = if config.global_hotkeys_enabled {
-            match Hotkeys::spawn(
-                &config.hotkey_answer,
-                &config.hotkey_hangup,
-                &config.hotkey_mute,
-            ) {
+        let hotkeys = if config.global_hotkeys_enabled || config.handle_media_buttons {
+            let custom = config.global_hotkeys_enabled.then_some((
+                config.hotkey_answer.as_str(),
+                config.hotkey_hangup.as_str(),
+                config.hotkey_mute.as_str(),
+            ));
+            match Hotkeys::spawn(custom, config.handle_media_buttons) {
                 Ok(h) => Some(h),
                 Err(e) => {
                     tracing::warn!(
@@ -324,6 +385,7 @@ impl DeelipApp {
             accounts,
             rt,
             tab: Tab::Dialer,
+            settings_open: false,
             call_target: String::new(),
             selected_account: 0,
             last_dialed: None,
@@ -332,6 +394,7 @@ impl DeelipApp {
             calls: Vec::new(),
             focused_call: None,
             media: None,
+            video: None,
             pending_outbound: None,
             pending_call: None,
             pending_accept: None,
@@ -352,22 +415,32 @@ impl DeelipApp {
             edit_account_idx: 0,
             show_account_password: false,
             audio_device_cache: None,
+            camera_device_cache: None,
             autostart_enabled: deelip_config::is_autostart_enabled(),
             first_frame: true,
             palette: Palette::dark(),
             tray,
             unseen_missed_calls: 0,
+            tray_calls_key: Vec::new(),
+            tray_pending_key: None,
             hotkeys,
             history,
             history_search: String::new(),
             history_status_filter: None,
             history_filter_key: None,
             history_filtered: Vec::new(),
+            // `u32::MAX` is a "never computed yet" sentinel, not a real
+            // count -- guarantees the very first frame's mismatch check
+            // computes the real label instead of leaving it empty.
+            history_tab_label_cache: (u32::MAX, String::new()),
             messages,
             unseen_messages: 0,
+            messages_tab_label_cache: (u32::MAX, String::new()),
             message_to: String::new(),
             message_body: String::new(),
             blocklist_input: String::new(),
+            dialplan_pattern_input: String::new(),
+            dialplan_replacement_input: String::new(),
             contacts,
             contact_search: String::new(),
             new_contact: Contact::default(),
@@ -375,6 +448,9 @@ impl DeelipApp {
             presence: HashMap::new(),
             update_state: crate::update::UpdateState::Idle,
             update_rx: None,
+            directory_query: String::new(),
+            directory_state: crate::views::directory::DirectoryState::default(),
+            directory_rx: None,
         };
 
         let now = crate::helpers::unix_now();

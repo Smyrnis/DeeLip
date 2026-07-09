@@ -109,6 +109,14 @@ jobs:
           cp ./*.tar.gz dist/
           cp ./*.AppImage dist/
 
+      - name: Checksum artifacts
+        # Lets the in-app updater (crates/updater) verify a downloaded
+        # .tar.gz before installing it in place of the running binary --
+        # see download_and_replace's doc comment.
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS.txt
+
       - uses: actions/upload-artifact@v4
         with:
           name: deelip-linux-packages

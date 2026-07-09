@@ -27,7 +27,11 @@ impl DeelipApp {
         match event {
             SipEvent::Registered { expires } => {
                 self.accounts[account].reg_ok = true;
-                self.accounts[account].status = format!("Registered (expires {expires}s)");
+                self.accounts[account].status = if self.accounts[account].account.local_account {
+                    "Ready (Local Account)".into()
+                } else {
+                    format!("Registered (expires {expires}s)")
+                };
                 self.refresh_idle_status();
                 self.subscribe_account_contacts(account);
                 self.subscribe_account_mwi(account);
@@ -62,6 +66,9 @@ impl DeelipApp {
                         if let Some(engine) = self.media.take() {
                             self.rt.block_on(engine.stop());
                         }
+                        if let Some(v) = self.video.take() {
+                            self.rt.block_on(v.engine.stop());
+                        }
                         self.focused_call = None;
                     }
                     let slot = CallSlot {
@@ -95,7 +102,7 @@ impl DeelipApp {
                     tracing::warn!(call_id, "CallConnected with no pending call — ignoring");
                 }
             }
-            SipEvent::IncomingCall { call_id, from } => {
+            SipEvent::IncomingCall { call_id, from, remote_answer_after } => {
                 let caller = extract_user_part(&from);
                 if self
                     .config
@@ -113,9 +120,39 @@ impl DeelipApp {
                     return;
                 }
                 let acc = &self.accounts[account].account;
-                let dnd = acc.dnd;
-                let forward_always = acc.forward_always.clone().filter(|s| !s.is_empty());
-                let forward_on_busy = acc.forward_on_busy.clone().filter(|s| !s.is_empty());
+                // MicroSIP's "Deny Incoming (Control Button)"/"Auto Answer
+                // (Control Button)": both react to the same remote
+                // `Call-Info: ...;answer-after=N` signal (see
+                // `deelip_sip::wire::util::parse_call_info_answer_after`),
+                // ignored entirely unless the account opted into one of the
+                // two. Deny takes priority if both are somehow on, and (like
+                // the intercom/paging use case this exists for) both bypass
+                // DND/forwarding below -- only the blocklist above and the
+                // capacity check further down still apply.
+                if remote_answer_after.is_some() && acc.deny_incoming_control_button {
+                    tracing::debug!(call_id, %from, "Remote auto-answer signal + Deny Incoming (Control Button) active, rejecting");
+                    self.accounts[account].handle.reject_call(&call_id);
+                    self.record_history(
+                        from,
+                        CallDirection::Inbound,
+                        unix_now(),
+                        CallStatus::Rejected,
+                    );
+                    return;
+                }
+                let remote_auto_answer =
+                    remote_answer_after.is_some() && acc.auto_answer_control_button;
+                let dnd = acc.dnd && !remote_auto_answer;
+                let forward_always = acc
+                    .forward_always
+                    .clone()
+                    .filter(|s| !s.is_empty())
+                    .filter(|_| !remote_auto_answer);
+                let forward_on_busy = acc
+                    .forward_on_busy
+                    .clone()
+                    .filter(|s| !s.is_empty())
+                    .filter(|_| !remote_auto_answer);
                 let server = acc.server.clone();
                 if dnd {
                     tracing::debug!(call_id, %from, "DND active, rejecting incoming call");
@@ -156,6 +193,20 @@ impl DeelipApp {
                         );
                         return;
                     }
+                    // Single Call Mode: reject outright as a plain busy
+                    // signal instead of ringing as a call-waiting second
+                    // call -- only reached when this account has no
+                    // `forward_on_busy` of its own, which takes priority.
+                    if self.config.single_call_mode && !remote_auto_answer {
+                        self.accounts[account].handle.reject_call(&call_id);
+                        self.record_history(
+                            from,
+                            CallDirection::Inbound,
+                            unix_now(),
+                            CallStatus::Rejected,
+                        );
+                        return;
+                    }
                 }
                 // `pending_accept` counts toward capacity too -- it's a call
                 // we've already told `SipStack` to accept and is about to
@@ -188,9 +239,12 @@ impl DeelipApp {
                             let target = normalize_target(&target, &acc.server);
                             (unix_now() + acc.no_answer_timeout_secs as u64, target)
                         });
-                let auto_answer_at = acc
-                    .auto_answer_enabled
-                    .then(|| unix_now() + acc.auto_answer_secs as u64);
+                let auto_answer_at = if remote_auto_answer {
+                    Some(unix_now() + remote_answer_after.unwrap_or(0) as u64)
+                } else {
+                    acc.auto_answer_enabled
+                        .then(|| unix_now() + acc.auto_answer_secs as u64)
+                };
                 self.pending_call = Some(PendingCall {
                     account,
                     call_id,
@@ -338,6 +392,9 @@ impl DeelipApp {
         {
             cfg_acc.dnd = new_dnd;
         }
+        if self.accounts[idx].account.publish_presence {
+            self.accounts[idx].handle.publish_presence(!new_dnd);
+        }
         self.save_config_quietly();
     }
 
@@ -471,6 +528,9 @@ impl DeelipApp {
         if was_conference || self.focused_call == Some(idx) {
             if let Some(engine) = self.media.take() {
                 self.rt.block_on(engine.stop());
+            }
+            if let Some(v) = self.video.take() {
+                self.rt.block_on(v.engine.stop());
             }
         }
         if was_conference {
