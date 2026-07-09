@@ -84,7 +84,7 @@ impl DeelipApp {
                 let resp = ui.add_sized(
                     [STAGE_WIDTH, 38.0],
                     egui::TextEdit::singleline(&mut self.call_target)
-                        .hint_text("sip:address or number")
+                        .hint_text("Enter a number")
                         .font(egui::FontId::new(15.0, egui::FontFamily::Monospace))
                         .horizontal_align(egui::Align::Center),
                 );
@@ -120,15 +120,19 @@ impl DeelipApp {
                 });
                 ui.add_space(16.0);
 
+                // Grey chrome, not the `signal` accent -- see theme.rs's
+                // v3.1 doc note. `signal` is reserved for actual call-state
+                // signals now, not generic buttons.
                 let call_text = RichText::new(format!("{}  Call", egui_phosphor::regular::PHONE))
                     .font(theme::font_medium(15.0))
-                    .color(Color32::WHITE);
+                    .color(self.palette.ink);
                 if ui
                     .add_sized(
                         [STAGE_WIDTH, 42.0],
                         egui::Button::new(call_text)
-                            .fill(self.palette.signal)
-                            .rounding(egui::Rounding::same(10.0)),
+                            .fill(self.palette.surface_hover)
+                            .stroke(egui::Stroke::new(1.0, self.palette.border))
+                            .rounding(egui::Rounding::same(2.0)),
                     )
                     .clicked()
                 {

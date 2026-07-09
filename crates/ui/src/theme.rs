@@ -1,8 +1,7 @@
-//! DeeLip's "Signal" design system -- named semantic color tokens plus the
-//! Inter/JetBrains Mono type scale (see `lib.rs::install_fonts`), instead of
-//! ad hoc `Color32` literals and whatever font egui ships by default. One
-//! `Palette` instance per theme, refreshed whenever `AppConfig.dark_mode`
-//! changes.
+//! DeeLip's design system -- named semantic color tokens plus the
+//! JetBrains-Mono-everywhere type scale (see `lib.rs::install_fonts`),
+//! instead of ad hoc `Color32` literals and whatever font egui ships by
+//! default.
 //!
 //! The one rule every view follows: color communicates call *state*, not
 //! decoration. `signal` means active/connected/positive, `ringing` means
@@ -10,17 +9,40 @@
 //! borrows them. Everything else is drawn from the neutral canvas/surface/
 //! border/ink scale.
 //!
-//! **v2 revision (2026-07-08, later same day as the original Signal pass)**:
-//! the user felt the first pass read as too playful -- oversaturated color,
-//! circular/bubbly shapes everywhere, and a large animated pulse-ring as
-//! the in-call signature. This is a deliberate second iteration on the same
-//! system, not a different one: same three semantic hues, pulled down in
-//! saturation; same card/surface structure, with a smaller corner radius
-//! (rectangles, not circles, outside of avatars); the pulse ring replaced
-//! by a small static-avatar + status-dot + text-badge convention (see
-//! `views/dialer.rs::call_avatar`), closer to how Stripe/Slack/Notion show
-//! live status than to a hero animation. Density also tightened (smaller
-//! type scale, tighter spacing) per the "too much chrome" feedback.
+//! **v3 revision (2026-07-09)**: pulled back from the "Signal" redesign's
+//! spacious/rounded/indigo look toward a Darcula-style IDE identity, per
+//! user feedback that the app felt "too modern." Real IntelliJ Darcula
+//! hex values (not an approximation): canvas `#2B2B2B`, surface `#3C3F41`,
+//! ink `#A9B7C6` (Darcula's own iconic foreground), ringing-orange
+//! `#CC7832` (Darcula's own keyword orange), danger-red `#BC3F3C`
+//! (Darcula's error red). Darcula is a fixed dark identity in real
+//! IntelliJ -- there's no official light counterpart, so unlike the
+//! previous `dark()`/`light()` pair, this is deliberately single-theme now
+//! (disclosed and accepted when the redesign mockup was approved).
+//! Rounding also dropped to near-zero (sharp IDE-panel corners, not the
+//! previous rounded cards) -- see `apply_style`/`card_frame`.
+//!
+//! **v3.1 (2026-07-10)**: first live use of v3 turned up real feedback --
+//! the bright sky-blue `#6897BB` (Darcula's *numeric-literal* text color)
+//! read as too saturated/"modern" once it was reused as general interactive
+//! chrome (tab-bar selection, the Contacts FAB) rather than just text.
+//! `signal` is now Darcula's string-green `#6A8759` instead -- same
+//! semantic role (active/connected/positive, per the rule above), just a
+//! color that doesn't read as "blue everywhere." Interactive *chrome*
+//! (tab-bar/list selection highlight, the Contacts FAB, the Dialer's main
+//! "Call" button) moved off `signal` entirely onto neutral
+//! `surface`/`surface_hover` grey -- real Darcula's own button chrome is
+//! grey, not accent-colored; `signal` now shows up only on genuine
+//! call-state signals (connected badge, presence-available dot, the
+//! ringing-screen's Accept button paired against a red Reject, ZRTP SAS
+//! text, voicemail count). The old blue hex is kept as `link`, wired only
+//! to `Visuals::hyperlink_color` -- there's no visible in-app hyperlink
+//! today, but this keeps "blue = links/numbers only" true if one's ever
+//! added, rather than quietly reintroducing blue as a second accent.
+//! Spacing (`apply_style`'s `item_spacing`/`button_padding`, `card_frame`'s
+//! `inner_margin`) also loosened -- the v2 "too much chrome" density pass
+//! had gone further than this redesign's own margins needed, per feedback
+//! that the whole app now read as too tight/cramped.
 //!
 //! **Known broken icons**: the bundled `egui-phosphor` 0.6.0 "Regular"
 //! variant font has several codepoints whose cmap resolves to the wrong
@@ -32,8 +54,12 @@
 //! `FLOPPY_DISK`, `ARROW_DOWN` -- these render fine: `EXPORT`,
 //! `UPLOAD_SIMPLE`, `ARROW_SQUARE_OUT`. Call sites needing a broken one use
 //! a plain Unicode character instead (e.g. "⌫", "↱", "(i)") rather than the
-//! phosphor constant. If a newly-added icon renders as a stray letter
-//! instead of a glyph, this is why -- verify it large before trusting it.
+//! phosphor constant. **This isn't limited to the phosphor icon font
+//! either**: a plain Unicode "☰" (hamburger/trigram symbol) was also found
+//! silently rendering as "?" in this app's actual font stack (caught live
+//! via Xvfb, not by reasoning about it) -- any icon-ish Unicode character,
+//! not just phosphor constants, needs to be rendered large and actually
+//! looked at before trusting it; when in doubt use a plain word instead.
 
 use egui::Color32;
 
@@ -52,63 +78,53 @@ pub struct Palette {
     pub ink: Color32,
     /// Secondary text -- timestamps, hints, placeholders, captions.
     pub ink_muted: Color32,
-    /// Active/connected/outbound/positive -- the app's one accent, wired
-    /// into `Visuals::selection.bg_fill`/`hyperlink_color` so it's the
-    /// actual accent everywhere, not just a few buttons' text color.
+    /// Active/connected/outbound/positive call-state signal -- genuine
+    /// state indicators only (connected badge, presence dot, the ringing
+    /// screen's Accept button, ZRTP SAS text). NOT general interactive
+    /// chrome (buttons/tabs/selection) -- see this module's v3.1 doc note;
+    /// those use `surface`/`surface_hover` grey instead.
     pub signal: Color32,
     /// Incoming/pending/dialing/on-hold.
     pub ringing: Color32,
     /// Hang up / reject / delete / destructive actions.
     pub danger: Color32,
+    /// Hyperlink text color only (see this module's v3.1 doc note) -- kept
+    /// separate from `signal` so "blue" never leaks back into general
+    /// chrome even though nothing in-app currently renders a hyperlink.
+    pub link: Color32,
 }
 
 impl Palette {
-    pub fn for_theme(dark: bool) -> Self {
-        if dark {
-            Self::dark()
-        } else {
-            Self::light()
-        }
-    }
-
+    /// The app's one and only theme -- see this module's own v3-revision
+    /// doc comment for why there's no `light()`/`for_theme()` counterpart
+    /// anymore.
     pub fn dark() -> Self {
         Self {
-            canvas: Color32::from_rgb(0x0E, 0x10, 0x13),
-            surface: Color32::from_rgb(0x16, 0x18, 0x1B),
-            surface_hover: Color32::from_rgb(0x1C, 0x1F, 0x23),
-            border: Color32::from_rgb(0x26, 0x2A, 0x2E),
-            ink: Color32::from_rgb(0xE8, 0xE9, 0xEB),
-            ink_muted: Color32::from_rgb(0x8A, 0x8F, 0x94),
-            signal: Color32::from_rgb(0x6B, 0x7B, 0xAE),
-            ringing: Color32::from_rgb(0xC9, 0x9A, 0x54),
-            danger: Color32::from_rgb(0xC1, 0x5C, 0x56),
-        }
-    }
-
-    pub fn light() -> Self {
-        Self {
-            canvas: Color32::from_rgb(0xF7, 0xF7, 0xF8),
-            surface: Color32::from_rgb(0xFF, 0xFF, 0xFF),
-            surface_hover: Color32::from_rgb(0xEF, 0xF0, 0xF1),
-            border: Color32::from_rgb(0xE1, 0xE3, 0xE5),
-            ink: Color32::from_rgb(0x1A, 0x1C, 0x1E),
-            ink_muted: Color32::from_rgb(0x71, 0x76, 0x7B),
-            signal: Color32::from_rgb(0x5A, 0x6B, 0x9E),
-            ringing: Color32::from_rgb(0xB8, 0x87, 0x4A),
-            danger: Color32::from_rgb(0xB0, 0x50, 0x4A),
+            canvas: Color32::from_rgb(0x2B, 0x2B, 0x2B),
+            surface: Color32::from_rgb(0x3C, 0x3F, 0x41),
+            surface_hover: Color32::from_rgb(0x4B, 0x4E, 0x50),
+            border: Color32::from_rgb(0x4B, 0x4B, 0x4B),
+            ink: Color32::from_rgb(0xA9, 0xB7, 0xC6),
+            ink_muted: Color32::from_rgb(0x80, 0x80, 0x80),
+            signal: Color32::from_rgb(0x6A, 0x87, 0x59),
+            ringing: Color32::from_rgb(0xCC, 0x78, 0x32),
+            danger: Color32::from_rgb(0xBC, 0x3F, 0x3C),
+            link: Color32::from_rgb(0x68, 0x97, 0xBB),
         }
     }
 }
 
 /// Named-family font ids for the selective-emphasis call sites that need a
-/// heavier weight than the `Proportional`/`Monospace` family defaults
-/// (`inter-regular`/`jbmono-regular`, set in `lib.rs::install_fonts`).
+/// heavier weight than the `Proportional`/`Monospace` family default
+/// (`jbmono-regular`, set in `lib.rs::install_fonts`). All three point at
+/// JetBrains Mono weights now -- there's no separate heading typeface in
+/// the Darcula-everywhere pass, just Regular vs Medium.
 pub fn font_heading(size: f32) -> egui::FontId {
-    egui::FontId::new(size, egui::FontFamily::Name("inter-semibold".into()))
+    egui::FontId::new(size, egui::FontFamily::Name("jbmono-medium".into()))
 }
 
 pub fn font_medium(size: f32) -> egui::FontId {
-    egui::FontId::new(size, egui::FontFamily::Name("inter-medium".into()))
+    egui::FontId::new(size, egui::FontFamily::Name("jbmono-medium".into()))
 }
 
 /// Emphasized numerals -- the in-call timer, a focused dial-pad digit.
@@ -128,15 +144,16 @@ pub fn apply_style(ctx: &egui::Context, visuals: &mut egui::Visuals, palette: &P
     visuals.window_fill = palette.canvas;
     visuals.extreme_bg_color = palette.surface;
     visuals.faint_bg_color = palette.surface;
-    visuals.selection.bg_fill = palette.signal;
+    // Grey chrome, not accent-colored -- see this module's v3.1 doc note.
+    visuals.selection.bg_fill = palette.surface_hover;
     visuals.selection.stroke.color = palette.ink;
-    visuals.hyperlink_color = palette.signal;
+    visuals.hyperlink_color = palette.link;
     visuals.window_stroke = egui::Stroke::new(1.0, palette.border);
 
-    // v2: small-radius rectangles, not the original pass's rounder/softer
-    // corners -- one of the concrete "less playful" changes.
-    let rounding = egui::Rounding::same(5.0);
-    visuals.window_rounding = egui::Rounding::same(6.0);
+    // v3: near-flat IDE-panel corners -- sharper than v2's already-tightened
+    // rounding, matching Darcula's own squared-off widget chrome.
+    let rounding = egui::Rounding::same(2.0);
+    visuals.window_rounding = egui::Rounding::same(2.0);
     for widgets in [
         &mut visuals.widgets.noninteractive,
         &mut visuals.widgets.inactive,
@@ -156,9 +173,10 @@ pub fn apply_style(ctx: &egui::Context, visuals: &mut egui::Visuals, palette: &P
     visuals.widgets.open.bg_fill = palette.surface;
 
     let mut style = (*ctx.style()).clone();
-    // v2: tighter spacing/type scale -- the "too much chrome" feedback.
-    style.spacing.item_spacing = egui::vec2(6.0, 5.0);
-    style.spacing.button_padding = egui::vec2(8.0, 5.0);
+    // v3.1: loosened back up from v2's "too much chrome" density pass --
+    // that ended up reading as too tight/cramped once lived with.
+    style.spacing.item_spacing = egui::vec2(10.0, 8.0);
+    style.spacing.button_padding = egui::vec2(12.0, 7.0);
     style.text_styles = [
         (egui::TextStyle::Small, egui::FontId::new(11.0, egui::FontFamily::Proportional)),
         (egui::TextStyle::Body, egui::FontId::new(13.0, egui::FontFamily::Proportional)),
@@ -177,8 +195,8 @@ pub fn card_frame(palette: &Palette) -> egui::Frame {
     egui::Frame::none()
         .fill(palette.surface)
         .stroke(egui::Stroke::new(1.0, palette.border))
-        .rounding(egui::Rounding::same(6.0))
-        .inner_margin(egui::Margin::same(10.0))
+        .rounding(egui::Rounding::same(2.0))
+        .inner_margin(egui::Margin::same(14.0))
 }
 
 /// `card_frame(palette).show(ui, |ui| { ui.set_width(ui.available_width()); ... })`

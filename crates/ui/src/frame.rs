@@ -261,12 +261,7 @@ impl eframe::App for DeelipApp {
         self.process_update_events();
         self.process_directory_events();
 
-        self.palette = theme::Palette::for_theme(self.config.dark_mode);
-        let mut visuals = if self.config.dark_mode {
-            egui::Visuals::dark()
-        } else {
-            egui::Visuals::light()
-        };
+        let mut visuals = egui::Visuals::dark();
         theme::apply_style(ctx, &mut visuals, &self.palette);
         ctx.set_visuals(visuals);
 
@@ -326,19 +321,40 @@ impl eframe::App for DeelipApp {
                 );
                 ui.selectable_value(
                     &mut self.tab,
-                    crate::app::Tab::Messages,
-                    self.messages_tab_label_cache.1.as_str(),
-                );
-                ui.selectable_value(
-                    &mut self.tab,
                     crate::app::Tab::Contacts,
                     format!("{}  Contacts", egui_phosphor::regular::ADDRESS_BOOK),
                 );
-                ui.selectable_value(
-                    &mut self.tab,
-                    crate::app::Tab::Directory,
-                    format!("{}  Directory", egui_phosphor::regular::BUILDINGS),
-                );
+                // Messages/Directory are used far less often than the three
+                // above -- tucked behind a MicroSIP-style overflow menu
+                // instead of two more always-visible tabs, so the primary
+                // row stays uncrowded. Plain ASCII "More", not a hamburger
+                // glyph -- verified live that "☰" silently renders as "?"
+                // in this app's font stack (not every Unicode symbol is
+                // covered just because it's plain text, see theme.rs's
+                // module doc on the same class of issue with phosphor
+                // icons) -- plain Latin text is the only fully safe choice.
+                ui.menu_button("More", |ui| {
+                    if ui
+                        .selectable_value(
+                            &mut self.tab,
+                            crate::app::Tab::Messages,
+                            self.messages_tab_label_cache.1.as_str(),
+                        )
+                        .clicked()
+                    {
+                        ui.close_menu();
+                    }
+                    if ui
+                        .selectable_value(
+                            &mut self.tab,
+                            crate::app::Tab::Directory,
+                            format!("{}  Directory", egui_phosphor::regular::BUILDINGS),
+                        )
+                        .clicked()
+                    {
+                        ui.close_menu();
+                    }
+                });
                 // Settings lives in its own modal dialog (MicroSIP-style),
                 // not a tab -- opened via this gear button, right-aligned
                 // like MicroSIP's own tab-row "more" affordance.
@@ -425,7 +441,12 @@ impl eframe::App for DeelipApp {
             });
         });
 
-        egui::CentralPanel::default().show(ctx, |ui| match self.tab {
+        // Explicit margin, not egui's own default (`Style::window_margin`,
+        // 6px) -- too tight once lived with, part of the same "add
+        // breathing room everywhere" feedback `theme::apply_style`'s v3.1
+        // spacing bump addresses.
+        let central_frame = egui::Frame::central_panel(&ctx.style()).inner_margin(14.0);
+        egui::CentralPanel::default().frame(central_frame).show(ctx, |ui| match self.tab {
             crate::app::Tab::Dialer => self.show_dialer(ui),
             crate::app::Tab::History => self.show_history(ui, ctx),
             crate::app::Tab::Messages => self.show_messages(ui),
@@ -435,6 +456,7 @@ impl eframe::App for DeelipApp {
 
         self.show_settings_modal(ctx);
         self.show_update_popup(ctx);
+        self.show_contact_dialog(ctx);
 
         ctx.request_repaint_after(Duration::from_millis(50));
     }

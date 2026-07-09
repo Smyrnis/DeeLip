@@ -101,12 +101,14 @@ pub(crate) fn format_call_timer(secs: u64) -> String {
     }
 }
 
-pub(crate) fn format_age(ts: u64) -> String {
-    let age = unix_now().saturating_sub(ts);
-    match age {
-        0..=59 => format!("{age}s ago"),
-        60..=3599 => format!("{}m ago", age / 60),
-        3600..=86399 => format!("{}h ago", age / 3600),
-        _ => format!("{}d ago", age / 86400),
+/// Local calendar date/time for a Unix timestamp, e.g. `"2026-07-09 14:32"`
+/// -- History's absolute-timestamp display, replacing the old relative
+/// "4d ago" (`format_age`). Uses `chrono` rather than hand-rolling
+/// calendar/timezone math (leap years, month lengths, DST offsets).
+pub(crate) fn format_timestamp(ts: u64) -> String {
+    use chrono::{Local, TimeZone};
+    match Local.timestamp_opt(ts as i64, 0) {
+        chrono::LocalResult::Single(dt) => dt.format("%Y-%m-%d %H:%M").to_string(),
+        _ => "—".to_string(),
     }
 }

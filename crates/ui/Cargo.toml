@@ -25,3 +25,4 @@ egui-phosphor = { workspace = true }
 global-hotkey = { workspace = true }
 rand = { workspace = true }
 ldap3 = { workspace = true }
+chrono = { workspace = true }

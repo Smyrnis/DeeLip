@@ -4,7 +4,7 @@ use deelip_config::{
 };
 use egui::{RichText, Ui};
 
-use crate::app::DeelipApp;
+use crate::app::{DeelipApp, SettingsTab};
 use crate::helpers::{
     account_label, account_status_label, codec_label, device_picker, empty_state, info_hint,
     settings_section,
@@ -41,8 +41,15 @@ impl DeelipApp {
             viewport_id,
             egui::ViewportBuilder::default()
                 .with_title("DeeLip Settings")
-                .with_inner_size([460.0, 640.0])
-                .with_min_inner_size([360.0, 300.0])
+                // Sized so every tab except Account (which scrolls
+                // internally -- see its own `SettingsTab::Account` match
+                // arm's comment) fits without scrolling at all -- confirmed
+                // live via Xvfb across all 8 tabs, not guessed. Bumped
+                // taller (700 -> 740) alongside the v3.1 spacing/margin
+                // loosening in `theme.rs`/`frame.rs` -- needs the same
+                // live re-check as before once that's verified.
+                .with_inner_size([500.0, 740.0])
+                .with_min_inner_size([380.0, 320.0])
                 .with_icon(settings_window_icon()),
             |child_ctx, class| {
                 // Some backends (or a compositor without multi-window
@@ -59,8 +66,8 @@ impl DeelipApp {
                         .open(&mut open)
                         .collapsible(false)
                         .resizable(true)
-                        .default_size([460.0, 560.0])
-                        .min_width(360.0)
+                        .default_size([500.0, 640.0])
+                        .min_width(380.0)
                         .show(child_ctx, |ui| self.show_settings(ui));
                     if !open {
                         close_requested = true;
@@ -115,47 +122,36 @@ impl DeelipApp {
                 .push(deelip_config::SipAccount::default());
         }
         self.edit_account_idx = self.edit_account_idx.min(self.config.accounts.len() - 1);
-        let mut edited = false;
         let palette = self.palette;
 
-        ui.add_space(8.0);
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            self.show_appearance_section(ui, &palette);
-            ui.add_space(14.0);
+        // MicroSIP-style tab strip -- one section visible at a time, sized
+        // to fit without scrolling, instead of the previous single long
+        // `ScrollArea` stacking all 12 sections in one column.
+        ui.add_space(6.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.selectable_value(&mut self.settings_tab, SettingsTab::General, "General");
+            ui.selectable_value(&mut self.settings_tab, SettingsTab::Account, "Account");
+            ui.selectable_value(&mut self.settings_tab, SettingsTab::Audio, "Audio");
+            ui.selectable_value(&mut self.settings_tab, SettingsTab::Video, "Video");
+            ui.selectable_value(&mut self.settings_tab, SettingsTab::Network, "Network");
+            ui.selectable_value(&mut self.settings_tab, SettingsTab::Directory, "Directory");
+            ui.selectable_value(&mut self.settings_tab, SettingsTab::Hotkeys, "Hotkeys");
+            ui.selectable_value(&mut self.settings_tab, SettingsTab::Advanced, "Advanced");
+        });
+        ui.separator();
+        ui.add_space(6.0);
 
-            self.show_notifications_section(ui, &palette);
-            ui.add_space(14.0);
-
-            self.show_call_handling_section(ui, &palette);
-            ui.add_space(14.0);
-
-            self.show_blocklist_section(ui, &palette);
-            ui.add_space(14.0);
-
-            edited |= self.show_startup_section(ui, &palette);
-            ui.add_space(14.0);
-
-            self.show_updates_section(ui, &palette);
-            ui.add_space(14.0);
-
-            edited |= self.show_account_section(ui, &palette);
-            ui.add_space(14.0);
-
-            edited |= self.show_audio_section(ui, &palette);
-            ui.add_space(14.0);
-
-            edited |= self.show_video_section(ui, &palette);
-            ui.add_space(14.0);
-
-            edited |= self.show_network_section(ui, &palette);
-            ui.add_space(14.0);
-
-            edited |= self.show_directory_section(ui, &palette);
-            ui.add_space(14.0);
-
-            edited |= self.show_global_hotkeys_section(ui, &palette);
-            ui.add_space(14.0);
-
+        // Reserved *before* the tab content below -- `ScrollArea::vertical()`
+        // (used by the Account tab) greedily fills all remaining space in
+        // its parent, so a naive "content, then Save button" ordering left
+        // the Save button pushed below the visible window whenever a tab's
+        // content scrolled (caught live, not by reading the code: Account's
+        // Save button was simply gone from the screenshot). Anchoring Save
+        // to the bottom *first* means whatever's left for the tab content
+        // (and therefore the Account `ScrollArea` inside it) already
+        // excludes this panel's own height.
+        egui::TopBottomPanel::bottom("settings_save_panel").show_inside(ui, |ui| {
+            ui.add_space(8.0);
             if ui.button("Save").clicked() {
                 match self.config.save(&self.db) {
                     Ok(()) => self.settings_saved_notice = true,
@@ -170,28 +166,54 @@ impl DeelipApp {
                     RichText::new("Saved — restart DeeLip to apply changes.").color(palette.signal),
                 );
             }
+            ui.add_space(4.0);
         });
+
+        let edited = match self.settings_tab {
+            SettingsTab::General => {
+                self.show_notifications_section(ui, &palette);
+                ui.add_space(14.0);
+                self.show_call_handling_section(ui, &palette);
+                ui.add_space(14.0);
+                self.show_startup_section(ui, &palette)
+            }
+            // The one exception to "no scrolling" -- confirmed live (this
+            // section's content still doesn't fit even at ~1400px tall,
+            // an unreasonable window height) that Account is too dense to
+            // ever fit a real dialog without one, even after pulling
+            // several stacked label+field rows into single rows above.
+            // Scrolling just this tab beats silently clipping its content,
+            // which is what removing the outer `ScrollArea` entirely would
+            // otherwise do.
+            SettingsTab::Account => {
+                let mut edited = false;
+                egui::ScrollArea::vertical()
+                    .id_source("account_tab_scroll")
+                    .show(ui, |ui| {
+                        edited = self.show_account_section(ui, &palette);
+                    });
+                edited
+            }
+            SettingsTab::Audio => self.show_audio_section(ui, &palette),
+            SettingsTab::Video => self.show_video_section(ui, &palette),
+            SettingsTab::Network => self.show_network_section(ui, &palette),
+            SettingsTab::Directory => self.show_directory_section(ui, &palette),
+            SettingsTab::Hotkeys => self.show_global_hotkeys_section(ui, &palette),
+            SettingsTab::Advanced => {
+                self.show_updates_section(ui, &palette);
+                ui.add_space(14.0);
+                self.show_blocklist_section(ui, &palette);
+                ui.add_space(14.0);
+                self.show_history_export_section(ui, &palette);
+                ui.add_space(14.0);
+                self.show_contacts_data_section(ui, &palette);
+                false
+            }
+        };
 
         if edited {
             self.settings_saved_notice = false;
         }
-    }
-
-    /// Applies immediately -- no restart needed, saves itself on change.
-    fn show_appearance_section(&mut self, ui: &mut Ui, palette: &Palette) {
-        settings_section(ui, palette, "Appearance", Some("Applies immediately — no restart needed."), |ui| {
-            ui.horizontal(|ui| {
-                ui.label("Theme:");
-                if ui.selectable_label(!self.config.dark_mode, format!("{}  Light", egui_phosphor::regular::SUN)).clicked() {
-                    self.config.dark_mode = false;
-                    self.save_config_quietly();
-                }
-                if ui.selectable_label(self.config.dark_mode, format!("{}  Dark", egui_phosphor::regular::MOON)).clicked() {
-                    self.config.dark_mode = true;
-                    self.save_config_quietly();
-                }
-            });
-        });
     }
 
     /// Applies immediately -- no restart needed, saves itself on change.
@@ -285,6 +307,54 @@ impl DeelipApp {
                     self.save_config_quietly();
                 }
             }
+        });
+    }
+
+    /// Moved here from History's own search bar -- see the redesign plan's
+    /// "Settings: History export + Contacts import/export" section.
+    fn show_history_export_section(&mut self, ui: &mut Ui, palette: &Palette) {
+        settings_section(ui, palette, "Call History", None, |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Export call history to CSV");
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("Export…").clicked() {
+                        self.export_history_csv();
+                    }
+                });
+            });
+        });
+    }
+
+    /// Moved here from Contacts' own search bar -- see the redesign plan's
+    /// "Settings: History export + Contacts import/export" section.
+    fn show_contacts_data_section(&mut self, ui: &mut Ui, palette: &Palette) {
+        settings_section(ui, palette, "Contacts Import / Export", None, |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Import from CSV or vCard");
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("Import…").clicked() {
+                        self.import_contacts();
+                    }
+                });
+            });
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.label("Export as CSV");
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("Export…").clicked() {
+                        self.export_contacts_csv();
+                    }
+                });
+            });
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.label("Export as vCard");
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("Export…").clicked() {
+                        self.export_contacts_vcard();
+                    }
+                });
+            });
         });
     }
 
@@ -633,24 +703,22 @@ impl DeelipApp {
             });
 
             ui.add_space(6.0);
-            ui.label("Forward always (optional):");
             ui.horizontal(|ui| {
+                ui.label("Forward always:");
                 edited |= optional_text_field(ui, &mut account.forward_always, "sip:reception@example.com");
             });
 
-            ui.add_space(6.0);
-            ui.label("Forward when busy (optional):");
+            ui.add_space(4.0);
             ui.horizontal(|ui| {
+                ui.label("Forward when busy:");
                 edited |= optional_text_field(ui, &mut account.forward_on_busy, "sip:voicemail@example.com");
             });
 
-            ui.add_space(6.0);
-            ui.label("Forward if unanswered (optional):");
+            ui.add_space(4.0);
             ui.horizontal(|ui| {
-                edited |= optional_text_field(ui, &mut account.no_answer_forward, "sip:voicemail@example.com");
-            });
-            ui.horizontal(|ui| {
-                ui.label("after (seconds):");
+                ui.label("Forward if unanswered:");
+                edited |= optional_text_field_sized(ui, &mut account.no_answer_forward, "sip:voicemail@example.com", 180.0);
+                ui.label("after (s):");
                 edited |= ui.add(egui::DragValue::new(&mut account.no_answer_timeout_secs).range(1..=300)).changed();
             });
 
@@ -685,16 +753,14 @@ impl DeelipApp {
 
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                ui.label("Voicemail mailbox for MWI (optional):");
+                ui.label("Voicemail mailbox (MWI):");
+                edited |= optional_text_field_sized(ui, &mut account.mailbox, "1000", 100.0);
                 info_hint(ui, palette, "Extension/mailbox this account subscribes to for \
                     Message-Waiting-Indicator (MWI) NOTIFY -- new-voicemail count shown as the \
                     badge next to the status bar. Leave blank to skip MWI subscription entirely.");
             });
-            ui.horizontal(|ui| {
-                edited |= optional_text_field(ui, &mut account.mailbox, "1000");
-            });
 
-            ui.add_space(6.0);
+            ui.add_space(4.0);
             ui.horizontal(|ui| {
                 edited |= ui.checkbox(&mut account.publish_presence, "Publish presence status").changed();
                 info_hint(ui, palette, "Publishes this account's own availability (open/closed, \
@@ -703,9 +769,9 @@ impl DeelipApp {
             });
 
             ui.add_space(6.0);
-            ui.label("Dialing prefix (optional):");
             ui.horizontal(|ui| {
-                edited |= optional_text_field(ui, &mut account.dialing_prefix, "e.g. 9");
+                ui.label("Dialing prefix:");
+                edited |= optional_text_field_sized(ui, &mut account.dialing_prefix, "e.g. 9", 60.0);
                 info_hint(ui, palette, "Auto-prepended to bare numbers dialed from this account \
                     (e.g. \"9\" for an outside line) -- not applied to a full SIP URI or an \
                     explicit user@host entry. Only used as a fallback when no Dial Plan rule \
@@ -1240,13 +1306,16 @@ fn list_device_names(input: bool) -> Vec<String> {
 
 /// Text field bound to an `Option<String>` — an empty field maps to `None`.
 fn optional_text_field(ui: &mut Ui, value: &mut Option<String>, hint: &str) -> bool {
+    optional_text_field_sized(ui, value, hint, f32::INFINITY)
+}
+
+/// Same as `optional_text_field`, but with a caller-chosen width instead of
+/// always filling the rest of the row -- for a row that needs to fit
+/// something else (a trailing label/control) after the field.
+fn optional_text_field_sized(ui: &mut Ui, value: &mut Option<String>, hint: &str, width: f32) -> bool {
     let mut text = value.clone().unwrap_or_default();
     let changed = ui
-        .add(
-            egui::TextEdit::singleline(&mut text)
-                .hint_text(hint)
-                .desired_width(f32::INFINITY),
-        )
+        .add(egui::TextEdit::singleline(&mut text).hint_text(hint).desired_width(width))
         .changed();
     if changed {
         *value = if text.is_empty() { None } else { Some(text) };

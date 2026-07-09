@@ -1,10 +1,10 @@
-use deelip_config::{CallDirection, CallStatus};
+use deelip_config::{CallDirection, CallStatus, Contact};
 use egui::{RichText, Ui};
 
 use crate::app::DeelipApp;
 use crate::helpers::{
-    csv_escape, double_clickable_label, empty_state, extract_user_part, format_age,
-    format_duration, list_row_menu, short_uri, status_filter_label,
+    csv_escape, double_clickable_label, empty_state, extract_user_part, format_duration,
+    format_timestamp, list_row_menu, short_uri, status_filter_label,
 };
 
 impl DeelipApp {
@@ -49,13 +49,6 @@ impl DeelipApp {
                         "Failed",
                     );
                 });
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                // EXPORT, not DOWNLOAD_SIMPLE -- see the broken-icon note in `theme.rs`.
-                let export = format!("{}  Export CSV…", egui_phosphor::regular::EXPORT);
-                if ui.button(export).clicked() {
-                    self.export_history_csv();
-                }
-            });
         });
         ui.add_space(4.0);
 
@@ -95,6 +88,7 @@ impl DeelipApp {
         let mut copy_target: Option<String> = None;
         let mut delete_idx: Option<usize> = None;
         let mut default_action_target: Option<String> = None;
+        let mut add_contact_target: Option<(String, String)> = None;
 
         if self.history_filtered.is_empty() {
             empty_state(ui, &self.palette, "No matching calls.");
@@ -163,6 +157,7 @@ impl DeelipApp {
 
                         let palette = self.palette;
                         let remote_uri = record.remote_uri.clone();
+                        let display_name_for_menu = display_name.clone();
                         list_row_menu(
                             ui,
                             &palette,
@@ -188,7 +183,7 @@ impl DeelipApp {
                                             egui::FontFamily::Monospace,
                                         );
                                         ui.label(
-                                            RichText::new(format_age(record.timestamp))
+                                            RichText::new(format_timestamp(record.timestamp))
                                                 .font(mono.clone())
                                                 .color(palette.ink_muted),
                                         );
@@ -216,6 +211,20 @@ impl DeelipApp {
                                 }
                                 if ui.button("Block").clicked() {
                                     block_target = Some(remote_uri.clone());
+                                    ui.close_menu();
+                                }
+                                ui.separator();
+                                let already_contact = is_name;
+                                if ui
+                                    .add_enabled(
+                                        !already_contact,
+                                        egui::Button::new("Add to Contacts"),
+                                    )
+                                    .on_disabled_hover_text("Already in Contacts")
+                                    .clicked()
+                                {
+                                    add_contact_target =
+                                        Some((remote_uri.clone(), display_name_for_menu.clone()));
                                     ui.close_menu();
                                 }
                                 ui.separator();
@@ -269,6 +278,15 @@ impl DeelipApp {
                     self.dial_from_list(target);
                 }
             }
+        }
+        if let Some((remote_uri, display_name)) = add_contact_target {
+            self.editing_contact_idx = None;
+            self.new_contact = Contact {
+                name: display_name,
+                sip_uri: remote_uri,
+                ..Default::default()
+            };
+            self.contact_dialog_open = true;
         }
     }
 

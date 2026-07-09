@@ -25,6 +25,24 @@ pub(crate) enum Tab {
     Directory,
 }
 
+/// Which Settings tab is currently shown -- MicroSIP-style tabbed dialog
+/// (one section visible at a time, sized to fit without scrolling) rather
+/// than the earlier single long scrolling stack of 12 sections. Grouped
+/// down from those 12 section methods to 8 tabs -- some sections (a lone
+/// checkbox) weren't worth their own tab.
+#[derive(PartialEq, Eq, Clone, Copy, Default)]
+pub(crate) enum SettingsTab {
+    #[default]
+    General,
+    Account,
+    Audio,
+    Video,
+    Network,
+    Directory,
+    Hotkeys,
+    Advanced,
+}
+
 // ── App state ─────────────────────────────────────────────────────────────────
 
 pub struct DeelipApp {
@@ -40,6 +58,8 @@ pub struct DeelipApp {
     /// "just another view" rather than the distinct, out-of-the-way
     /// configuration surface MicroSIP's own Settings dialog is.
     pub(crate) settings_open: bool,
+    /// Which Settings tab is currently shown -- see `SettingsTab`.
+    pub(crate) settings_tab: SettingsTab,
 
     // Dialer
     pub(crate) call_target: String,
@@ -159,9 +179,11 @@ pub struct DeelipApp {
     /// `Visible(false)` viewport command if `config.start_minimized` -- see
     /// the comment in `main.rs` on why this can't be done via `NativeOptions`.
     pub(crate) first_frame: bool,
-    /// Refreshed once per frame from `config.dark_mode` in `update()`, before
-    /// any tab is rendered -- lets tab-rendering methods reach `self.palette`
-    /// without threading an extra parameter through every fn signature.
+    /// Set once in `new()` -- Darcula is the app's only theme now (see
+    /// `theme.rs`'s v3-revision doc comment), so this no longer changes per
+    /// frame. Kept as a field (not a free fn call at each use site) so
+    /// tab-rendering methods can reach `self.palette` without threading an
+    /// extra parameter through every fn signature.
     pub(crate) palette: Palette,
 
     /// Shared handles for the tray's independent event-handling threads (see
@@ -217,6 +239,11 @@ pub struct DeelipApp {
     /// Compose box state for the Messages tab.
     pub(crate) message_to: String,
     pub(crate) message_body: String,
+    /// Which peer's thread is showing in the Messages tab -- `None` means
+    /// "not chosen yet", resolved to the most-recently-active peer on the
+    /// first frame that has any messages. Picking a peer also seeds
+    /// `message_to`, so this doubles as the tab's "reply" mechanism.
+    pub(crate) selected_message_peer: Option<String>,
 
     // Blocklist
     pub(crate) blocklist_input: String,
@@ -233,6 +260,11 @@ pub struct DeelipApp {
     /// Index into `contacts.contacts` currently loaded into `new_contact`
     /// for editing — `None` means the form is in "Add" mode.
     pub(crate) editing_contact_idx: Option<usize>,
+    /// Whether the shared create/edit contact `egui::Window` is open --
+    /// set from either Contacts' "+" FAB or History's right-click "Add to
+    /// Contacts", so it lives on `DeelipApp` (not local to one view) and is
+    /// rendered from `frame.rs::update()` alongside the other modals.
+    pub(crate) contact_dialog_open: bool,
     /// Last-known presence state per watched contact, keyed by `sip_uri`
     /// (presence isn't call-scoped, so it doesn't fit any per-call state).
     pub(crate) presence: HashMap<String, PresenceState>,
@@ -386,6 +418,7 @@ impl DeelipApp {
             rt,
             tab: Tab::Dialer,
             settings_open: false,
+            settings_tab: SettingsTab::default(),
             call_target: String::new(),
             selected_account: 0,
             last_dialed: None,
@@ -438,6 +471,7 @@ impl DeelipApp {
             messages_tab_label_cache: (u32::MAX, String::new()),
             message_to: String::new(),
             message_body: String::new(),
+            selected_message_peer: None,
             blocklist_input: String::new(),
             dialplan_pattern_input: String::new(),
             dialplan_replacement_input: String::new(),
@@ -445,6 +479,7 @@ impl DeelipApp {
             contact_search: String::new(),
             new_contact: Contact::default(),
             editing_contact_idx: None,
+            contact_dialog_open: false,
             presence: HashMap::new(),
             update_state: crate::update::UpdateState::Idle,
             update_rx: None,

@@ -77,6 +77,7 @@ mp3lame-encoder = "0.2"
 ldap3 = { version = "0.12", default-features = false, features = ["tls-rustls", "tls-rustls-ring"] }
 openh264 = { version = "0.9", default-features = false, features = ["source"] }
 nokhwa = { version = "0.10", default-features = false, features = ["input-native"] }
+chrono = "0.4"
 
 deelip-config = { path = "crates/config" }
 deelip-sip = { path = "crates/sip-core" }
