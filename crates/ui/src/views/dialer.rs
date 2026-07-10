@@ -6,7 +6,7 @@ use egui::{Align2, Color32, RichText, Ui};
 use crate::app::{DeelipApp, VideoViewCache};
 use crate::helpers::{
     account_status_label, audio_codec_label, ctx_key_enter, empty_state, format_call_timer,
-    phone_keypad, short_uri, unix_now,
+    phone_keypad, resolve_caller, short_uri, unix_now,
 };
 use crate::theme::{self, Palette};
 
@@ -254,10 +254,7 @@ impl DeelipApp {
     /// Inter and a bare address in JetBrains Mono (the redesign's one
     /// typographic rule: numbers/addresses are mono, names are Inter).
     fn caller_display(&self, uri: &str) -> (String, bool) {
-        match self.contacts.find_by_uri(uri) {
-            Some(c) => (c.name.clone(), true),
-            None => (short_uri(uri), false),
-        }
+        resolve_caller(&self.contacts, uri)
     }
 
     fn show_active_calls(&mut self, ui: &mut Ui) {
@@ -269,9 +266,9 @@ impl DeelipApp {
         // its `pending_outbound` coexists with the held original call --
         // surface it as a small line rather than silently showing nothing.
         if let Some(out) = &self.pending_outbound {
+            let (name, _) = self.caller_display(&out.remote_uri);
             ui.label(
-                RichText::new(format!("Calling {}…", short_uri(&out.remote_uri)))
-                    .color(self.palette.ink_muted),
+                RichText::new(format!("Calling {name}…")).color(self.palette.ink_muted),
             );
             ui.add_space(6.0);
         }

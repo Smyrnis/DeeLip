@@ -1,4 +1,4 @@
-use deelip_config::{CallStatus, SipAccount};
+use deelip_config::{CallStatus, ContactBook, SipAccount};
 use deelip_sip::AudioCodec;
 
 /// Display label for an account picker — `display_name` if set, else `user@server`.
@@ -34,11 +34,53 @@ pub(crate) fn csv_escape(s: &str) -> String {
 }
 
 /// Shorten a SIP URI for display: `sip:alice@example.com` → `alice@example.com`.
+/// Keeps the host -- still a real, addressable `user@host` string, needed
+/// anywhere the result must stay dialable/sendable (e.g. Messages' reply
+/// target) or diagnostic (Call Statistics' leg labels). For a friendlier
+/// caller-ID-style headline, use `friendly_uri`/`resolve_caller` instead.
 pub(crate) fn short_uri(uri: &str) -> String {
     uri.strip_prefix("sip:")
         .or_else(|| uri.strip_prefix("sips:"))
         .unwrap_or(uri)
         .to_string()
+}
+
+/// Strip a SIP URI down to just its user/extension part for a friendly,
+/// caller-ID-style label: `sip:600@127.0.0.1;user=phone` → `"600"`. A real
+/// caller doesn't need the host/IP -- that's plumbing, not identity. Special-
+/// cases RFC 3323's anonymous-caller convention (`anonymous@anonymous.invalid`,
+/// any case) as `"Unknown caller"` rather than showing "anonymous" bare.
+pub(crate) fn friendly_uri(uri: &str) -> String {
+    let stripped = uri
+        .strip_prefix("sip:")
+        .or_else(|| uri.strip_prefix("sips:"))
+        .unwrap_or(uri);
+    let before_params = stripped.split(';').next().unwrap_or(stripped);
+    let user = before_params.split('@').next().unwrap_or(before_params);
+    if user.eq_ignore_ascii_case("anonymous")
+        && before_params
+            .split('@')
+            .nth(1)
+            .is_some_and(|host| host.eq_ignore_ascii_case("anonymous.invalid"))
+    {
+        "Unknown caller".to_string()
+    } else {
+        user.to_string()
+    }
+}
+
+/// Resolve a raw SIP URI to a saved contact's name when one matches, else a
+/// friendly caller-ID-style fallback (`friendly_uri`) -- the second element
+/// is whether a real contact was found, so callers can render a resolved
+/// name in the heading font and a bare address in mono (this app's
+/// established typographic convention: numbers/addresses are mono, names
+/// are not). Shared by History/Dialer/Messages, which each want the exact
+/// same "contact name, or a friendly fallback" resolution.
+pub(crate) fn resolve_caller(contacts: &ContactBook, uri: &str) -> (String, bool) {
+    match contacts.find_by_uri(uri) {
+        Some(c) => (c.name.clone(), true),
+        None => (friendly_uri(uri), false),
+    }
 }
 
 /// Display label for a `SipAccount::codec_order` entry in Settings.
@@ -112,3 +154,7 @@ pub(crate) fn format_timestamp(ts: u64) -> String {
         _ => "—".to_string(),
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/format.rs"]
+mod tests;

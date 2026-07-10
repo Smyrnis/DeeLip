@@ -6,8 +6,8 @@ use egui::{RichText, Ui};
 
 use crate::app::{DeelipApp, SettingsTab};
 use crate::helpers::{
-    account_label, account_status_label, codec_label, device_picker, empty_state, info_hint,
-    settings_section,
+    account_label, account_status_label, codec_label, device_picker, empty_state, field_label,
+    info_hint, settings_section, window_icon,
 };
 use crate::theme::{self, Palette};
 
@@ -50,7 +50,7 @@ impl DeelipApp {
                 // live re-check as before once that's verified.
                 .with_inner_size([500.0, 740.0])
                 .with_min_inner_size([380.0, 320.0])
-                .with_icon(settings_window_icon()),
+                .with_icon(window_icon()),
             |child_ctx, class| {
                 // Some backends (or a compositor without multi-window
                 // support) can't actually open a second native window --
@@ -234,7 +234,7 @@ impl DeelipApp {
                     last was.");
             });
             ui.horizontal(|ui| {
-                ui.label("Default list action:");
+                field_label(ui, palette, "Default list action:");
                 egui::ComboBox::from_id_source("settings_default_list_action")
                     .selected_text(match self.config.default_list_action {
                         DefaultListAction::Call => "Call",
@@ -315,7 +315,7 @@ impl DeelipApp {
     fn show_history_export_section(&mut self, ui: &mut Ui, palette: &Palette) {
         settings_section(ui, palette, "Call History", None, |ui| {
             ui.horizontal(|ui| {
-                ui.label("Export call history to CSV");
+                field_label(ui, palette, "Export call history to CSV");
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("Export…").clicked() {
                         self.export_history_csv();
@@ -330,7 +330,7 @@ impl DeelipApp {
     fn show_contacts_data_section(&mut self, ui: &mut Ui, palette: &Palette) {
         settings_section(ui, palette, "Contacts Import / Export", None, |ui| {
             ui.horizontal(|ui| {
-                ui.label("Import from CSV or vCard");
+                field_label(ui, palette, "Import from CSV or vCard");
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("Import…").clicked() {
                         self.import_contacts();
@@ -339,7 +339,7 @@ impl DeelipApp {
             });
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                ui.label("Export as CSV");
+                field_label(ui, palette, "Export as CSV");
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("Export…").clicked() {
                         self.export_contacts_csv();
@@ -348,7 +348,7 @@ impl DeelipApp {
             });
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                ui.label("Export as vCard");
+                field_label(ui, palette, "Export as vCard");
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("Export…").clicked() {
                         self.export_contacts_vcard();
@@ -406,7 +406,7 @@ impl DeelipApp {
             ui.label(RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION"))).color(palette.ink_muted));
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                ui.label("Check for updates:");
+                field_label(ui, palette, "Check for updates:");
                 egui::ComboBox::from_id_source("settings_update_check_frequency")
                     .selected_text(match self.config.update_check_frequency {
                         UpdateCheckFrequency::Always => "Every launch",
@@ -521,16 +521,16 @@ impl DeelipApp {
                 .num_columns(2)
                 .spacing([8.0, 4.0])
                 .show(ui, |ui| {
-                    ui.label("Account name:");
+                    field_label(ui, palette, "Account name:");
                     edited |= optional_text_field(ui, &mut account.account_name, "e.g. Home, Work");
                     ui.end_row();
 
-                    ui.label("Username:");
+                    field_label(ui, palette, "Username:");
                     edited |= ui.add(egui::TextEdit::singleline(&mut account.username)
                         .desired_width(f32::INFINITY)).changed();
                     ui.end_row();
 
-                    ui.label("Password:");
+                    field_label(ui, palette, "Password:");
                     ui.horizontal(|ui| {
                         edited |= ui.add(egui::TextEdit::singleline(&mut account.password)
                             .password(!self.show_account_password)
@@ -546,7 +546,7 @@ impl DeelipApp {
                     });
                     ui.end_row();
 
-                    ui.label("Login (optional):");
+                    field_label(ui, palette, "Login (optional):");
                     ui.horizontal(|ui| {
                         edited |= optional_text_field(ui, &mut account.auth_username, "defaults to Username");
                         info_hint(ui, palette, "Digest-auth identity, when a provider requires \
@@ -554,17 +554,17 @@ impl DeelipApp {
                     });
                     ui.end_row();
 
-                    ui.label("Server:");
+                    field_label(ui, palette, "Server:");
                     edited |= ui.add(egui::TextEdit::singleline(&mut account.server)
                         .font(egui::FontId::new(13.0, egui::FontFamily::Monospace))
                         .desired_width(f32::INFINITY)).changed();
                     ui.end_row();
 
-                    ui.label("Port:");
+                    field_label(ui, palette, "Port:");
                     edited |= ui.add(egui::DragValue::new(&mut account.port)).changed();
                     ui.end_row();
 
-                    ui.label("Domain (optional):");
+                    field_label(ui, palette, "Domain (optional):");
                     ui.horizontal(|ui| {
                         edited |= optional_text_field(ui, &mut account.domain, "defaults to Server");
                         info_hint(ui, palette, "SIP domain used in From/To/Contact URIs, when it \
@@ -572,7 +572,7 @@ impl DeelipApp {
                     });
                     ui.end_row();
 
-                    ui.label("SIP proxy (optional):");
+                    field_label(ui, palette, "SIP proxy (optional):");
                     ui.horizontal(|ui| {
                         edited |= optional_text_field(ui, &mut account.sip_proxy, "host[:port]");
                         info_hint(ui, palette, "Outbound proxy to actually connect through, \
@@ -580,11 +580,11 @@ impl DeelipApp {
                     });
                     ui.end_row();
 
-                    ui.label("Display name:");
+                    field_label(ui, palette, "Display name:");
                     edited |= optional_text_field(ui, &mut account.display_name, "");
                     ui.end_row();
 
-                    ui.label("Transport:");
+                    field_label(ui, palette, "Transport:");
                     egui::ComboBox::from_id_source("settings_transport")
                         .selected_text(match account.transport {
                             TransportProtocol::Udp => "UDP",
@@ -618,7 +618,7 @@ impl DeelipApp {
             }
 
             ui.add_space(6.0);
-            ui.label("Codecs (order = preference):");
+            field_label(ui, palette, "Codecs (order = preference):");
             let mut move_up: Option<usize> = None;
             let mut move_down: Option<usize> = None;
             let mut to_disable: Option<usize> = None;
@@ -654,7 +654,7 @@ impl DeelipApp {
 
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                ui.label("Force codec for incoming:");
+                field_label(ui, palette, "Force codec for incoming:");
                 let selected_label = account.force_incoming_codec.as_deref()
                     .map(codec_label)
                     .unwrap_or("No override");
@@ -686,7 +686,7 @@ impl DeelipApp {
 
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                ui.label("DTMF mode:");
+                field_label(ui, palette, "DTMF mode:");
                 egui::ComboBox::from_id_source("settings_dtmf_mode")
                     .selected_text(match account.dtmf_mode {
                         DtmfMode::Rfc2833 => "RFC 2833 (RTP telephone-event)",
@@ -704,21 +704,21 @@ impl DeelipApp {
 
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                ui.label("Forward always:");
+                field_label(ui, palette, "Forward always:");
                 edited |= optional_text_field(ui, &mut account.forward_always, "sip:reception@example.com");
             });
 
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                ui.label("Forward when busy:");
+                field_label(ui, palette, "Forward when busy:");
                 edited |= optional_text_field(ui, &mut account.forward_on_busy, "sip:voicemail@example.com");
             });
 
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                ui.label("Forward if unanswered:");
+                field_label(ui, palette, "Forward if unanswered:");
                 edited |= optional_text_field_sized(ui, &mut account.no_answer_forward, "sip:voicemail@example.com", 180.0);
-                ui.label("after (s):");
+                field_label(ui, palette, "after (s):");
                 edited |= ui.add(egui::DragValue::new(&mut account.no_answer_timeout_secs).range(1..=300)).changed();
             });
 
@@ -731,7 +731,7 @@ impl DeelipApp {
             });
             if account.auto_answer_enabled {
                 ui.horizontal(|ui| {
-                    ui.label("after (seconds):");
+                    field_label(ui, palette, "after (seconds):");
                     edited |= ui.add(egui::DragValue::new(&mut account.auto_answer_secs).range(0..=60)).changed();
                 });
             }
@@ -753,7 +753,7 @@ impl DeelipApp {
 
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                ui.label("Voicemail mailbox (MWI):");
+                field_label(ui, palette, "Voicemail mailbox (MWI):");
                 edited |= optional_text_field_sized(ui, &mut account.mailbox, "1000", 100.0);
                 info_hint(ui, palette, "Extension/mailbox this account subscribes to for \
                     Message-Waiting-Indicator (MWI) NOTIFY -- new-voicemail count shown as the \
@@ -770,7 +770,7 @@ impl DeelipApp {
 
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                ui.label("Dialing prefix:");
+                field_label(ui, palette, "Dialing prefix:");
                 edited |= optional_text_field_sized(ui, &mut account.dialing_prefix, "e.g. 9", 60.0);
                 info_hint(ui, palette, "Auto-prepended to bare numbers dialed from this account \
                     (e.g. \"9\" for an outside line) -- not applied to a full SIP URI or an \
@@ -780,7 +780,7 @@ impl DeelipApp {
 
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                ui.label("Dial Plan:");
+                field_label(ui, palette, "Dial Plan:");
                 info_hint(ui, palette, "Ordered regex match/replace rules applied to a bare \
                     dialed number before the Dialing prefix fallback above -- the first enabled \
                     rule whose pattern matches wins. E.g. pattern \"^0(\\d+)$\", replacement \"$1\" \
@@ -795,7 +795,7 @@ impl DeelipApp {
                         edited |= ui.checkbox(&mut rule.enabled, "").changed();
                         edited |= ui.add(egui::TextEdit::singleline(&mut rule.pattern)
                             .hint_text("pattern").desired_width(120.0)).changed();
-                        ui.label("→");
+                        field_label(ui, palette, "→");
                         edited |= ui.add(egui::TextEdit::singleline(&mut rule.replacement)
                             .hint_text("replacement").desired_width(100.0)).changed();
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -813,7 +813,7 @@ impl DeelipApp {
             ui.horizontal(|ui| {
                 ui.add(egui::TextEdit::singleline(&mut self.dialplan_pattern_input)
                     .hint_text("pattern, e.g. ^0(\\d+)$").desired_width(120.0));
-                ui.label("→");
+                field_label(ui, palette, "→");
                 ui.add(egui::TextEdit::singleline(&mut self.dialplan_replacement_input)
                     .hint_text("replacement, e.g. $1").desired_width(100.0));
                 if ui.button("Add rule").clicked() && !self.dialplan_pattern_input.trim().is_empty() {
@@ -838,7 +838,7 @@ impl DeelipApp {
 
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                ui.label("Register refresh (seconds):");
+                field_label(ui, palette, "Register refresh (seconds):");
                 edited |= ui.add(egui::DragValue::new(&mut account.register_expires).range(60..=86400)).changed();
                 info_hint(ui, palette, "Requested REGISTER Expires -- the server may return a \
                     shorter value, which re-registration timing always honors regardless of this.");
@@ -864,7 +864,7 @@ impl DeelipApp {
             }
             if let Some(secs) = &mut account.keepalive_secs {
                 ui.horizontal(|ui| {
-                    ui.label("every (seconds):");
+                    field_label(ui, palette, "every (seconds):");
                     edited |= ui.add(egui::DragValue::new(secs).range(5..=300)).changed();
                     info_hint(ui, palette, "Sends a lone empty packet to the registrar on this \
                         interval, to hold a NAT/firewall's outbound binding open between registrations.");
@@ -873,7 +873,7 @@ impl DeelipApp {
 
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                ui.label("Media encryption:");
+                field_label(ui, palette, "Media encryption:");
                 egui::ComboBox::from_id_source("settings_media_encryption")
                     .selected_text(match account.media_encryption {
                         MediaEncryption::MatchTransport => "Match transport (default)",
@@ -904,7 +904,7 @@ impl DeelipApp {
             });
 
             ui.add_space(6.0);
-            ui.label("Public address (optional):");
+            field_label(ui, palette, "Public address (optional):");
             ui.horizontal(|ui| {
                 edited |= optional_text_field(ui, &mut account.public_address, "e.g. 203.0.113.5");
                 info_hint(ui, palette, "Overrides the address advertised in Contact/SDP for this \
@@ -977,7 +977,7 @@ impl DeelipApp {
 
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                ui.label("Custom ringtone (WAV):");
+                field_label(ui, palette, "Custom ringtone (WAV):");
                 let name = self.config.audio.ringtone_file.as_deref()
                     .and_then(|p| std::path::Path::new(p).file_name())
                     .map(|n| n.to_string_lossy().into_owned())
@@ -997,7 +997,7 @@ impl DeelipApp {
 
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                ui.label("Ringtone volume:");
+                field_label(ui, palette, "Ringtone volume:");
                 edited |= ui.add(egui::Slider::new(&mut self.config.audio.ringtone_volume, 0.0..=2.0)
                     .fixed_decimals(2)).changed();
             });
@@ -1018,7 +1018,7 @@ impl DeelipApp {
             });
             if self.config.recording_enabled {
                 ui.horizontal(|ui| {
-                    ui.label("Format:");
+                    field_label(ui, palette, "Format:");
                     egui::ComboBox::from_id_source("settings_recording_format")
                         .selected_text(match self.config.recording_format {
                             RecordingFormat::Wav => "WAV (lossless, larger files)",
@@ -1030,7 +1030,7 @@ impl DeelipApp {
                         });
                 });
                 ui.horizontal(|ui| {
-                    ui.label("Save to:");
+                    field_label(ui, palette, "Save to:");
                     let shown = self.config.recordings_dir_override.as_deref()
                         .unwrap_or("~/.config/deelip/recordings (default)");
                     ui.label(RichText::new(shown).color(palette.ink_muted));
@@ -1088,7 +1088,7 @@ impl DeelipApp {
                 .num_columns(2)
                 .spacing([8.0, 4.0])
                 .show(ui, |ui| {
-                    ui.label("Local SIP port:");
+                    field_label(ui, palette, "Local SIP port:");
                     ui.horizontal(|ui| {
                         edited |= ui.add(egui::DragValue::new(&mut self.config.local_sip_port)).changed();
                         info_hint(ui, palette, "Base port this app binds for signaling. Each \
@@ -1097,7 +1097,7 @@ impl DeelipApp {
                     });
                     ui.end_row();
 
-                    ui.label("STUN server:");
+                    field_label(ui, palette, "STUN server:");
                     ui.horizontal(|ui| {
                         edited |= optional_text_field(ui, &mut self.config.stun_server, "e.g. stun.l.google.com:19302");
                         info_hint(ui, palette, "Discovers your public IP/port for NAT traversal -- \
@@ -1105,7 +1105,7 @@ impl DeelipApp {
                     });
                     ui.end_row();
 
-                    ui.label("TURN server:");
+                    field_label(ui, palette, "TURN server:");
                     ui.horizontal(|ui| {
                         edited |= optional_text_field(ui, &mut self.config.turn_server, "e.g. turn.example.com:3478");
                         info_hint(ui, palette, "Relay server used when direct/STUN NAT traversal \
@@ -1114,15 +1114,15 @@ impl DeelipApp {
                     });
                     ui.end_row();
 
-                    ui.label("TURN username:");
+                    field_label(ui, palette, "TURN username:");
                     edited |= optional_text_field(ui, &mut self.config.turn_username, "");
                     ui.end_row();
 
-                    ui.label("TURN password:");
+                    field_label(ui, palette, "TURN password:");
                     edited |= optional_password_field(ui, &mut self.config.turn_password);
                     ui.end_row();
 
-                    ui.label("Custom nameserver:");
+                    field_label(ui, palette, "Custom nameserver:");
                     ui.horizontal(|ui| {
                         edited |= optional_text_field(ui, &mut self.config.custom_nameserver, "e.g. 1.1.1.1");
                         info_hint(ui, palette, "DNS server used for SIP server / SRV lookups, \
@@ -1166,9 +1166,9 @@ impl DeelipApp {
                 let mut min = self.config.rtp_port_min.unwrap_or(10000);
                 let mut max = self.config.rtp_port_max.unwrap_or(20000);
                 ui.horizontal(|ui| {
-                    ui.label("Min:");
+                    field_label(ui, palette, "Min:");
                     edited |= ui.add(egui::DragValue::new(&mut min).range(1..=65534)).changed();
-                    ui.label("Max:");
+                    field_label(ui, palette, "Max:");
                     edited |= ui.add(egui::DragValue::new(&mut max).range(1..=65535)).changed();
                 });
                 self.config.rtp_port_min = Some(min);
@@ -1191,19 +1191,19 @@ impl DeelipApp {
                 .num_columns(2)
                 .spacing([8.0, 4.0])
                 .show(ui, |ui| {
-                    ui.label("Server:");
+                    field_label(ui, palette, "Server:");
                     edited |= optional_text_field(ui, &mut self.config.ldap_server, "e.g. ldap.example.com");
                     ui.end_row();
 
-                    ui.label("Port:");
+                    field_label(ui, palette, "Port:");
                     edited |= ui.add(egui::DragValue::new(&mut self.config.ldap_port)).changed();
                     ui.end_row();
 
-                    ui.label("Base DN:");
+                    field_label(ui, palette, "Base DN:");
                     edited |= optional_text_field(ui, &mut self.config.ldap_base_dn, "e.g. dc=example,dc=com");
                     ui.end_row();
 
-                    ui.label("Bind DN (optional):");
+                    field_label(ui, palette, "Bind DN (optional):");
                     ui.horizontal(|ui| {
                         edited |= optional_text_field(ui, &mut self.config.ldap_bind_dn, "e.g. cn=readonly,dc=example,dc=com");
                         info_hint(ui, palette, "Leave blank for an anonymous bind, if the \
@@ -1211,7 +1211,7 @@ impl DeelipApp {
                     });
                     ui.end_row();
 
-                    ui.label("Bind password:");
+                    field_label(ui, palette, "Bind password:");
                     edited |= optional_password_field(ui, &mut self.config.ldap_bind_password);
                     ui.end_row();
                 });
@@ -1220,7 +1220,7 @@ impl DeelipApp {
                 info_hint(ui, palette, "Connect via implicit TLS instead of plain ldap://.");
             });
             ui.add_space(4.0);
-            ui.label("Search filter template (optional):");
+            field_label(ui, palette, "Search filter template (optional):");
             ui.horizontal(|ui| {
                 edited |= optional_text_field(ui, &mut self.config.ldap_search_filter, "(|(cn=*{query}*)(mail=*{query}*))");
                 info_hint(ui, palette, "\"{query}\" is replaced with the (escaped) search text. \
@@ -1243,13 +1243,13 @@ impl DeelipApp {
             });
             if self.config.global_hotkeys_enabled {
                 egui::Grid::new("hotkeys_grid").num_columns(2).show(ui, |ui| {
-                    ui.label("Answer:");
+                    field_label(ui, palette, "Answer:");
                     edited |= ui.text_edit_singleline(&mut self.config.hotkey_answer).changed();
                     ui.end_row();
-                    ui.label("Hangup:");
+                    field_label(ui, palette, "Hangup:");
                     edited |= ui.text_edit_singleline(&mut self.config.hotkey_hangup).changed();
                     ui.end_row();
-                    ui.label("Mute:");
+                    field_label(ui, palette, "Mute:");
                     edited |= ui.text_edit_singleline(&mut self.config.hotkey_mute).changed();
                     ui.end_row();
                 });
@@ -1268,28 +1268,9 @@ impl DeelipApp {
     }
 }
 
-/// The Settings window's own OS-level icon -- same source image as the main
-/// window's (`src/main.rs::load_window_icon`), duplicated here rather than
-/// shared since that helper lives in the binary crate, not this library
-/// one. Loaded fresh each time `show_settings_modal` opens the viewport
-/// (only happens on the open-Settings click, not per frame) rather than
-/// cached, since decoding a small PNG once per open is not worth the extra
-/// state to avoid.
-fn settings_window_icon() -> egui::IconData {
-    const ICON_BYTES: &[u8] = include_bytes!("../../../../assets/icon.png");
-    let img = image::load_from_memory(ICON_BYTES)
-        .expect("assets/icon.png must be a valid image")
-        .into_rgba8();
-    let (width, height) = img.dimensions();
-    egui::IconData {
-        rgba: img.into_raw(),
-        width,
-        height,
-    }
-}
-
 /// List available cpal device names (input or output), for populating the
-/// Settings device pickers.
+/// Settings device pickers. Excludes ALSA pseudo-devices that are never a
+/// sensible choice for a phone call -- see `is_irrelevant_alsa_device`.
 fn list_device_names(input: bool) -> Vec<String> {
     use cpal::traits::{DeviceTrait, HostTrait};
     let host = cpal::default_host();
@@ -1299,9 +1280,25 @@ fn list_device_names(input: bool) -> Vec<String> {
         host.output_devices()
     };
     match devices {
-        Ok(devices) => devices.filter_map(|d| d.name().ok()).collect(),
+        Ok(devices) => devices
+            .filter_map(|d| d.name().ok())
+            .filter(|name| !is_irrelevant_alsa_device(name))
+            .collect(),
         Err(_) => Vec::new(),
     }
+}
+
+/// Excludes ALSA's multi-channel surround (`surround21`/`surround40`/...)
+/// and digital-passthrough (`iec958`/`spdif`) pseudo-devices from the
+/// Settings device pickers -- real, valid ALSA PCM configurations that cpal
+/// correctly enumerates, but never a sensible choice for a phone call's
+/// mono/stereo mic or speaker, and their jargon-heavy names (e.g.
+/// `"surround50:CARD=Generic,DEV=0"`) are meaningless to a non-technical
+/// user picking a device. `Default` and real hardware/plugin devices
+/// (`hw:...`, `front`, `pulse`, etc.) are left untouched.
+fn is_irrelevant_alsa_device(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower.starts_with("surround") || lower.starts_with("iec958") || lower.starts_with("spdif")
 }
 
 /// Text field bound to an `Option<String>` — an empty field maps to `None`.
@@ -1338,3 +1335,7 @@ fn optional_password_field(ui: &mut Ui, value: &mut Option<String>) -> bool {
     }
     changed
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/settings.rs"]
+mod tests;

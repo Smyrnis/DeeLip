@@ -335,7 +335,6 @@ impl DeelipApp {
                     timestamp: unix_now(),
                 });
                 let _ = self.messages.save(&self.db);
-                self.unseen_messages += 1;
                 if self.config.notifications_enabled {
                     crate::platform::notify::notify_message_received(&short_uri(&from), &body);
                 }

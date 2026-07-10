@@ -20,7 +20,6 @@ pub(crate) enum Tab {
     #[default]
     Dialer,
     History,
-    Messages,
     Contacts,
     Directory,
 }
@@ -231,19 +230,17 @@ pub struct DeelipApp {
 
     // Messages
     pub(crate) messages: MessageLog,
-    /// Unseen received messages -- mirrors `unseen_missed_calls`, reset to 0
-    /// on switching to the Messages tab.
-    pub(crate) unseen_messages: u32,
-    /// Same idiom as `history_tab_label_cache`, for the Messages tab label.
-    pub(crate) messages_tab_label_cache: (u32, String),
-    /// Compose box state for the Messages tab.
-    pub(crate) message_to: String,
+    /// Whether the Messages window is open -- same separate-native-window
+    /// pattern as `settings_open`, except there's no tab-bar entry point at
+    /// all: the only way to set this `true` is `message_from_list` (a
+    /// right-click "Message" action on a History/Contacts/Directory row).
+    pub(crate) messages_window_open: bool,
+    /// Which peer's thread the Messages window is showing -- always a full
+    /// SIP URI sourced from a right-click target or an existing `peer_uri`,
+    /// never freehand-typed (there's no more manual "To:" field). `None`
+    /// only when the window has never been scoped to anyone yet.
+    pub(crate) messages_window_peer: Option<String>,
     pub(crate) message_body: String,
-    /// Which peer's thread is showing in the Messages tab -- `None` means
-    /// "not chosen yet", resolved to the most-recently-active peer on the
-    /// first frame that has any messages. Picking a peer also seeds
-    /// `message_to`, so this doubles as the tab's "reply" mechanism.
-    pub(crate) selected_message_peer: Option<String>,
 
     // Blocklist
     pub(crate) blocklist_input: String,
@@ -467,11 +464,9 @@ impl DeelipApp {
             // computes the real label instead of leaving it empty.
             history_tab_label_cache: (u32::MAX, String::new()),
             messages,
-            unseen_messages: 0,
-            messages_tab_label_cache: (u32::MAX, String::new()),
-            message_to: String::new(),
+            messages_window_open: false,
+            messages_window_peer: None,
             message_body: String::new(),
-            selected_message_peer: None,
             blocklist_input: String::new(),
             dialplan_pattern_input: String::new(),
             dialplan_replacement_input: String::new(),

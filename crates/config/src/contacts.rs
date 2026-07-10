@@ -65,10 +65,17 @@ impl ContactBook {
         Ok(())
     }
 
-    /// The saved contact whose `sip_uri` exactly matches `uri`, if any --
-    /// used to resolve a raw call-history URI to a display name.
+    /// The saved contact whose `sip_uri` matches `uri`, if any -- used to
+    /// resolve a raw call-history/message URI to a display name. Compares
+    /// `normalize_uri_for_match`'d forms rather than exact bytes, so a
+    /// contact saved as `sip:600@127.0.0.1` still matches an incoming URI
+    /// that only differs by case, an explicit default port, or a trailing
+    /// `;param`.
     pub fn find_by_uri(&self, uri: &str) -> Option<&Contact> {
-        self.contacts.iter().find(|c| c.sip_uri == uri)
+        let target = normalize_uri_for_match(uri);
+        self.contacts
+            .iter()
+            .find(|c| normalize_uri_for_match(&c.sip_uri) == target)
     }
 
     /// Contacts whose name or URI contains `query` (case-insensitive), paired
@@ -84,5 +91,85 @@ impl ContactBook {
                     || c.sip_uri.to_lowercase().contains(&q)
             })
             .collect()
+    }
+}
+
+/// Normalize a SIP URI for `find_by_uri`'s comparison: lowercase, strip the
+/// `sip:`/`sips:` scheme, drop everything from the first `;` onward
+/// (tags/params), and drop an explicit default `:5060` port -- so two URIs
+/// that only differ in case, params, or an explicit-vs-implied default port
+/// are still recognized as the same contact.
+fn normalize_uri_for_match(uri: &str) -> String {
+    let lower = uri.trim().to_ascii_lowercase();
+    let stripped = lower
+        .strip_prefix("sip:")
+        .or_else(|| lower.strip_prefix("sips:"))
+        .unwrap_or(&lower);
+    let before_params = stripped.split(';').next().unwrap_or(stripped);
+    before_params
+        .strip_suffix(":5060")
+        .unwrap_or(before_params)
+        .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn contact(name: &str, sip_uri: &str) -> Contact {
+        Contact {
+            name: name.to_string(),
+            sip_uri: sip_uri.to_string(),
+            watch_presence: false,
+            presence_account: None,
+        }
+    }
+
+    #[test]
+    fn find_by_uri_exact_match() {
+        let book = ContactBook {
+            contacts: vec![contact("Bob", "sip:600@127.0.0.1")],
+        };
+        assert_eq!(book.find_by_uri("sip:600@127.0.0.1").unwrap().name, "Bob");
+    }
+
+    #[test]
+    fn find_by_uri_ignores_case() {
+        let book = ContactBook {
+            contacts: vec![contact("Bob", "sip:Bob@Example.com")],
+        };
+        assert_eq!(book.find_by_uri("SIP:bob@example.com").unwrap().name, "Bob");
+    }
+
+    #[test]
+    fn find_by_uri_ignores_trailing_params() {
+        let book = ContactBook {
+            contacts: vec![contact("Bob", "sip:600@127.0.0.1")],
+        };
+        assert_eq!(
+            book.find_by_uri("sip:600@127.0.0.1;user=phone")
+                .unwrap()
+                .name,
+            "Bob"
+        );
+    }
+
+    #[test]
+    fn find_by_uri_ignores_explicit_default_port() {
+        let book = ContactBook {
+            contacts: vec![contact("Bob", "sip:600@127.0.0.1")],
+        };
+        assert_eq!(
+            book.find_by_uri("sip:600@127.0.0.1:5060").unwrap().name,
+            "Bob"
+        );
+    }
+
+    #[test]
+    fn find_by_uri_no_match_returns_none() {
+        let book = ContactBook {
+            contacts: vec![contact("Bob", "sip:600@127.0.0.1")],
+        };
+        assert!(book.find_by_uri("sip:700@127.0.0.1").is_none());
     }
 }

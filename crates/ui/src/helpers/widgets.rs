@@ -1,6 +1,65 @@
-use egui::{RichText, Ui};
+use egui::{Align2, RichText, Ui};
 
 use crate::theme::{self, Palette};
+
+/// Deterministic avatar background color for a contact/peer, hashed from its
+/// name+URI across a short fixed set of Darcula-adjacent hues (the app's own
+/// signal/ringing colors plus Darcula's own class-name purple and string
+/// green) -- reusing real Darcula hues instead of an arbitrary rainbow keeps
+/// avatar variety from feeling like an unrelated bolt-on. Shared by
+/// Contacts' rows and the Messages window's conversation list.
+pub(crate) fn avatar_color(seed: &str) -> egui::Color32 {
+    const HUES: [egui::Color32; 4] = [
+        egui::Color32::from_rgb(0x68, 0x97, 0xBB), // blue
+        egui::Color32::from_rgb(0xCC, 0x78, 0x32), // orange
+        egui::Color32::from_rgb(0x98, 0x76, 0xAA), // purple
+        egui::Color32::from_rgb(0x6A, 0x87, 0x59), // green
+    ];
+    let hash: u32 = seed.bytes().fold(0u32, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u32));
+    HUES[(hash as usize) % HUES.len()]
+}
+
+/// Small circular avatar with the contact's/peer's first initial, painted
+/// directly (no glyph/icon dependency, so none of this session's
+/// icon-rendering incidents apply here).
+pub(crate) fn avatar(ui: &mut Ui, name: &str, uri: &str) -> egui::Response {
+    let size = 28.0;
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
+    let initial = name
+        .trim()
+        .chars()
+        .next()
+        .unwrap_or('?')
+        .to_uppercase()
+        .to_string();
+    let color = avatar_color(if name.trim().is_empty() { uri } else { name });
+    let painter = ui.painter();
+    painter.circle_filled(rect.center(), size / 2.0, color);
+    painter.text(
+        rect.center(),
+        Align2::CENTER_CENTER,
+        initial,
+        crate::theme::font_medium(13.0),
+        egui::Color32::WHITE,
+    );
+    response
+}
+
+/// DeeLip's app icon, decoded once per call -- used as the OS-level window
+/// icon for every genuine second native window this app opens (Settings,
+/// Messages), so they don't inherit the default egui/eframe placeholder icon.
+pub(crate) fn window_icon() -> egui::IconData {
+    const ICON_BYTES: &[u8] = include_bytes!("../../../../assets/icon.png");
+    let img = image::load_from_memory(ICON_BYTES)
+        .expect("assets/icon.png must be a valid image")
+        .into_rgba8();
+    let (width, height) = img.dimensions();
+    egui::IconData {
+        rgba: img.into_raw(),
+        width,
+        height,
+    }
+}
 
 /// Left-hand side of the bottom status bar -- just the connection dot and
 /// status text. Caller wraps this in its own `ui.horizontal()` alongside a
@@ -116,6 +175,16 @@ pub(crate) fn list_row_menu(
 pub(crate) fn double_clickable_label(ui: &mut Ui, text: impl Into<egui::WidgetText>) -> bool {
     ui.add(egui::Label::new(text).sense(egui::Sense::click()))
         .double_clicked()
+}
+
+/// A Settings field-row's own label (e.g. "Account name:", "Username:") --
+/// muted rather than plain `palette.ink`, so it visually recedes behind the
+/// actual input text next to it. Without this, both the label and a
+/// `TextEdit`'s typed content fall back to the same `override_text_color`
+/// (see `theme.rs::apply_style`) and render in the literal same color,
+/// making them hard to tell apart at a glance.
+pub(crate) fn field_label(ui: &mut Ui, palette: &Palette, text: &str) {
+    ui.label(RichText::new(text).color(palette.ink_muted));
 }
 
 /// A small "(i)" marker that reveals `text` as a tooltip on hover --

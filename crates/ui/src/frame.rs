@@ -271,9 +271,9 @@ impl eframe::App for DeelipApp {
         // `theme::apply_style` above) -- the same highlight every other
         // selectable widget in the app uses, not a one-off tab-bar special case.
         //
-        // The History/Messages labels are recomputed only when their unseen
-        // count actually changed since last frame, instead of `format!()`ing
-        // a fresh String every single frame regardless (this runs at ~20fps
+        // The History label is recomputed only when its unseen count
+        // actually changed since last frame, instead of `format!()`ing a
+        // fresh String every single frame regardless (this runs at ~20fps
         // continuously) -- same cache-and-compare idiom as
         // `history_filter_key`/`audio_device_cache`.
         if self.history_tab_label_cache.0 != self.unseen_missed_calls {
@@ -290,20 +290,6 @@ impl eframe::App for DeelipApp {
                         "{}  History",
                         egui_phosphor::regular::CLOCK_COUNTER_CLOCKWISE
                     )
-                },
-            );
-        }
-        if self.messages_tab_label_cache.0 != self.unseen_messages {
-            self.messages_tab_label_cache = (
-                self.unseen_messages,
-                if self.unseen_messages > 0 {
-                    format!(
-                        "{}  Messages ({})",
-                        egui_phosphor::regular::CHAT_CIRCLE_TEXT,
-                        self.unseen_messages
-                    )
-                } else {
-                    format!("{}  Messages", egui_phosphor::regular::CHAT_CIRCLE_TEXT)
                 },
             );
         }
@@ -324,40 +310,16 @@ impl eframe::App for DeelipApp {
                     crate::app::Tab::Contacts,
                     format!("{}  Contacts", egui_phosphor::regular::ADDRESS_BOOK),
                 );
-                // Messages/Directory are used far less often than the three
-                // above -- tucked behind a MicroSIP-style overflow menu
-                // instead of two more always-visible tabs, so the primary
-                // row stays uncrowded. Plain ASCII "More", not a hamburger
-                // glyph -- verified live that "☰" silently renders as "?"
-                // in this app's font stack (not every Unicode symbol is
-                // covered just because it's plain text, see theme.rs's
-                // module doc on the same class of issue with phosphor
-                // icons) -- plain Latin text is the only fully safe choice.
-                ui.menu_button("More", |ui| {
-                    if ui
-                        .selectable_value(
-                            &mut self.tab,
-                            crate::app::Tab::Messages,
-                            self.messages_tab_label_cache.1.as_str(),
-                        )
-                        .clicked()
-                    {
-                        ui.close_menu();
-                    }
-                    if ui
-                        .selectable_value(
-                            &mut self.tab,
-                            crate::app::Tab::Directory,
-                            format!("{}  Directory", egui_phosphor::regular::BUILDINGS),
-                        )
-                        .clicked()
-                    {
-                        ui.close_menu();
-                    }
-                });
+                ui.selectable_value(
+                    &mut self.tab,
+                    crate::app::Tab::Directory,
+                    format!("{}  Directory", egui_phosphor::regular::BUILDINGS),
+                );
                 // Settings lives in its own modal dialog (MicroSIP-style),
                 // not a tab -- opened via this gear button, right-aligned
-                // like MicroSIP's own tab-row "more" affordance.
+                // like MicroSIP's own tab-row "more" affordance. Messages
+                // has no tab-bar entry point at all -- see
+                // `messages_window_open`'s doc comment.
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui
                         .button(egui_phosphor::regular::GEAR)
@@ -373,9 +335,6 @@ impl eframe::App for DeelipApp {
         if self.tab == crate::app::Tab::History && self.unseen_missed_calls > 0 {
             self.unseen_missed_calls = 0;
             self.sync_tray_badge();
-        }
-        if self.tab == crate::app::Tab::Messages && self.unseen_messages > 0 {
-            self.unseen_messages = 0;
         }
 
         // ── Status bar (bottom, MicroSIP-style) ───────────────────────────────
@@ -449,12 +408,12 @@ impl eframe::App for DeelipApp {
         egui::CentralPanel::default().frame(central_frame).show(ctx, |ui| match self.tab {
             crate::app::Tab::Dialer => self.show_dialer(ui),
             crate::app::Tab::History => self.show_history(ui, ctx),
-            crate::app::Tab::Messages => self.show_messages(ui),
             crate::app::Tab::Contacts => self.show_contacts(ui, ctx),
             crate::app::Tab::Directory => self.show_directory(ui, ctx),
         });
 
         self.show_settings_modal(ctx);
+        self.show_messages_window(ctx);
         self.show_update_popup(ctx);
         self.show_contact_dialog(ctx);
 

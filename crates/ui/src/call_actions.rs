@@ -79,12 +79,15 @@ impl DeelipApp {
         }
     }
 
-    /// Switch to the Messages tab and load `target` into the compose box --
-    /// same shape as `dial_from_list`, for History's/Contacts' "Message"
-    /// quick-action buttons.
+    /// Open the Messages window scoped to `target` -- the only way the
+    /// window is ever opened (there's no tab-bar entry point). Shared by
+    /// History's/Contacts'/Directory's "Message" right-click actions and
+    /// `DefaultListAction::Message`'s double-click behavior. Re-scopes an
+    /// already-open window to a different peer just as well as opening a
+    /// fresh one.
     pub(crate) fn message_from_list(&mut self, target: String) {
-        self.tab = Tab::Messages;
-        self.message_to = target;
+        self.messages_window_open = true;
+        self.messages_window_peer = Some(target);
     }
 
     /// Start the consultation call for an attended transfer: holds the

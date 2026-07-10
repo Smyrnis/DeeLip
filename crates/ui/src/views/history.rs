@@ -4,7 +4,7 @@ use egui::{RichText, Ui};
 use crate::app::DeelipApp;
 use crate::helpers::{
     csv_escape, double_clickable_label, empty_state, extract_user_part, format_duration,
-    format_timestamp, list_row_menu, short_uri, status_filter_label,
+    format_timestamp, list_row_menu, resolve_caller, status_filter_label,
 };
 
 impl DeelipApp {
@@ -147,13 +147,8 @@ impl DeelipApp {
                             CallStatus::Rejected => "Rejected".into(),
                             CallStatus::Failed => "Failed".into(),
                         };
-                        let contact_name = self
-                            .contacts
-                            .find_by_uri(&record.remote_uri)
-                            .map(|c| c.name.clone());
-                        let is_name = contact_name.is_some();
-                        let display_name =
-                            contact_name.unwrap_or_else(|| short_uri(&record.remote_uri));
+                        let (display_name, is_name) =
+                            resolve_caller(&self.contacts, &record.remote_uri);
 
                         let palette = self.palette;
                         let remote_uri = record.remote_uri.clone();

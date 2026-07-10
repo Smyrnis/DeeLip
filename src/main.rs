@@ -193,7 +193,7 @@ fn main() -> anyhow::Result<()> {
     let native_opts = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("DeeLip")
-            .with_inner_size([500.0, 500.0])
+            .with_inner_size([580.0, 500.0])
             .with_resizable(true)
             .with_icon(load_window_icon()),
         // NOTE: start-minimized is NOT implemented via `.with_visible()` here --

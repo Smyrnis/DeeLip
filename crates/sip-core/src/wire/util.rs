@@ -128,7 +128,20 @@ pub fn parse_uri(header: &str) -> Option<String> {
             return Some(header[start + 1..end].to_string());
         }
     }
-    Some(header.split(';').next()?.trim().to_string())
+    let candidate = header.split(';').next()?.trim();
+    // Some UAs send a malformed bare-form header with a display-name-like
+    // token glued directly onto the URI with no quotes/brackets (e.g.
+    // `600:sip:600@host`) -- RFC 3261's bare "addr-spec" form has no display
+    // name at all, but skipping forward to the scheme rather than storing
+    // the leading token protects against corrupting `remote_uri`/`peer_uri`
+    // if one ever arrives that way. No-op when the scheme already starts
+    // the string, which is the normal, well-formed case.
+    for scheme in ["sip:", "sips:", "tel:"] {
+        if let Some(idx) = candidate.find(scheme) {
+            return Some(candidate[idx..].to_string());
+        }
+    }
+    Some(candidate.to_string())
 }
 
 /// Extract `(host, port)` from a bare or `sip:`/`sips:`-prefixed URI's
