@@ -66,8 +66,7 @@ pub fn dtmf_tone_frame(c: char, phase_samples: u32) -> Option<Vec<i16>> {
     let mut out = Vec::with_capacity(FRAME_SAMPLES);
     for i in 0..FRAME_SAMPLES as u32 {
         let t = (phase_samples + i) as f32 / SAMPLE_RATE as f32;
-        let s = 0.5 * (2.0 * std::f32::consts::PI * f1 * t).sin()
-            + 0.5 * (2.0 * std::f32::consts::PI * f2 * t).sin();
+        let s = 0.5 * (2.0 * std::f32::consts::PI * f1 * t).sin() + 0.5 * (2.0 * std::f32::consts::PI * f2 * t).sin();
         out.push((s * i16::MAX as f32) as i16);
     }
     Some(out)
@@ -81,11 +80,7 @@ pub fn dtmf_tone_frame(c: char, phase_samples: u32) -> Option<Vec<i16>> {
 /// - `volume`: loudness (0 = loudest, 63 = softest; typically 10)
 /// - `duration`: in timestamp units (8000 Hz → 160 per 20 ms)
 pub fn encode_dtmf_payload(event: u8, end: bool, volume: u8, duration: u16) -> Vec<u8> {
-    let e_vol = if end {
-        0x80 | (volume & 0x3F)
-    } else {
-        volume & 0x3F
-    };
+    let e_vol = if end { 0x80 | (volume & 0x3F) } else { volume & 0x3F };
     vec![event, e_vol, (duration >> 8) as u8, duration as u8]
 }
 
@@ -98,47 +93,23 @@ pub fn encode_dtmf_payload(event: u8, end: bool, volume: u8, duration: u16) -> V
 /// (E bit set) are sent at the close of the event.
 ///
 /// Returns the encoded wire bytes for each of the 5 packets.
-pub fn build_dtmf_burst(
-    event: u8,
-    ssrc: u32,
-    seq: &mut u16,
-    base_ts: u32,
-    dtmf_pt: u8,
-) -> Vec<Vec<u8>> {
+pub fn build_dtmf_burst(event: u8, ssrc: u32, seq: &mut u16, base_ts: u32, dtmf_pt: u8) -> Vec<Vec<u8>> {
     let mut out = Vec::with_capacity(5);
 
     // 1. Start packet — marker=true, E=false, duration=160 (~20 ms)
-    let mut start = RtpPacket::new(
-        dtmf_pt,
-        *seq,
-        base_ts,
-        ssrc,
-        encode_dtmf_payload(event, false, 10, 160),
-    );
+    let mut start = RtpPacket::new(dtmf_pt, *seq, base_ts, ssrc, encode_dtmf_payload(event, false, 10, 160));
     start.marker = true;
     out.push(start.encode());
     *seq = seq.wrapping_add(1);
 
     // 2. Middle packet — marker=false, E=false, duration=320 (~40 ms)
-    let mid = RtpPacket::new(
-        dtmf_pt,
-        *seq,
-        base_ts,
-        ssrc,
-        encode_dtmf_payload(event, false, 10, 320),
-    );
+    let mid = RtpPacket::new(dtmf_pt, *seq, base_ts, ssrc, encode_dtmf_payload(event, false, 10, 320));
     out.push(mid.encode());
     *seq = seq.wrapping_add(1);
 
     // 3–5. End packets — E=true, same timestamp, duration=480 (~60 ms)
     for _ in 0..3 {
-        let end = RtpPacket::new(
-            dtmf_pt,
-            *seq,
-            base_ts,
-            ssrc,
-            encode_dtmf_payload(event, true, 10, 480),
-        );
+        let end = RtpPacket::new(dtmf_pt, *seq, base_ts, ssrc, encode_dtmf_payload(event, true, 10, 480));
         out.push(end.encode());
         *seq = seq.wrapping_add(1);
     }

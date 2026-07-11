@@ -17,8 +17,7 @@ use crate::app::DeelipApp;
 
 impl DeelipApp {
     pub(crate) fn show_dialer(&mut self, ui: &mut Ui) {
-        let idle =
-            self.calls.is_empty() && self.pending_call.is_none() && self.pending_outbound.is_none();
+        let idle = self.calls.is_empty() && self.pending_call.is_none() && self.pending_outbound.is_none();
         if idle {
             self.show_dialer_idle(ui);
         } else {

@@ -22,62 +22,39 @@ impl SipHandle {
     /// `attempt_ice` lets the caller opt this specific call out of ICE even
     /// if it's enabled globally -- see `SipCommand::MakeCall`'s doc comment.
     pub fn make_call(&self, to: &str, attempt_ice: bool) {
-        let _ = self.cmd_tx.send(SipCommand::MakeCall {
-            to: to.to_string(),
-            attempt_ice,
-        });
+        let _ = self.cmd_tx.send(SipCommand::MakeCall { to: to.to_string(), attempt_ice });
     }
     pub fn accept_call(&self, call_id: &str) {
-        let _ = self.cmd_tx.send(SipCommand::AcceptCall {
-            call_id: call_id.to_string(),
-        });
+        let _ = self.cmd_tx.send(SipCommand::AcceptCall { call_id: call_id.to_string() });
     }
     pub fn reject_call(&self, call_id: &str) {
-        let _ = self.cmd_tx.send(SipCommand::RejectCall {
-            call_id: call_id.to_string(),
-        });
+        let _ = self.cmd_tx.send(SipCommand::RejectCall { call_id: call_id.to_string() });
     }
     pub fn hang_up(&self, call_id: &str) {
-        let _ = self.cmd_tx.send(SipCommand::HangUp {
-            call_id: call_id.to_string(),
-        });
+        let _ = self.cmd_tx.send(SipCommand::HangUp { call_id: call_id.to_string() });
     }
     pub fn hold_call(&self, call_id: &str) {
-        let _ = self.cmd_tx.send(SipCommand::HoldCall {
-            call_id: call_id.to_string(),
-        });
+        let _ = self.cmd_tx.send(SipCommand::HoldCall { call_id: call_id.to_string() });
     }
     pub fn resume_call(&self, call_id: &str) {
-        let _ = self.cmd_tx.send(SipCommand::ResumeCall {
-            call_id: call_id.to_string(),
-        });
+        let _ = self.cmd_tx.send(SipCommand::ResumeCall { call_id: call_id.to_string() });
     }
     /// `target` must already be a fully-qualified SIP URI (e.g. from
     /// `normalize_target`) — it's placed verbatim into the Refer-To header.
     pub fn blind_transfer(&self, call_id: &str, target: String) {
-        let _ = self.cmd_tx.send(SipCommand::BlindTransfer {
-            call_id: call_id.to_string(),
-            target,
-        });
+        let _ = self.cmd_tx.send(SipCommand::BlindTransfer { call_id: call_id.to_string(), target });
     }
     /// `target` must already be a fully-qualified SIP URI.
     pub fn redirect_call(&self, call_id: &str, target: String) {
-        let _ = self.cmd_tx.send(SipCommand::RedirectCall {
-            call_id: call_id.to_string(),
-            target,
-        });
+        let _ = self.cmd_tx.send(SipCommand::RedirectCall { call_id: call_id.to_string(), target });
     }
     /// Subscribe to a contact's presence. `target_uri` must already be a
     /// fully-qualified SIP URI (contacts store one directly, same as Call does).
     pub fn subscribe_presence(&self, target_uri: String) {
-        let _ = self
-            .cmd_tx
-            .send(SipCommand::SubscribePresence { target_uri });
+        let _ = self.cmd_tx.send(SipCommand::SubscribePresence { target_uri });
     }
     pub fn unsubscribe_presence(&self, target_uri: String) {
-        let _ = self
-            .cmd_tx
-            .send(SipCommand::UnsubscribePresence { target_uri });
+        let _ = self.cmd_tx.send(SipCommand::UnsubscribePresence { target_uri });
     }
     /// Subscribe to a mailbox's voicemail MWI state. `target_uri` must
     /// already be a fully-qualified SIP URI.
@@ -94,17 +71,11 @@ impl SipHandle {
     }
     /// Send one DTMF digit via SIP INFO instead of RFC 2833 RTP events.
     pub fn send_dtmf_info(&self, call_id: &str, digit: char) {
-        let _ = self.cmd_tx.send(SipCommand::SendDtmfInfo {
-            call_id: call_id.to_string(),
-            digit,
-        });
+        let _ = self.cmd_tx.send(SipCommand::SendDtmfInfo { call_id: call_id.to_string(), digit });
     }
     /// Send a standalone SIP MESSAGE (RFC 3428) to `to` (a full SIP URI).
     pub fn send_message(&self, to: &str, body: &str) {
-        let _ = self.cmd_tx.send(SipCommand::SendMessage {
-            to: to.to_string(),
-            body: body.to_string(),
-        });
+        let _ = self.cmd_tx.send(SipCommand::SendMessage { to: to.to_string(), body: body.to_string() });
     }
     /// (Re-)publish this account's own presence status -- a no-op inside
     /// `SipStack` unless `SipAccount::publish_presence` is enabled.

@@ -4,8 +4,8 @@ use egui::{RichText, Ui};
 
 use crate::app::{DeelipApp, SharedApp};
 use crate::helpers::{
-    account_status_label, avatar, double_clickable_label, empty_state, field_label, list_row_menu,
-    save_text_file, search_field, show_pop_out_window, text_edit_scope,
+    account_status_label, avatar, double_clickable_label, empty_state, field_label, list_row_menu, save_text_file,
+    search_field, show_pop_out_window, text_edit_scope,
 };
 use crate::strings::{t, tf};
 use crate::theme;
@@ -35,82 +35,71 @@ impl DeelipApp {
             .map(|(i, c)| (i, c.name.clone(), c.sip_uri.clone(), c.watch_presence))
             .collect();
 
-        egui::ScrollArea::vertical()
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                if results.is_empty() {
-                    empty_state(ui, &self.palette, &t("contacts.no_contacts_found"));
-                }
-                for (idx, name, uri, watch_presence) in &results {
-                    let palette = self.palette;
-                    let presence = self.presence.get(uri).copied();
-                    list_row_menu(
-                        ui,
-                        &palette,
-                        *idx,
-                        |ui| {
-                            avatar(ui, name, uri);
-                            ui.add_space(6.0);
-                            let name_text = RichText::new(name)
-                                .font(theme::font_medium(13.0));
-                            if double_clickable_label(ui, name_text) {
-                                default_action_target = Some(*idx);
-                            }
-                            if *watch_presence {
-                                let color = match presence {
-                                    Some(PresenceState::Available) => palette.signal,
-                                    _ => palette.ink_muted,
-                                };
-                                ui.label(RichText::new("●").color(color)).on_hover_text(
-                                    match presence {
-                                        Some(PresenceState::Available) => t("contacts.presence_available"),
-                                        Some(PresenceState::Offline) => t("contacts.presence_offline"),
-                                        _ => t("contacts.presence_unknown"),
-                                    },
-                                );
-                            }
-                            // Trailing right-aligned group for the number --
-                            // added *last* (matching History's own row
-                            // pattern), a single leaf `Label`, so it claims
-                            // the row's real remaining width and anchors to
-                            // its actual right edge instead of just sitting
-                            // next in sequence after the name.
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                ui.label(
-                                    RichText::new(uri)
-                                        .font(egui::FontId::new(
-                                            11.0,
-                                            egui::FontFamily::Monospace,
-                                        ))
-                                        .color(palette.ink_muted),
-                                );
+        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+            if results.is_empty() {
+                empty_state(ui, &self.palette, &t("contacts.no_contacts_found"));
+            }
+            for (idx, name, uri, watch_presence) in &results {
+                let palette = self.palette;
+                let presence = self.presence.get(uri).copied();
+                list_row_menu(
+                    ui,
+                    &palette,
+                    *idx,
+                    |ui| {
+                        avatar(ui, name, uri);
+                        ui.add_space(6.0);
+                        let name_text = RichText::new(name).font(theme::font_medium(13.0));
+                        if double_clickable_label(ui, name_text) {
+                            default_action_target = Some(*idx);
+                        }
+                        if *watch_presence {
+                            let color = match presence {
+                                Some(PresenceState::Available) => palette.signal,
+                                _ => palette.ink_muted,
+                            };
+                            ui.label(RichText::new("●").color(color)).on_hover_text(match presence {
+                                Some(PresenceState::Available) => t("contacts.presence_available"),
+                                Some(PresenceState::Offline) => t("contacts.presence_offline"),
+                                _ => t("contacts.presence_unknown"),
                             });
-                        },
-                        |ui| {
-                            if ui.button(t("common.call_button")).clicked() {
-                                call_target = Some(uri.clone());
-                                ui.close_menu();
-                            }
-                            if ui.button(t("common.message_button")).clicked() {
-                                message_target = Some(uri.clone());
-                                ui.close_menu();
-                            }
-                            if ui.button(t("common.edit_button")).clicked() {
-                                edit_idx = Some(*idx);
-                                ui.close_menu();
-                            }
-                            ui.separator();
-                            if ui
-                                .button(RichText::new(t("common.delete_button")).color(palette.danger))
-                                .clicked()
-                            {
-                                delete_idx = Some(*idx);
-                                ui.close_menu();
-                            }
-                        },
-                    );
-                }
-            });
+                        }
+                        // Trailing right-aligned group for the number --
+                        // added *last* (matching History's own row
+                        // pattern), a single leaf `Label`, so it claims
+                        // the row's real remaining width and anchors to
+                        // its actual right edge instead of just sitting
+                        // next in sequence after the name.
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(
+                                RichText::new(uri)
+                                    .font(egui::FontId::new(11.0, egui::FontFamily::Monospace))
+                                    .color(palette.ink_muted),
+                            );
+                        });
+                    },
+                    |ui| {
+                        if ui.button(t("common.call_button")).clicked() {
+                            call_target = Some(uri.clone());
+                            ui.close_menu();
+                        }
+                        if ui.button(t("common.message_button")).clicked() {
+                            message_target = Some(uri.clone());
+                            ui.close_menu();
+                        }
+                        if ui.button(t("common.edit_button")).clicked() {
+                            edit_idx = Some(*idx);
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        if ui.button(RichText::new(t("common.delete_button")).color(palette.danger)).clicked() {
+                            delete_idx = Some(*idx);
+                            ui.close_menu();
+                        }
+                    },
+                );
+            }
+        });
 
         // Floating "+" FAB -- opens the shared dialog in add mode. Anchored
         // to this tab's own content rect (`ui.max_rect()`), not `ctx`'s full
@@ -122,20 +111,18 @@ impl DeelipApp {
         let fab_size = 40.0;
         let content_rect = ui.max_rect();
         let fab_pos = content_rect.right_bottom() - egui::vec2(fab_size + 16.0, fab_size + 16.0);
-        egui::Area::new("contacts_fab".into())
-            .fixed_pos(fab_pos)
-            .show(ui.ctx(), |ui| {
-                let button = egui::Button::new(RichText::new("+").size(18.0).color(palette.ink))
-                    .fill(palette.surface_hover)
-                    .stroke(egui::Stroke::new(1.0, palette.border))
-                    .min_size(egui::vec2(fab_size, fab_size))
-                    .rounding(egui::Rounding::same(20.0));
-                if ui.add(button).on_hover_text(t("contacts.add_contact_hover")).clicked() {
-                    self.editing_contact_idx = None;
-                    self.new_contact = Contact::default();
-                    self.contact_dialog_open = true;
-                }
-            });
+        egui::Area::new("contacts_fab".into()).fixed_pos(fab_pos).show(ui.ctx(), |ui| {
+            let button = egui::Button::new(RichText::new("+").size(18.0).color(palette.ink))
+                .fill(palette.surface_hover)
+                .stroke(egui::Stroke::new(1.0, palette.border))
+                .min_size(egui::vec2(fab_size, fab_size))
+                .rounding(egui::Rounding::same(20.0));
+            if ui.add(button).on_hover_text(t("contacts.add_contact_hover")).clicked() {
+                self.editing_contact_idx = None;
+                self.new_contact = Contact::default();
+                self.contact_dialog_open = true;
+            }
+        });
 
         if let Some(idx) = edit_idx {
             self.editing_contact_idx = Some(idx);
@@ -269,19 +256,16 @@ impl DeelipApp {
                         .unwrap_or_default(),
                 };
                 let palette = self.palette;
-                let selected_label =
-                    account_status_label(ui, &palette, current_reg_ok, &current_text);
+                let selected_label = account_status_label(ui, &palette, current_reg_ok, &current_text);
                 egui::ComboBox::from_id_source("contact_presence_account_picker")
                     .selected_text(selected_label)
                     .show_ui(ui, |ui| {
                         for acc in &self.accounts {
-                            let is_sel = self.new_contact.presence_account.as_deref()
-                                == Some(acc.account.username.as_str());
-                            let label =
-                                account_status_label(ui, &palette, acc.reg_ok, &acc.label);
+                            let is_sel =
+                                self.new_contact.presence_account.as_deref() == Some(acc.account.username.as_str());
+                            let label = account_status_label(ui, &palette, acc.reg_ok, &acc.label);
                             if ui.add(egui::SelectableLabel::new(is_sel, label)).clicked() {
-                                self.new_contact.presence_account =
-                                    Some(acc.account.username.clone());
+                                self.new_contact.presence_account = Some(acc.account.username.clone());
                             }
                         }
                     });
@@ -289,8 +273,7 @@ impl DeelipApp {
         }
         ui.add_space(10.0);
         ui.horizontal(|ui| {
-            let can_save =
-                !self.new_contact.name.is_empty() && !self.new_contact.sip_uri.is_empty();
+            let can_save = !self.new_contact.name.is_empty() && !self.new_contact.sip_uri.is_empty();
             if ui.add_enabled(can_save, egui::Button::new(t("common.save_button"))).clicked() {
                 save_clicked = true;
             }
@@ -328,18 +311,14 @@ impl DeelipApp {
             return;
         }
         if let Some(idx) = self.resolve_presence_account(contact) {
-            self.accounts[idx]
-                .handle
-                .subscribe_presence(contact.sip_uri.clone());
+            self.accounts[idx].handle.subscribe_presence(contact.sip_uri.clone());
         }
     }
 
     pub(crate) fn unsubscribe_contact_presence(&mut self, contact: &Contact) {
         if contact.watch_presence {
             if let Some(idx) = self.resolve_presence_account(contact) {
-                self.accounts[idx]
-                    .handle
-                    .unsubscribe_presence(contact.sip_uri.clone());
+                self.accounts[idx].handle.unsubscribe_presence(contact.sip_uri.clone());
             }
         }
         self.presence.remove(&contact.sip_uri);
@@ -373,9 +352,8 @@ impl DeelipApp {
     /// falling back to content sniffing). Appended to the existing contact
     /// list with no dedup, matching the manual Add-contact flow's behavior.
     pub(crate) fn import_contacts(&mut self) {
-        let Some(path) = rfd::FileDialog::new()
-            .add_filter(t("contacts.import_filter_name"), &["csv", "vcf"])
-            .pick_file()
+        let Some(path) =
+            rfd::FileDialog::new().add_filter(t("contacts.import_filter_name"), &["csv", "vcf"]).pick_file()
         else {
             return;
         };
@@ -388,17 +366,10 @@ impl DeelipApp {
             }
         };
 
-        let is_vcard = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|e| e.eq_ignore_ascii_case("vcf"))
+        let is_vcard = path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("vcf"))
             || content.contains("BEGIN:VCARD");
 
-        let imported = if is_vcard {
-            parse_vcard(&content)
-        } else {
-            parse_contacts_csv(&content)
-        };
+        let imported = if is_vcard { parse_vcard(&content) } else { parse_contacts_csv(&content) };
 
         if imported.is_empty() {
             tracing::warn!("No contacts found in {}", path.display());
@@ -421,11 +392,7 @@ fn parse_contacts_csv(content: &str) -> Vec<Contact> {
             let fields = parse_csv_line(line);
             let name = fields.first()?.clone();
             let sip_uri = fields.get(1)?.clone();
-            Some(Contact {
-                name,
-                sip_uri,
-                ..Default::default()
-            })
+            Some(Contact { name, sip_uri, ..Default::default() })
         })
         .collect()
 }
@@ -471,11 +438,7 @@ fn parse_vcard(content: &str) -> Vec<Contact> {
         }
         if line.eq_ignore_ascii_case("END:VCARD") {
             if let (Some(n), Some(u)) = (name.take(), uri.take()) {
-                contacts.push(Contact {
-                    name: n,
-                    sip_uri: u,
-                    ..Default::default()
-                });
+                contacts.push(Contact { name: n, sip_uri: u, ..Default::default() });
             }
             continue;
         }
@@ -485,9 +448,7 @@ fn parse_vcard(content: &str) -> Vec<Contact> {
         let prop_name = prop.split(';').next().unwrap_or(prop);
         if name.is_none() && prop_name.eq_ignore_ascii_case("FN") {
             name = Some(value.to_string());
-        } else if uri.is_none()
-            && (prop_name.eq_ignore_ascii_case("TEL") || prop_name.eq_ignore_ascii_case("IMPP"))
-        {
+        } else if uri.is_none() && (prop_name.eq_ignore_ascii_case("TEL") || prop_name.eq_ignore_ascii_case("IMPP")) {
             uri = Some(value.to_string());
         }
     }

@@ -50,22 +50,16 @@ pub fn store_gain(gain: &SharedGain, value: f32) {
 /// everything written to the output device, for echo cancellation to
 /// compare against the mic capture.
 pub fn open_streams(
-    input_device: Option<&str>,
-    output_device: Option<&str>,
-    echo_cancellation: bool,
+    input_device: Option<&str>, output_device: Option<&str>, echo_cancellation: bool,
 ) -> anyhow::Result<(AudioStreams, CaptureRx, PlaybackTx, Option<EchoRefBuf>, SharedGain)> {
     let host = cpal::default_host();
 
-    let in_dev = find_device(&host, input_device, true)
-        .ok_or_else(|| anyhow::anyhow!("No default input device"))?;
-    let out_dev = find_device(&host, output_device, false)
-        .ok_or_else(|| anyhow::anyhow!("No default output device"))?;
+    let in_dev = find_device(&host, input_device, true).ok_or_else(|| anyhow::anyhow!("No default input device"))?;
+    let out_dev =
+        find_device(&host, output_device, false).ok_or_else(|| anyhow::anyhow!("No default output device"))?;
 
-    let config = StreamConfig {
-        channels: 1,
-        sample_rate: SampleRate(SAMPLE_RATE),
-        buffer_size: cpal::BufferSize::Default,
-    };
+    let config =
+        StreamConfig { channels: 1, sample_rate: SampleRate(SAMPLE_RATE), buffer_size: cpal::BufferSize::Default };
 
     // ── Capture ───────────────────────────────────────────────────────────────
     let (cap_tx, cap_rx) = mpsc::unbounded_channel::<Vec<i16>>();
@@ -80,36 +74,22 @@ pub fn open_streams(
     let jitter: PlaybackTx = Arc::new(Mutex::new(VecDeque::with_capacity(4800)));
     let jitter_out = jitter.clone();
 
-    let echo_ref: Option<EchoRefBuf> =
-        echo_cancellation.then(|| Arc::new(Mutex::new(VecDeque::with_capacity(4800))));
+    let echo_ref: Option<EchoRefBuf> = echo_cancellation.then(|| Arc::new(Mutex::new(VecDeque::with_capacity(4800))));
     let echo_ref_out = echo_ref.clone();
 
     let output_gain = new_shared_gain();
     let output_gain_out = output_gain.clone();
 
     let output_stream = match out_dev.default_output_config()?.sample_format() {
-        SampleFormat::I16 => {
-            build_output_i16(&out_dev, &config, jitter_out, echo_ref_out, output_gain_out)?
-        }
-        SampleFormat::F32 => {
-            build_output_f32(&out_dev, &config, jitter_out, echo_ref_out, output_gain_out)?
-        }
+        SampleFormat::I16 => build_output_i16(&out_dev, &config, jitter_out, echo_ref_out, output_gain_out)?,
+        SampleFormat::F32 => build_output_f32(&out_dev, &config, jitter_out, echo_ref_out, output_gain_out)?,
         fmt => anyhow::bail!("Unsupported output sample format: {fmt:?}"),
     };
 
     input_stream.play().context("Starting input stream")?;
     output_stream.play().context("Starting output stream")?;
 
-    Ok((
-        AudioStreams {
-            _input: input_stream,
-            _output: output_stream,
-        },
-        cap_rx,
-        jitter,
-        echo_ref,
-        output_gain,
-    ))
+    Ok((AudioStreams { _input: input_stream, _output: output_stream }, cap_rx, jitter, echo_ref, output_gain))
 }
 
 /// Find a named cpal device (input or output), falling back to the system
@@ -159,9 +139,7 @@ fn push_frame_to_echo_ref(echo_ref: &Option<EchoRefBuf>, samples: &[i16]) {
 // ── I16 paths ─────────────────────────────────────────────────────────────────
 
 fn build_input_i16(
-    device: &cpal::Device,
-    config: &StreamConfig,
-    tx: mpsc::UnboundedSender<Vec<i16>>,
+    device: &cpal::Device, config: &StreamConfig, tx: mpsc::UnboundedSender<Vec<i16>>,
 ) -> anyhow::Result<cpal::Stream> {
     let mut buf: Vec<i16> = Vec::with_capacity(FRAME_SAMPLES);
     let stream = device
@@ -184,11 +162,7 @@ fn build_input_i16(
 }
 
 fn build_output_i16(
-    device: &cpal::Device,
-    config: &StreamConfig,
-    jitter: PlaybackTx,
-    echo_ref: Option<EchoRefBuf>,
-    gain: SharedGain,
+    device: &cpal::Device, config: &StreamConfig, jitter: PlaybackTx, echo_ref: Option<EchoRefBuf>, gain: SharedGain,
 ) -> anyhow::Result<cpal::Stream> {
     let stream = device
         .build_output_stream(
@@ -213,9 +187,7 @@ fn build_output_i16(
 // ── F32 paths (convert to/from i16) ──────────────────────────────────────────
 
 fn build_input_f32(
-    device: &cpal::Device,
-    config: &StreamConfig,
-    tx: mpsc::UnboundedSender<Vec<i16>>,
+    device: &cpal::Device, config: &StreamConfig, tx: mpsc::UnboundedSender<Vec<i16>>,
 ) -> anyhow::Result<cpal::Stream> {
     let mut buf: Vec<i16> = Vec::with_capacity(FRAME_SAMPLES);
     let stream = device
@@ -238,11 +210,7 @@ fn build_input_f32(
 }
 
 fn build_output_f32(
-    device: &cpal::Device,
-    config: &StreamConfig,
-    jitter: PlaybackTx,
-    echo_ref: Option<EchoRefBuf>,
-    gain: SharedGain,
+    device: &cpal::Device, config: &StreamConfig, jitter: PlaybackTx, echo_ref: Option<EchoRefBuf>, gain: SharedGain,
 ) -> anyhow::Result<cpal::Stream> {
     let mut written: Vec<i16> = Vec::new();
     let stream = device
@@ -253,8 +221,8 @@ fn build_output_f32(
                 let mut buf = jitter.lock().unwrap();
                 written.clear();
                 for s in data.iter_mut() {
-                    let sample = (buf.pop_front().unwrap_or(0) as f32 * g)
-                        .clamp(i16::MIN as f32, i16::MAX as f32) as i16;
+                    let sample =
+                        (buf.pop_front().unwrap_or(0) as f32 * g).clamp(i16::MIN as f32, i16::MAX as f32) as i16;
                     *s = sample as f32 / i16::MAX as f32;
                     written.push(sample);
                 }

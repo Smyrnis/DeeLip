@@ -72,7 +72,11 @@ impl NetworkConfig {
 /// be unreachable in practice.
 pub fn account_codecs(acc: &SipAccount) -> Vec<AudioCodec> {
     let codecs: Vec<AudioCodec> = acc.codec_order.iter().filter_map(|s| codec_from_str(s)).collect();
-    if codecs.is_empty() { ALL_CODECS.to_vec() } else { codecs }
+    if codecs.is_empty() {
+        ALL_CODECS.to_vec()
+    } else {
+        codecs
+    }
 }
 
 /// Parse one of `codec_order`'s canonical lowercase codec names (also used
@@ -83,7 +87,7 @@ pub fn codec_from_str(s: &str) -> Option<AudioCodec> {
         "g722" => Some(AudioCodec::G722),
         "pcmu" => Some(AudioCodec::Pcmu),
         "pcma" => Some(AudioCodec::Pcma),
-        "gsm"  => Some(AudioCodec::Gsm),
+        "gsm" => Some(AudioCodec::Gsm),
         "ilbc" => Some(AudioCodec::Ilbc),
         _ => None,
     }
@@ -95,10 +99,7 @@ pub fn codec_from_str(s: &str) -> Option<AudioCodec> {
 /// hold/resume within the same call (a held `TurnRelay` keeps refreshing its
 /// allocation internally until dropped).
 pub async fn resolve_rtp_endpoint(
-    network: &NetworkConfig,
-    advertised_ip: &str,
-    local_rtp: u16,
-    relay: &mut Option<TurnRelay>,
+    network: &NetworkConfig, advertised_ip: &str, local_rtp: u16, relay: &mut Option<TurnRelay>,
 ) -> (String, u16) {
     if relay.is_none() {
         if let Some((server, username, password)) = network.turn() {
@@ -124,13 +125,20 @@ pub async fn resolve_rtp_endpoint(
 /// `SipAccount::wants_ice`) -- this function itself only knows about
 /// process-wide STUN/TURN config, not any particular account.
 pub async fn try_gather_ice(network: &NetworkConfig, enabled: bool, is_controlling: bool) -> Option<IceGathered> {
-    if !enabled { return None; }
-    if network.stun_server.is_none() && network.turn_server.is_none() { return None; }
+    if !enabled {
+        return None;
+    }
+    if network.stun_server.is_none() && network.turn_server.is_none() {
+        return None;
+    }
     let turn = network.turn();
     let turn_ref = turn.as_ref().map(|(s, u, p)| (s.as_str(), u.as_str(), p.as_str()));
     match deelip_nat::ice::gather(network.stun_server.as_deref(), turn_ref, is_controlling, ICE_GATHER_TIMEOUT).await {
         Ok(gathered) => Some(gathered),
-        Err(e) => { tracing::warn!("ICE candidate gathering failed/timed out, falling back: {e}"); None }
+        Err(e) => {
+            tracing::warn!("ICE candidate gathering failed/timed out, falling back: {e}");
+            None
+        }
     }
 }
 
@@ -151,8 +159,17 @@ pub async fn try_gather_ice(network: &NetworkConfig, enabled: bool, is_controlli
 /// of ICE's gather-then-commit shape, not a bug, and the call is simply left
 /// without working media in that case, same as any other NAT-traversal
 /// failure this codebase never protected against pre-ICE either.
-pub async fn finish_ice_connect(gathered: Option<IceGathered>, is_controlling: bool, parsed: &ParsedSdp) -> Option<IceConnection> {
-    finish_ice_connect_raw(gathered, is_controlling, parsed.ice_ufrag.as_deref(), parsed.ice_pwd.as_deref(), &parsed.ice_candidates).await
+pub async fn finish_ice_connect(
+    gathered: Option<IceGathered>, is_controlling: bool, parsed: &ParsedSdp,
+) -> Option<IceConnection> {
+    finish_ice_connect_raw(
+        gathered,
+        is_controlling,
+        parsed.ice_ufrag.as_deref(),
+        parsed.ice_pwd.as_deref(),
+        &parsed.ice_candidates,
+    )
+    .await
 }
 
 /// Same as `finish_ice_connect`, but takes the three ICE parameters
@@ -161,19 +178,20 @@ pub async fn finish_ice_connect(gathered: Option<IceGathered>, is_controlling: b
 /// distinct type from `ParsedSdp`, deliberately -- see `wire::sdp`'s
 /// module doc). `finish_ice_connect` is now a thin wrapper around this.
 pub async fn finish_ice_connect_raw(
-    gathered: Option<IceGathered>,
-    is_controlling: bool,
-    ufrag: Option<&str>,
-    pwd: Option<&str>,
-    candidates: &[String],
+    gathered: Option<IceGathered>, is_controlling: bool, ufrag: Option<&str>, pwd: Option<&str>, candidates: &[String],
 ) -> Option<IceConnection> {
     let gathered = gathered?;
     let ufrag = ufrag?;
     let pwd = pwd?;
-    if candidates.is_empty() { return None; }
+    if candidates.is_empty() {
+        return None;
+    }
     match deelip_nat::ice::connect(gathered, is_controlling, ufrag, pwd, candidates).await {
         Ok(conn) => Some(conn),
-        Err(e) => { tracing::warn!("ICE connectivity checks failed, falling back: {e}"); None }
+        Err(e) => {
+            tracing::warn!("ICE connectivity checks failed, falling back: {e}");
+            None
+        }
     }
 }
 
@@ -185,8 +203,17 @@ pub async fn finish_ice_connect_raw(
 /// for a later event. Returns our own `IceAttrs` for the answer SDP, our
 /// default candidate's address for the plain c=/m= line, and the winning
 /// connection -- all three or nothing.
-pub async fn try_answer_with_ice(network: &NetworkConfig, enabled: bool, offer: &ParsedSdp) -> Option<(IceAttrs, SocketAddr, IceConnection)> {
-    try_answer_with_ice_raw(network, enabled, offer.ice_ufrag.as_deref(), offer.ice_pwd.as_deref(), &offer.ice_candidates).await
+pub async fn try_answer_with_ice(
+    network: &NetworkConfig, enabled: bool, offer: &ParsedSdp,
+) -> Option<(IceAttrs, SocketAddr, IceConnection)> {
+    try_answer_with_ice_raw(
+        network,
+        enabled,
+        offer.ice_ufrag.as_deref(),
+        offer.ice_pwd.as_deref(),
+        &offer.ice_candidates,
+    )
+    .await
 }
 
 /// Same as `try_answer_with_ice`, but takes the three ICE parameters
@@ -194,22 +221,29 @@ pub async fn try_answer_with_ice(network: &NetworkConfig, enabled: bool, offer: 
 /// `finish_ice_connect_raw`. `try_answer_with_ice` is now a thin wrapper
 /// around this.
 pub async fn try_answer_with_ice_raw(
-    network: &NetworkConfig,
-    enabled: bool,
-    ufrag: Option<&str>,
-    pwd: Option<&str>,
-    candidates: &[String],
+    network: &NetworkConfig, enabled: bool, ufrag: Option<&str>, pwd: Option<&str>, candidates: &[String],
 ) -> Option<(IceAttrs, SocketAddr, IceConnection)> {
-    if !enabled { return None; }
+    if !enabled {
+        return None;
+    }
     let ufrag = ufrag?;
     let pwd = pwd?;
-    if candidates.is_empty() { return None; }
+    if candidates.is_empty() {
+        return None;
+    }
     let gathered = try_gather_ice(network, enabled, false).await?;
-    let attrs = IceAttrs { ufrag: gathered.local_ufrag.clone(), pwd: gathered.local_pwd.clone(), candidates: gathered.candidates.clone() };
+    let attrs = IceAttrs {
+        ufrag: gathered.local_ufrag.clone(),
+        pwd: gathered.local_pwd.clone(),
+        candidates: gathered.candidates.clone(),
+    };
     let default_addr = gathered.default_addr;
     match deelip_nat::ice::connect(gathered, false, ufrag, pwd, candidates).await {
         Ok(conn) => Some((attrs, default_addr, conn)),
-        Err(e) => { tracing::warn!("ICE connectivity checks failed, falling back: {e}"); None }
+        Err(e) => {
+            tracing::warn!("ICE connectivity checks failed, falling back: {e}");
+            None
+        }
     }
 }
 
@@ -228,11 +262,8 @@ pub async fn try_answer_with_ice_raw(
 /// negotiated, else a TURN relay if configured, else `None` for plain
 /// direct UDP) -- codec-agnostic, so identical for audio and video legs.
 fn resolve_srtp_and_relay(
-    local_srtp:  &Option<SrtpParams>,
-    remote_srtp: &Option<SrtpParams>,
-    relay:       &Option<TurnRelay>,
-    ice:         &Option<IceConnection>,
-    wants_srtp:  bool,
+    local_srtp: &Option<SrtpParams>, remote_srtp: &Option<SrtpParams>, relay: &Option<TurnRelay>,
+    ice: &Option<IceConnection>, wants_srtp: bool,
 ) -> (Option<SrtpSession>, Option<Arc<dyn Conn + Send + Sync>>) {
     let srtp_session = match (local_srtp, remote_srtp) {
         (Some(local), Some(remote)) => Some(SrtpSession { local: local.clone(), remote: remote.clone() }),
@@ -243,32 +274,33 @@ fn resolve_srtp_and_relay(
             None
         }
     };
-    let relay_conn: Option<Arc<dyn Conn + Send + Sync>> = ice.as_ref().map(|c| c.conn.clone())
-        .or_else(|| relay.as_ref().map(|r| r.conn.clone()));
+    let relay_conn: Option<Arc<dyn Conn + Send + Sync>> =
+        ice.as_ref().map(|c| c.conn.clone()).or_else(|| relay.as_ref().map(|r| r.conn.clone()));
     (srtp_session, relay_conn)
 }
 
 #[allow(clippy::too_many_arguments)] // each param is a distinct, meaningfully-named
-                                      // piece of one call leg's negotiated
-                                      // media state -- bundling them into a
-                                      // struct wouldn't reduce real complexity.
+                                     // piece of one call leg's negotiated
+                                     // media state -- bundling them into a
+                                     // struct wouldn't reduce real complexity.
 pub fn resolve_call_media(
-    local_rtp:      u16,
-    local_srtp:     Option<SrtpParams>,
-    relay:          Option<TurnRelay>,
-    ice:            Option<IceConnection>,
-    codec:          AudioCodec,
-    dtmf_type:      Option<u8>,
-    cn_type:        Option<u8>,
-    remote_rtp:     SocketAddr,
-    remote_srtp:    Option<SrtpParams>,
-    wants_srtp:     bool,
+    local_rtp: u16, local_srtp: Option<SrtpParams>, relay: Option<TurnRelay>, ice: Option<IceConnection>,
+    codec: AudioCodec, dtmf_type: Option<u8>, cn_type: Option<u8>, remote_rtp: SocketAddr,
+    remote_srtp: Option<SrtpParams>, wants_srtp: bool,
 ) -> (CallMedia, CallMediaReady) {
-    let (srtp_session, relay_conn) =
-        resolve_srtp_and_relay(&local_srtp, &remote_srtp, &relay, &ice, wants_srtp);
+    let (srtp_session, relay_conn) = resolve_srtp_and_relay(&local_srtp, &remote_srtp, &relay, &ice, wants_srtp);
 
     let media = CallMedia { local_rtp, local_srtp, relay, ice, codec, dtmf_type, cn_type, video: None };
-    let ready = CallMediaReady { codec, dtmf_type, cn_type, local_rtp, remote_rtp, srtp: srtp_session, relay: relay_conn, video: None };
+    let ready = CallMediaReady {
+        codec,
+        dtmf_type,
+        cn_type,
+        local_rtp,
+        remote_rtp,
+        srtp: srtp_session,
+        relay: relay_conn,
+        video: None,
+    };
     (media, ready)
 }
 
@@ -279,17 +311,10 @@ pub fn resolve_call_media(
 /// that function's own `#[allow(clippy::too_many_arguments)]` comment).
 #[allow(clippy::too_many_arguments)]
 pub fn resolve_video_media(
-    local_rtp:   u16,
-    local_srtp:  Option<SrtpParams>,
-    relay:       Option<TurnRelay>,
-    ice:         Option<IceConnection>,
-    codec:       VideoCodec,
-    remote_rtp:  SocketAddr,
-    remote_srtp: Option<SrtpParams>,
-    wants_srtp:  bool,
+    local_rtp: u16, local_srtp: Option<SrtpParams>, relay: Option<TurnRelay>, ice: Option<IceConnection>,
+    codec: VideoCodec, remote_rtp: SocketAddr, remote_srtp: Option<SrtpParams>, wants_srtp: bool,
 ) -> (VideoMedia, VideoMediaReady) {
-    let (srtp_session, relay_conn) =
-        resolve_srtp_and_relay(&local_srtp, &remote_srtp, &relay, &ice, wants_srtp);
+    let (srtp_session, relay_conn) = resolve_srtp_and_relay(&local_srtp, &remote_srtp, &relay, &ice, wants_srtp);
 
     let media = VideoMedia { local_rtp, local_srtp, relay, ice, codec };
     let ready = VideoMediaReady { codec, local_rtp, remote_rtp, srtp: srtp_session, relay: relay_conn };

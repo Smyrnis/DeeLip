@@ -45,9 +45,7 @@ impl AutomaticGainControl {
             self.gain += (desired_gain - self.gain) * ADAPT_RATE;
         }
 
-        pcm.iter()
-            .map(|&s| (s as f32 * self.gain).clamp(i16::MIN as f32, i16::MAX as f32) as i16)
-            .collect()
+        pcm.iter().map(|&s| (s as f32 * self.gain).clamp(i16::MIN as f32, i16::MAX as f32) as i16).collect()
     }
 }
 

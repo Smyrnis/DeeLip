@@ -25,27 +25,16 @@ impl SipStack {
 
         let server = self.identity_host.clone();
         let username = self.account.username.clone();
-        let display = self
-            .account
-            .display_name
-            .clone()
-            .unwrap_or_else(|| username.clone());
+        let display = self.account.display_name.clone().unwrap_or_else(|| username.clone());
         let adv_ip = self.advertised_ip.clone();
         let local_ip = self.local_ip.clone();
         let local_port = self.local_port;
         let call_id_s = dialog.call_id.clone();
         let from_tag = dialog.local_tag.clone();
         let to_uri = dialog.remote_uri.clone();
-        let to_tag = dialog
-            .remote_tag
-            .as_deref()
-            .map(|t| format!(";tag={t}"))
-            .unwrap_or_default();
-        let contact: SocketAddr = dialog
-            .remote_contact
-            .as_deref()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(self.server_addr);
+        let to_tag = dialog.remote_tag.as_deref().map(|t| format!(";tag={t}")).unwrap_or_default();
+        let contact: SocketAddr =
+            dialog.remote_contact.as_deref().and_then(|s| s.parse().ok()).unwrap_or(self.server_addr);
         let via_proto = self.via_proto();
         let contact_transport = self.contact_transport_param();
 
@@ -96,27 +85,16 @@ impl SipStack {
 
         let server = self.identity_host.clone();
         let username = self.account.username.clone();
-        let display = self
-            .account
-            .display_name
-            .clone()
-            .unwrap_or_else(|| username.clone());
+        let display = self.account.display_name.clone().unwrap_or_else(|| username.clone());
         let adv_ip = self.advertised_ip.clone();
         let local_ip = self.local_ip.clone();
         let local_port = self.local_port;
         let call_id_s = dialog.call_id.clone();
         let from_tag = dialog.local_tag.clone();
         let to_uri = dialog.remote_uri.clone();
-        let to_tag = dialog
-            .remote_tag
-            .as_deref()
-            .map(|t| format!(";tag={t}"))
-            .unwrap_or_default();
-        let contact: SocketAddr = dialog
-            .remote_contact
-            .as_deref()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(self.server_addr);
+        let to_tag = dialog.remote_tag.as_deref().map(|t| format!(";tag={t}")).unwrap_or_default();
+        let contact: SocketAddr =
+            dialog.remote_contact.as_deref().and_then(|s| s.parse().ok()).unwrap_or(self.server_addr);
         let via_proto = self.via_proto();
         let contact_transport = self.contact_transport_param();
 
@@ -142,22 +120,15 @@ impl SipStack {
     /// no-answer-forward timeout; removes the dialog like `reject_call` does.
     pub(crate) async fn redirect_call(&mut self, call_id: &str, target: &str) {
         if let Some(dialog) = self.dialogs.remove(call_id) {
-            let contact: SocketAddr = dialog
-                .remote_contact
-                .as_deref()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(self.server_addr);
+            let contact: SocketAddr =
+                dialog.remote_contact.as_deref().and_then(|s| s.parse().ok()).unwrap_or(self.server_addr);
             let username = &self.account.username;
             let server = &self.identity_host;
             let display = self.account.display_name.as_deref().unwrap_or(username);
             let local_tag = &dialog.local_tag;
             let remote_uri = &dialog.remote_uri;
             let remote_via = &dialog.remote_via;
-            let from_tag = dialog
-                .remote_tag
-                .as_deref()
-                .map(|t| format!(";tag={t}"))
-                .unwrap_or_default();
+            let from_tag = dialog.remote_tag.as_deref().map(|t| format!(";tag={t}")).unwrap_or_default();
             let cseq_n = dialog.remote_cseq.unwrap_or(1);
 
             let redirect = format!(

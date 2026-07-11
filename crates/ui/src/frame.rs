@@ -134,23 +134,13 @@ impl DeelipApp {
         // comparison itself borrows rather than allocates, so the common
         // (unchanged) case costs nothing beyond a cheap scan.
         let calls_changed = self.calls.len() != self.tray_calls_key.len()
-            || self
-                .calls
-                .iter()
-                .zip(&self.tray_calls_key)
-                .any(|(c, (acc, id))| c.account != *acc || c.call_id != *id);
+            || self.calls.iter().zip(&self.tray_calls_key).any(|(c, (acc, id))| c.account != *acc || c.call_id != *id);
         if calls_changed {
-            self.tray_calls_key = self
-                .calls
-                .iter()
-                .map(|c| (c.account, c.call_id.clone()))
-                .collect();
+            self.tray_calls_key = self.calls.iter().map(|c| (c.account, c.call_id.clone())).collect();
             *quit_state.calls.lock().unwrap() = self
                 .tray_calls_key
                 .iter()
-                .map(|(account, call_id)| {
-                    (self.accounts[*account].handle.cmd_tx.clone(), call_id.clone())
-                })
+                .map(|(account, call_id)| (self.accounts[*account].handle.cmd_tx.clone(), call_id.clone()))
                 .collect();
         }
 
@@ -161,9 +151,10 @@ impl DeelipApp {
         };
         if pending_changed {
             self.tray_pending_key = self.pending_call.as_ref().map(|p| (p.account, p.call_id.clone()));
-            *quit_state.pending.lock().unwrap() = self.tray_pending_key.as_ref().map(|(account, call_id)| {
-                (self.accounts[*account].handle.cmd_tx.clone(), call_id.clone())
-            });
+            *quit_state.pending.lock().unwrap() = self
+                .tray_pending_key
+                .as_ref()
+                .map(|(account, call_id)| (self.accounts[*account].handle.cmd_tx.clone(), call_id.clone()));
         }
 
         if ctx.input(|i| i.viewport().close_requested()) {
@@ -305,11 +296,7 @@ impl DeelipApp {
                         tf("nav.history_tab_with_count", &[("count", &self.unseen_missed_calls.to_string())])
                     )
                 } else {
-                    format!(
-                        "{}  {}",
-                        egui_phosphor::regular::CLOCK_COUNTER_CLOCKWISE,
-                        t("nav.history_tab")
-                    )
+                    format!("{}  {}", egui_phosphor::regular::CLOCK_COUNTER_CLOCKWISE, t("nav.history_tab"))
                 },
             );
         }
@@ -320,11 +307,7 @@ impl DeelipApp {
                     crate::app::Tab::Dialer,
                     format!("{}  {}", egui_phosphor::regular::PHONE, t("nav.dialer_tab")),
                 );
-                ui.selectable_value(
-                    &mut self.tab,
-                    crate::app::Tab::History,
-                    self.history_tab_label_cache.1.as_str(),
-                );
+                ui.selectable_value(&mut self.tab, crate::app::Tab::History, self.history_tab_label_cache.1.as_str());
                 ui.selectable_value(
                     &mut self.tab,
                     crate::app::Tab::Contacts,
@@ -341,11 +324,7 @@ impl DeelipApp {
                 // has no tab-bar entry point at all -- see
                 // `messages_window_open`'s doc comment.
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .button(egui_phosphor::regular::GEAR)
-                        .on_hover_text(t("settings.window_title"))
-                        .clicked()
-                    {
+                    if ui.button(egui_phosphor::regular::GEAR).on_hover_text(t("settings.window_title")).clicked() {
                         self.settings_open = true;
                     }
                 });
@@ -364,29 +343,14 @@ impl DeelipApp {
         // pinned to the far right edge, mirroring MicroSIP's "● Online ...
         // extension" bar).
         let on_hold = self.focused_call.is_none() && !self.calls.is_empty();
-        let new_voicemail: u32 = self
-            .accounts
-            .iter()
-            .filter_map(|a| a.mwi.as_ref())
-            .filter(|m| m.waiting)
-            .map(|m| m.new_messages)
-            .sum();
+        let new_voicemail: u32 =
+            self.accounts.iter().filter_map(|a| a.mwi.as_ref()).filter(|m| m.waiting).map(|m| m.new_messages).sum();
         egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                crate::helpers::status_bar(
-                    ui,
-                    &self.palette,
-                    &self.status_line,
-                    self.reg_ok,
-                    on_hold,
-                );
+                crate::helpers::status_bar(ui, &self.palette, &self.status_line, self.reg_ok, on_hold);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if let Some(idx) = self.selected_account_idx() {
-                        ui.label(
-                            egui::RichText::new(&self.accounts[idx].label)
-                                .color(self.palette.ink_muted)
-                                .small(),
-                        );
+                        ui.label(egui::RichText::new(&self.accounts[idx].label).color(self.palette.ink_muted).small());
                         ui.add_space(8.0);
                         let dnd = self.accounts[idx].account.dnd;
                         let (icon, color) = if dnd {
@@ -396,11 +360,7 @@ impl DeelipApp {
                         };
                         if ui
                             .small_button(egui::RichText::new(icon).color(color))
-                            .on_hover_text(if dnd {
-                                t("nav.dnd_on_hover")
-                            } else {
-                                t("nav.dnd_off_hover")
-                            })
+                            .on_hover_text(if dnd { t("nav.dnd_on_hover") } else { t("nav.dnd_off_hover") })
                             .clicked()
                         {
                             self.toggle_dnd(idx);
@@ -409,11 +369,8 @@ impl DeelipApp {
                     if new_voicemail > 0 {
                         ui.add_space(8.0);
                         ui.label(
-                            egui::RichText::new(format!(
-                                "{} {new_voicemail}",
-                                egui_phosphor::regular::VOICEMAIL
-                            ))
-                            .color(self.palette.signal),
+                            egui::RichText::new(format!("{} {new_voicemail}", egui_phosphor::regular::VOICEMAIL))
+                                .color(self.palette.signal),
                         );
                     }
                 });
@@ -457,13 +414,8 @@ impl DeelipApp {
         // visually occluded), and since both windows share one render
         // thread, a throttled main-window redraw directly delayed Settings'
         // own next frame whenever Settings had focus and the idle tick fired.
-        let has_live_call =
-            self.pending_call.is_some() || self.pending_outbound.is_some() || !self.calls.is_empty();
-        let repaint_interval = if has_live_call {
-            Duration::from_millis(50)
-        } else {
-            Duration::from_secs(2)
-        };
+        let has_live_call = self.pending_call.is_some() || self.pending_outbound.is_some() || !self.calls.is_empty();
+        let repaint_interval = if has_live_call { Duration::from_millis(50) } else { Duration::from_secs(2) };
         ctx.request_repaint_after(repaint_interval);
     }
 }
@@ -480,9 +432,7 @@ impl DeelipApp {
             sent = true;
         }
         if let Some(pending) = self.pending_call.take() {
-            self.accounts[pending.account]
-                .handle
-                .reject_call(&pending.call_id);
+            self.accounts[pending.account].handle.reject_call(&pending.call_id);
             sent = true;
         }
         if sent {
@@ -491,8 +441,7 @@ impl DeelipApp {
             // expression it's evaluated before block_on enters the runtime
             // context, and registering a timer with no ambient runtime
             // context panics ("there is no reactor running").
-            self.rt
-                .block_on(async { tokio::time::sleep(Duration::from_millis(200)).await });
+            self.rt.block_on(async { tokio::time::sleep(Duration::from_millis(200)).await });
         }
     }
 }

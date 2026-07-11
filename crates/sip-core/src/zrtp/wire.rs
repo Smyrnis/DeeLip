@@ -318,17 +318,7 @@ fn decode_commit(body: &[u8]) -> Result<Commit, WireError> {
     let sas: [u8; 4] = take!(4).try_into().unwrap();
     let hvi: [u8; 32] = take!(32).try_into().unwrap();
     let mac: [u8; 8] = take!(8).try_into().unwrap();
-    Ok(Commit {
-        h2,
-        zid,
-        hash,
-        cipher,
-        auth,
-        key_agreement,
-        sas,
-        hvi,
-        mac,
-    })
+    Ok(Commit { h2, zid, hash, cipher, auth, key_agreement, sas, hvi, mac })
 }
 
 fn encode_dhpart(d: &DhPart, out: &mut Vec<u8>) {
@@ -362,20 +352,8 @@ fn decode_dhpart(body: &[u8]) -> Result<DhPart, WireError> {
     let pv_len = u16::from_be_bytes(take!(2).try_into().unwrap()) as usize;
     let pv = body.get(pos..pos + pv_len).ok_or(WireError::Truncated)?.to_vec();
     pos += pv_len;
-    let mac: [u8; 8] = body
-        .get(pos..pos + 8)
-        .ok_or(WireError::Truncated)?
-        .try_into()
-        .unwrap();
-    Ok(DhPart {
-        h1,
-        rs1_id,
-        rs2_id,
-        aux_id,
-        pbx_id,
-        pv,
-        mac,
-    })
+    let mac: [u8; 8] = body.get(pos..pos + 8).ok_or(WireError::Truncated)?.try_into().unwrap();
+    Ok(DhPart { h1, rs1_id, rs2_id, aux_id, pbx_id, pv, mac })
 }
 
 fn encode_confirm(c: &Confirm, out: &mut Vec<u8>) {
@@ -393,11 +371,7 @@ fn decode_confirm(body: &[u8]) -> Result<Confirm, WireError> {
     let cfb_iv: [u8; 16] = body[8..24].try_into().unwrap();
     let enc_len = u16::from_be_bytes(body[24..26].try_into().unwrap()) as usize;
     let encrypted = body.get(26..26 + enc_len).ok_or(WireError::Truncated)?.to_vec();
-    Ok(Confirm {
-        confirm_mac,
-        cfb_iv,
-        encrypted,
-    })
+    Ok(Confirm { confirm_mac, cfb_iv, encrypted })
 }
 
 /// One ZRTP packet: the 12-byte outer header (shares the RTP socket/port,
@@ -430,11 +404,7 @@ impl Packet {
         let sequence = u16::from_be_bytes([bytes[2], bytes[3]]);
         let ssrc = u32::from_be_bytes(bytes[8..12].try_into().unwrap());
         let message = Message::decode(&bytes[12..])?;
-        Ok(Packet {
-            sequence,
-            ssrc,
-            message,
-        })
+        Ok(Packet { sequence, ssrc, message })
     }
 }
 

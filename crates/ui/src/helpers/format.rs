@@ -84,10 +84,7 @@ pub(crate) fn csv_escape(s: &str) -> String {
 /// target) or diagnostic (Call Statistics' leg labels). For a friendlier
 /// caller-ID-style headline, use `friendly_uri`/`resolve_caller` instead.
 pub(crate) fn short_uri(uri: &str) -> String {
-    uri.strip_prefix("sip:")
-        .or_else(|| uri.strip_prefix("sips:"))
-        .unwrap_or(uri)
-        .to_string()
+    uri.strip_prefix("sip:").or_else(|| uri.strip_prefix("sips:")).unwrap_or(uri).to_string()
 }
 
 /// Strip a SIP URI down to just its user/extension part for a friendly,
@@ -96,17 +93,11 @@ pub(crate) fn short_uri(uri: &str) -> String {
 /// cases RFC 3323's anonymous-caller convention (`anonymous@anonymous.invalid`,
 /// any case) as `"Unknown caller"` rather than showing "anonymous" bare.
 pub(crate) fn friendly_uri(uri: &str) -> String {
-    let stripped = uri
-        .strip_prefix("sip:")
-        .or_else(|| uri.strip_prefix("sips:"))
-        .unwrap_or(uri);
+    let stripped = uri.strip_prefix("sip:").or_else(|| uri.strip_prefix("sips:")).unwrap_or(uri);
     let before_params = stripped.split(';').next().unwrap_or(stripped);
     let user = before_params.split('@').next().unwrap_or(before_params);
     if user.eq_ignore_ascii_case("anonymous")
-        && before_params
-            .split('@')
-            .nth(1)
-            .is_some_and(|host| host.eq_ignore_ascii_case("anonymous.invalid"))
+        && before_params.split('@').nth(1).is_some_and(|host| host.eq_ignore_ascii_case("anonymous.invalid"))
     {
         t("common.unknown_caller")
     } else {
@@ -158,10 +149,7 @@ pub(crate) fn audio_codec_label(codec: AudioCodec) -> &'static str {
 }
 
 pub(crate) fn unix_now() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs()
 }
 
 pub(crate) fn format_duration(secs: u32) -> String {

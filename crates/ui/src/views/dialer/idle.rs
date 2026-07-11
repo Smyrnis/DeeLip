@@ -24,21 +24,19 @@ impl DeelipApp {
                     let acc = &self.accounts[current];
                     account_status_label(ui, &palette, acc.reg_ok, &acc.label)
                 };
-                egui::ComboBox::from_id_source("dialer_account_picker")
-                    .selected_text(selected_label)
-                    .show_ui(ui, |ui| {
+                egui::ComboBox::from_id_source("dialer_account_picker").selected_text(selected_label).show_ui(
+                    ui,
+                    |ui| {
                         for i in 0..self.accounts.len() {
                             let acc = &self.accounts[i];
                             let label = account_status_label(ui, &palette, acc.reg_ok, &acc.label);
-                            if ui
-                                .add(egui::SelectableLabel::new(current == i, label))
-                                .clicked()
-                            {
+                            if ui.add(egui::SelectableLabel::new(current == i, label)).clicked() {
                                 self.selected_account = i;
                                 self.refresh_idle_status();
                             }
                         }
-                    });
+                    },
+                );
             });
             ui.add_space(6.0);
         }
@@ -82,13 +80,7 @@ impl DeelipApp {
                     // Plain Unicode, not `egui_phosphor::regular::BACKSPACE` --
                     // see the crate-level note on the broken icon set in
                     // `theme.rs`.
-                    if ui
-                        .add_enabled(
-                            !self.call_target.is_empty(),
-                            egui::Button::new("⌫"),
-                        )
-                        .clicked()
-                    {
+                    if ui.add_enabled(!self.call_target.is_empty(), egui::Button::new("⌫")).clicked() {
                         self.call_target.pop();
                     }
                     if ui
@@ -103,9 +95,10 @@ impl DeelipApp {
                 // Grey chrome, not the `signal` accent -- see theme.rs's
                 // v3.1 doc note. `signal` is reserved for actual call-state
                 // signals now, not generic buttons.
-                let call_text = RichText::new(format!("{}  {}", egui_phosphor::regular::PHONE, t("common.call_button")))
-                    .font(theme::font_medium(15.0))
-                    .color(self.palette.ink);
+                let call_text =
+                    RichText::new(format!("{}  {}", egui_phosphor::regular::PHONE, t("common.call_button")))
+                        .font(theme::font_medium(15.0))
+                        .color(self.palette.ink);
                 if ui
                     .add_sized(
                         [STAGE_WIDTH, 42.0],

@@ -4,10 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 static COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn unique_id() -> u64 {
-    let ts = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_micros() as u64;
+    let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_micros() as u64;
     let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
     // XOR upper bits with counter to keep values distinct even if called rapidly
     ts ^ (seq.wrapping_shl(20))
@@ -100,12 +97,10 @@ pub fn parse_session_expires(header: &str) -> Option<(u32, Option<String>)> {
 pub fn parse_call_info_answer_after(msg: &crate::wire::message::SipMessage) -> Option<u32> {
     msg.headers_all("Call-Info").into_iter().find_map(|header| {
         header.split(',').find_map(|entry| {
-            entry.split(';').skip(1).find_map(|param| {
-                param
-                    .trim()
-                    .strip_prefix("answer-after=")
-                    .and_then(|v| v.trim().parse::<u32>().ok())
-            })
+            entry
+                .split(';')
+                .skip(1)
+                .find_map(|param| param.trim().strip_prefix("answer-after=").and_then(|v| v.trim().parse::<u32>().ok()))
         })
     })
 }
@@ -151,26 +146,16 @@ pub fn parse_uri(header: &str) -> Option<String> {
 /// the initial INVITE's destination straight from the dialed target, since
 /// there's no outbound proxy to route it via `self.server_addr` for.
 pub fn uri_host_port(uri: &str) -> Option<(String, u16)> {
-    let rest = uri
-        .strip_prefix("sips:")
-        .or_else(|| uri.strip_prefix("sip:"))
-        .unwrap_or(uri);
+    let rest = uri.strip_prefix("sips:").or_else(|| uri.strip_prefix("sip:")).unwrap_or(uri);
     let authority = rest.rsplit_once('@').map(|(_, h)| h).unwrap_or(rest);
-    let authority = authority
-        .split([';', '?'])
-        .next()
-        .unwrap_or(authority)
-        .trim();
+    let authority = authority.split([';', '?']).next().unwrap_or(authority).trim();
     if authority.is_empty() {
         return None;
     }
     if let Some(rest) = authority.strip_prefix('[') {
         // IPv6 literal: "[::1]" or "[::1]:5060".
         let (host, after) = rest.split_once(']')?;
-        let port = after
-            .strip_prefix(':')
-            .and_then(|p| p.parse().ok())
-            .unwrap_or(5060);
+        let port = after.strip_prefix(':').and_then(|p| p.parse().ok()).unwrap_or(5060);
         return Some((host.to_string(), port));
     }
     match authority.split_once(':') {
@@ -184,11 +169,7 @@ pub fn uri_host_port(uri: &str) -> Option<(String, u16)> {
 /// actually contain these characters, but this is correct regardless.
 /// `%` must be encoded first to avoid double-encoding the others' output.
 pub fn encode_replaces_param(s: &str) -> String {
-    s.replace('%', "%25")
-        .replace(';', "%3B")
-        .replace('=', "%3D")
-        .replace(',', "%2C")
-        .replace('@', "%40")
+    s.replace('%', "%25").replace(';', "%3B").replace('=', "%3D").replace(',', "%2C").replace('@', "%40")
 }
 
 #[cfg(test)]

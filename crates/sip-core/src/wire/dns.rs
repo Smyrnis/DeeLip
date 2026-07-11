@@ -43,19 +43,14 @@ enum Answer {
 /// `/etc/resolv.conf` entry is available, so an unconfigured system behaves
 /// identically to before this module existed.
 pub async fn resolve_target(
-    connect_host: &str,
-    connect_port: u16,
-    transport: TransportProtocol,
-    custom_nameserver: Option<&str>,
+    connect_host: &str, connect_port: u16, transport: TransportProtocol, custom_nameserver: Option<&str>,
     srv_enabled: bool,
 ) -> anyhow::Result<SocketAddr> {
     if let Ok(ip) = connect_host.parse::<IpAddr>() {
         return Ok(SocketAddr::new(ip, connect_port));
     }
 
-    let dns_server = custom_nameserver
-        .and_then(parse_nameserver)
-        .or_else(system_resolver);
+    let dns_server = custom_nameserver.and_then(parse_nameserver).or_else(system_resolver);
 
     if srv_enabled {
         if let Some(server) = dns_server {
@@ -68,9 +63,7 @@ pub async fn resolve_target(
                     });
                     for answer in answers {
                         if let Answer::Srv(srv) = answer {
-                            if let Ok(addr) =
-                                resolve_host(&srv.target, srv.port, custom_nameserver).await
-                            {
+                            if let Ok(addr) = resolve_host(&srv.target, srv.port, custom_nameserver).await {
                                 debug!("SRV {service} -> {}:{}", srv.target, srv.port);
                                 return Ok(addr);
                             }
@@ -98,18 +91,11 @@ fn srv_service_name(domain: &str, transport: TransportProtocol) -> String {
     format!("{service}.{domain}")
 }
 
-async fn resolve_host(
-    host: &str,
-    port: u16,
-    custom_nameserver: Option<&str>,
-) -> anyhow::Result<SocketAddr> {
+async fn resolve_host(host: &str, port: u16, custom_nameserver: Option<&str>) -> anyhow::Result<SocketAddr> {
     if let Ok(ip) = host.parse::<IpAddr>() {
         return Ok(SocketAddr::new(ip, port));
     }
-    let Some(server) = custom_nameserver
-        .and_then(parse_nameserver)
-        .or_else(system_resolver)
-    else {
+    let Some(server) = custom_nameserver.and_then(parse_nameserver).or_else(system_resolver) else {
         // No custom nameserver configured and no usable /etc/resolv.conf --
         // fall back to the OS resolver exactly like before this module existed.
         return tokio::net::lookup_host((host, port))
@@ -147,9 +133,7 @@ fn system_resolver() -> Option<SocketAddr> {
 }
 
 fn parse_nameserver(s: &str) -> Option<SocketAddr> {
-    s.parse::<SocketAddr>()
-        .ok()
-        .or_else(|| s.parse::<IpAddr>().ok().map(|ip| SocketAddr::new(ip, 53)))
+    s.parse::<SocketAddr>().ok().or_else(|| s.parse::<IpAddr>().ok().map(|ip| SocketAddr::new(ip, 53)))
 }
 
 async fn query(server: SocketAddr, name: &str, qtype: u16) -> anyhow::Result<Vec<Answer>> {

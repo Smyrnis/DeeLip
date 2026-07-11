@@ -38,13 +38,7 @@ const SEARCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 /// phone number -- covers both common `inetOrgPerson` (OpenLDAP) and Active
 /// Directory-style schemas without needing a configurable attribute map.
 const NAME_ATTRS: &[&str] = &["displayName", "cn", "name"];
-const NUMBER_ATTRS: &[&str] = &[
-    "telephoneNumber",
-    "mobile",
-    "mobileTelephoneNumber",
-    "otherTelephone",
-    "homePhone",
-];
+const NUMBER_ATTRS: &[&str] = &["telephoneNumber", "mobile", "mobileTelephoneNumber", "otherTelephone", "homePhone"];
 
 const DEFAULT_FILTER_TEMPLATE: &str =
     "(|(cn=*{query}*)(displayName=*{query}*)(mail=*{query}*)(sn=*{query}*)(givenName=*{query}*))";
@@ -91,11 +85,7 @@ async fn run_ldap_search(cfg: LdapSearchConfig, query: String) -> anyhow::Result
 
     match (&cfg.bind_dn, &cfg.bind_password) {
         (Some(dn), Some(pw)) if !dn.trim().is_empty() => {
-            ldap.simple_bind(dn, pw)
-                .await
-                .context("LDAP bind")?
-                .success()
-                .context("LDAP bind rejected")?;
+            ldap.simple_bind(dn, pw).await.context("LDAP bind")?.success().context("LDAP bind rejected")?;
         }
         _ => {
             // Anonymous bind -- many directories reject search without one,
@@ -108,37 +98,26 @@ async fn run_ldap_search(cfg: LdapSearchConfig, query: String) -> anyhow::Result
         }
     }
 
-    let filter_template = cfg
-        .filter_template
-        .as_deref()
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or(DEFAULT_FILTER_TEMPLATE);
+    let filter_template =
+        cfg.filter_template.as_deref().filter(|s| !s.trim().is_empty()).unwrap_or(DEFAULT_FILTER_TEMPLATE);
     let filter = filter_template.replace("{query}", &escape_ldap_filter(&query));
 
     let mut attrs: Vec<&str> = NAME_ATTRS.to_vec();
     attrs.extend(NUMBER_ATTRS);
 
-    let (results, _res) = tokio::time::timeout(
-        SEARCH_TIMEOUT,
-        ldap.search(&cfg.base_dn, ldap3::Scope::Subtree, &filter, attrs),
-    )
-    .await
-    .context("LDAP search timed out")?
-    .context("LDAP search")?
-    .success()
-    .context("LDAP search rejected")?;
+    let (results, _res) =
+        tokio::time::timeout(SEARCH_TIMEOUT, ldap.search(&cfg.base_dn, ldap3::Scope::Subtree, &filter, attrs))
+            .await
+            .context("LDAP search timed out")?
+            .context("LDAP search")?
+            .success()
+            .context("LDAP search rejected")?;
 
     let mut entries = Vec::new();
     for entry in results {
         let se = ldap3::SearchEntry::construct(entry);
-        let name = NAME_ATTRS
-            .iter()
-            .find_map(|k| se.attrs.get(*k).and_then(|v| v.first()))
-            .cloned();
-        let number = NUMBER_ATTRS
-            .iter()
-            .find_map(|k| se.attrs.get(*k).and_then(|v| v.first()))
-            .cloned();
+        let name = NAME_ATTRS.iter().find_map(|k| se.attrs.get(*k).and_then(|v| v.first())).cloned();
+        let number = NUMBER_ATTRS.iter().find_map(|k| se.attrs.get(*k).and_then(|v| v.first())).cloned();
         // Skip entries with no phone number at all -- nothing this softphone
         // could do with them.
         if let (Some(name), Some(number)) = (name, number) {
@@ -162,12 +141,7 @@ impl DeelipApp {
         if query.is_empty() {
             return;
         }
-        let Some(server) = self
-            .config
-            .ldap_server
-            .clone()
-            .filter(|s| !s.trim().is_empty())
-        else {
+        let Some(server) = self.config.ldap_server.clone().filter(|s| !s.trim().is_empty()) else {
             return;
         };
         let cfg = LdapSearchConfig {
@@ -201,25 +175,15 @@ impl DeelipApp {
         let messages: Vec<DirectoryMsg> = rx.try_iter().collect();
         for msg in messages {
             match msg {
-                DirectoryMsg::Done(Ok(entries)) => {
-                    self.directory_state = DirectoryState::Results(entries)
-                }
-                DirectoryMsg::Done(Err(e)) => {
-                    self.directory_state = DirectoryState::Failed(format!("{e:#}"))
-                }
+                DirectoryMsg::Done(Ok(entries)) => self.directory_state = DirectoryState::Results(entries),
+                DirectoryMsg::Done(Err(e)) => self.directory_state = DirectoryState::Failed(format!("{e:#}")),
             }
         }
     }
 
     pub(crate) fn show_directory(&mut self, ui: &mut Ui, _ctx: &egui::Context) {
         ui.add_space(8.0);
-        if self
-            .config
-            .ldap_server
-            .as_deref()
-            .filter(|s| !s.trim().is_empty())
-            .is_none()
-        {
+        if self.config.ldap_server.as_deref().filter(|s| !s.trim().is_empty()).is_none() {
             empty_state(ui, &self.palette, &t("directory.configure_ldap"));
             return;
         }
@@ -227,8 +191,7 @@ impl DeelipApp {
         let palette = self.palette;
         ui.horizontal(|ui| {
             let resp = search_field(ui, &palette, &mut self.directory_query, &t("directory.search_hint"), 200.0);
-            let enter_pressed =
-                resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            let enter_pressed = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             let search_clicked = ui.button(t("directory.search_button")).clicked();
             if search_clicked || enter_pressed {
                 self.start_directory_search();
@@ -251,58 +214,40 @@ impl DeelipApp {
                 });
             }
             DirectoryState::Failed(reason) => {
-                ui.colored_label(
-                    self.palette.danger,
-                    tf("directory.search_failed", &[("reason", reason)]),
-                );
+                ui.colored_label(self.palette.danger, tf("directory.search_failed", &[("reason", reason)]));
             }
             DirectoryState::Results(entries) => {
                 if entries.is_empty() {
                     empty_state(ui, &self.palette, &t("directory.no_matches"));
                 }
-                egui::ScrollArea::vertical()
-                    .max_height(300.0)
-                    .show(ui, |ui| {
-                        for (idx, entry) in entries.iter().enumerate() {
-                            let palette = self.palette;
-                            list_row(ui, &palette, idx, |ui| {
+                egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
+                    for (idx, entry) in entries.iter().enumerate() {
+                        let palette = self.palette;
+                        list_row(ui, &palette, idx, |ui| {
+                            ui.label(RichText::new(&entry.name).font(crate::theme::font_medium(13.0)));
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ui.small_button(egui_phosphor::regular::PHONE).clicked() {
+                                    call_target = Some(entry.number.clone());
+                                }
+                                if ui.small_button(egui_phosphor::regular::CHAT_CIRCLE).clicked() {
+                                    message_target = Some(entry.number.clone());
+                                }
+                                if ui
+                                    .small_button(egui_phosphor::regular::USER_PLUS)
+                                    .on_hover_text(t("directory.add_to_contacts"))
+                                    .clicked()
+                                {
+                                    add_contact = Some((entry.name.clone(), entry.number.clone()));
+                                }
                                 ui.label(
-                                    RichText::new(&entry.name)
-                                        .font(crate::theme::font_medium(13.0)),
-                                );
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Center),
-                                    |ui| {
-                                        if ui.small_button(egui_phosphor::regular::PHONE).clicked() {
-                                            call_target = Some(entry.number.clone());
-                                        }
-                                        if ui
-                                            .small_button(egui_phosphor::regular::CHAT_CIRCLE)
-                                            .clicked()
-                                        {
-                                            message_target = Some(entry.number.clone());
-                                        }
-                                        if ui
-                                            .small_button(egui_phosphor::regular::USER_PLUS)
-                                            .on_hover_text(t("directory.add_to_contacts"))
-                                            .clicked()
-                                        {
-                                            add_contact =
-                                                Some((entry.name.clone(), entry.number.clone()));
-                                        }
-                                        ui.label(
-                                            RichText::new(&entry.number)
-                                                .font(egui::FontId::new(
-                                                    11.5,
-                                                    egui::FontFamily::Monospace,
-                                                ))
-                                                .color(palette.ink_muted),
-                                        );
-                                    },
+                                    RichText::new(&entry.number)
+                                        .font(egui::FontId::new(11.5, egui::FontFamily::Monospace))
+                                        .color(palette.ink_muted),
                                 );
                             });
-                        }
-                    });
+                        });
+                    }
+                });
             }
         }
 
@@ -313,11 +258,7 @@ impl DeelipApp {
             self.message_from_list(target);
         }
         if let Some((name, sip_uri)) = add_contact {
-            self.contacts.contacts.push(deelip_config::Contact {
-                name,
-                sip_uri,
-                ..Default::default()
-            });
+            self.contacts.contacts.push(deelip_config::Contact { name, sip_uri, ..Default::default() });
             let _ = self.contacts.save(&self.db);
         }
     }

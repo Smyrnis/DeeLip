@@ -44,10 +44,8 @@ impl Conn for ConnectedConn {
     }
     async fn recv_from(&self, buf: &mut [u8]) -> Result<(usize, SocketAddr), UtilError> {
         let n = self.0.recv(buf).await?;
-        let addr = self
-            .0
-            .remote_addr()
-            .ok_or_else(|| UtilError::Other("ICE: no candidate pair selected yet".into()))?;
+        let addr =
+            self.0.remote_addr().ok_or_else(|| UtilError::Other("ICE: no candidate pair selected yet".into()))?;
         Ok((n, addr))
     }
     async fn send(&self, buf: &[u8]) -> Result<usize, UtilError> {
@@ -153,9 +151,7 @@ pub async fn gather(
             let _ = cand_tx.send(c);
         })
     }));
-    agent
-        .gather_candidates()
-        .context("Starting ICE candidate gathering")?;
+    agent.gather_candidates().context("Starting ICE candidate gathering")?;
 
     let gather_all = async {
         let mut candidates = Vec::new();
@@ -167,9 +163,7 @@ pub async fn gather(
         }
         candidates
     };
-    let candidates = tokio::time::timeout(timeout, gather_all)
-        .await
-        .context("ICE candidate gathering timed out")?;
+    let candidates = tokio::time::timeout(timeout, gather_all).await.context("ICE candidate gathering timed out")?;
 
     let best = candidates
         .iter()
@@ -178,13 +172,7 @@ pub async fn gather(
     let default_addr = best.addr();
     let marshaled: Vec<String> = candidates.iter().map(|c| c.marshal()).collect();
 
-    Ok(IceGathered {
-        agent,
-        local_ufrag,
-        local_pwd,
-        candidates: marshaled,
-        default_addr,
-    })
+    Ok(IceGathered { agent, local_ufrag, local_pwd, candidates: marshaled, default_addr })
 }
 
 /// The winning `Conn` from a completed ICE connectivity check, plus the
@@ -205,19 +193,12 @@ pub struct IceConnection {
 /// parameter, exactly like `TurnRelay::conn` already is (both are
 /// `webrtc_util::Conn` trait objects).
 pub async fn connect(
-    gathered: IceGathered,
-    is_controlling: bool,
-    remote_ufrag: &str,
-    remote_pwd: &str,
-    remote_candidates: &[String],
+    gathered: IceGathered, is_controlling: bool, remote_ufrag: &str, remote_pwd: &str, remote_candidates: &[String],
 ) -> anyhow::Result<IceConnection> {
     for raw in remote_candidates {
         let candidate = unmarshal_candidate(raw).context("Parsing remote ICE candidate")?;
         let candidate: Arc<dyn Candidate + Send + Sync> = Arc::new(candidate);
-        gathered
-            .agent
-            .add_remote_candidate(&candidate)
-            .context("Adding remote ICE candidate")?;
+        gathered.agent.add_remote_candidate(&candidate).context("Adding remote ICE candidate")?;
     }
 
     // Never actually cancelled -- kept alive for the duration of the call so
@@ -240,8 +221,5 @@ pub async fn connect(
             .context("ICE connectivity checks failed (accept)")?
     };
     let conn: Arc<dyn Conn + Send + Sync> = Arc::new(ConnectedConn(raw_conn));
-    Ok(IceConnection {
-        _agent: gathered.agent,
-        conn,
-    })
+    Ok(IceConnection { _agent: gathered.agent, conn })
 }

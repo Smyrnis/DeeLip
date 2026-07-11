@@ -3,31 +3,19 @@ use deelip_config::SipAccount;
 
 #[test]
 fn account_codecs_honors_configured_order() {
-    let acc = SipAccount {
-        codec_order: vec!["pcma".into(), "pcmu".into()],
-        ..Default::default()
-    };
-    assert_eq!(
-        account_codecs(&acc),
-        vec![AudioCodec::Pcma, AudioCodec::Pcmu]
-    );
+    let acc = SipAccount { codec_order: vec!["pcma".into(), "pcmu".into()], ..Default::default() };
+    assert_eq!(account_codecs(&acc), vec![AudioCodec::Pcma, AudioCodec::Pcmu]);
 }
 
 #[test]
 fn account_codecs_falls_back_when_list_is_empty() {
-    let acc = SipAccount {
-        codec_order: vec![],
-        ..Default::default()
-    };
+    let acc = SipAccount { codec_order: vec![], ..Default::default() };
     assert_eq!(account_codecs(&acc).len(), ALL_CODECS.len());
 }
 
 #[test]
 fn account_codecs_skips_unrecognized_entries() {
-    let acc = SipAccount {
-        codec_order: vec!["opus".into(), "carrier-pigeon".into()],
-        ..Default::default()
-    };
+    let acc = SipAccount { codec_order: vec!["opus".into(), "carrier-pigeon".into()], ..Default::default() };
     assert_eq!(account_codecs(&acc), vec![AudioCodec::Opus]);
 }
 
@@ -37,8 +25,7 @@ fn test_addr() -> std::net::SocketAddr {
 
 #[test]
 fn resolve_video_media_without_srtp_or_relay() {
-    let (media, ready) =
-        resolve_video_media(40000, None, None, None, VideoCodec::H264, test_addr(), None, false);
+    let (media, ready) = resolve_video_media(40000, None, None, None, VideoCodec::H264, test_addr(), None, false);
     assert_eq!(media.local_rtp, 40000);
     assert_eq!(media.codec, VideoCodec::H264);
     assert!(media.local_srtp.is_none());

@@ -76,10 +76,7 @@ fn encode_fragment_reassemble_decode_round_trip() {
     let packets = fragment_nal_units(&bitstream, 1200);
     assert!(!packets.is_empty());
     let reassembled = reassemble_nal_units(&packets);
-    assert_eq!(
-        reassembled, bitstream,
-        "fragment+reassemble must exactly reproduce the encoder's own bitstream"
-    );
+    assert_eq!(reassembled, bitstream, "fragment+reassemble must exactly reproduce the encoder's own bitstream");
 
     // Decoding the reassembled bitstream must not error -- proves
     // `video_rtp`'s output is still valid H.264 that `video_codec`'s

@@ -25,25 +25,13 @@ impl SipStack {
             None => return Err(anyhow::anyhow!("Expected response")),
         }
 
-        let hdr_name = if resp.status_code() == Some(407) {
-            "Proxy-Authenticate"
-        } else {
-            "WWW-Authenticate"
-        };
-        let www_auth = resp
-            .header(hdr_name)
-            .ok_or_else(|| anyhow::anyhow!("Missing {hdr_name}"))?
-            .to_owned();
+        let hdr_name = if resp.status_code() == Some(407) { "Proxy-Authenticate" } else { "WWW-Authenticate" };
+        let www_auth = resp.header(hdr_name).ok_or_else(|| anyhow::anyhow!("Missing {hdr_name}"))?.to_owned();
 
         let uri = format!("sip:{}", self.account.domain());
-        let auth = build_challenge_response(
-            self.account.auth_username(),
-            &self.account.password,
-            "REGISTER",
-            &uri,
-            &www_auth,
-        )
-        .ok_or_else(|| anyhow::anyhow!("Bad challenge: {www_auth}"))?;
+        let auth =
+            build_challenge_response(self.account.auth_username(), &self.account.password, "REGISTER", &uri, &www_auth)
+                .ok_or_else(|| anyhow::anyhow!("Bad challenge: {www_auth}"))?;
 
         self.send_register(Some(&auth)).await?;
         let resp2 = self.recv_reg_response().await?;
@@ -117,10 +105,7 @@ impl SipStack {
         msg.push_str("Content-Length: 0\r\n\r\n");
 
         debug!("→ REGISTER");
-        self.transport
-            .send(msg.as_bytes(), self.server_addr)
-            .await
-            .context("Sending REGISTER")
+        self.transport.send(msg.as_bytes(), self.server_addr).await.context("Sending REGISTER")
     }
 
     async fn recv_reg_response(&self) -> anyhow::Result<SipMessage> {

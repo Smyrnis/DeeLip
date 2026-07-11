@@ -15,21 +15,8 @@ pub struct RtpPacket {
 }
 
 impl RtpPacket {
-    pub fn new(
-        payload_type: u8,
-        sequence: u16,
-        timestamp: u32,
-        ssrc: u32,
-        payload: Vec<u8>,
-    ) -> Self {
-        Self {
-            payload_type,
-            sequence,
-            timestamp,
-            ssrc,
-            marker: false,
-            payload,
-        }
+    pub fn new(payload_type: u8, sequence: u16, timestamp: u32, ssrc: u32, payload: Vec<u8>) -> Self {
+        Self { payload_type, sequence, timestamp, ssrc, marker: false, payload }
     }
 
     /// Encode to wire format.
@@ -112,17 +99,8 @@ impl RtpSender {
     /// regardless of the audio's actual sample rate, per RFC 7587).
     pub fn new(payload_type: u8, ts_increment: u32) -> Self {
         use std::time::{SystemTime, UNIX_EPOCH};
-        let ssrc = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .subsec_nanos();
-        Self {
-            payload_type,
-            ssrc,
-            sequence: 0,
-            timestamp: 0,
-            ts_increment,
-        }
+        let ssrc = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().subsec_nanos();
+        Self { payload_type, ssrc, sequence: 0, timestamp: 0, ts_increment }
     }
 
     pub fn next_packet(&mut self, payload: Vec<u8>) -> RtpPacket {

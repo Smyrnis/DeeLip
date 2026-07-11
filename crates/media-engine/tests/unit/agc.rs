@@ -24,9 +24,7 @@ fn silence_stays_silent() {
 #[test]
 fn quiet_signal_gets_boosted_toward_target() {
     let mut agc = AutomaticGainControl::new();
-    let quiet: Vec<i16> = (0..160)
-        .map(|i| ((i as f32 * 0.3).sin() * 500.0) as i16)
-        .collect();
+    let quiet: Vec<i16> = (0..160).map(|i| ((i as f32 * 0.3).sin() * 500.0) as i16).collect();
     let quiet_rms = frame_rms(&quiet);
 
     let mut out = quiet.clone();
@@ -43,9 +41,7 @@ fn quiet_signal_gets_boosted_toward_target() {
 #[test]
 fn loud_signal_gets_attenuated_toward_target() {
     let mut agc = AutomaticGainControl::new();
-    let loud: Vec<i16> = (0..160)
-        .map(|i| ((i as f32 * 0.3).sin() * i16::MAX as f32 * 0.9) as i16)
-        .collect();
+    let loud: Vec<i16> = (0..160).map(|i| ((i as f32 * 0.3).sin() * i16::MAX as f32 * 0.9) as i16).collect();
     let loud_rms = frame_rms(&loud);
 
     let mut out = loud.clone();

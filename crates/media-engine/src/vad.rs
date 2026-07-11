@@ -50,11 +50,7 @@ pub struct VoiceActivityDetector {
 
 impl VoiceActivityDetector {
     pub fn new() -> Self {
-        Self {
-            quiet_frames: 0,
-            silent: false,
-            frames_since_sid: 0,
-        }
+        Self { quiet_frames: 0, silent: false, frames_since_sid: 0 }
     }
 
     pub fn process(&mut self, pcm: &[i16]) -> VadDecision {
@@ -150,9 +146,7 @@ impl Default for ComfortNoiseState {
 pub fn synthesize_comfort_noise(level_byte: u8, len: usize, state: &mut ComfortNoiseState) -> Vec<i16> {
     let target_rms = 10f32.powf(-(level_byte as f32) / 20.0);
     let amplitude = target_rms * i16::MAX as f32;
-    (0..len)
-        .map(|_| (state.next_uniform() * amplitude) as i16)
-        .collect()
+    (0..len).map(|_| (state.next_uniform() * amplitude) as i16).collect()
 }
 
 #[cfg(test)]

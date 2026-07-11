@@ -1,9 +1,7 @@
 use super::*;
 
 fn loud_frame() -> Vec<i16> {
-    (0..160)
-        .map(|i| ((i as f32 * 0.3).sin() * 10000.0) as i16)
-        .collect()
+    (0..160).map(|i| ((i as f32 * 0.3).sin() * 10000.0) as i16).collect()
 }
 
 #[test]
@@ -23,10 +21,7 @@ fn silence_stays_talking_through_hangover_then_switches() {
     let mut saw_comfort_noise = false;
     for i in 0..(HANGOVER_FRAMES + 5) {
         match vad.process(&silence) {
-            VadDecision::Talking => assert!(
-                i < HANGOVER_FRAMES,
-                "should have switched out of Talking by frame {i}"
-            ),
+            VadDecision::Talking => assert!(i < HANGOVER_FRAMES, "should have switched out of Talking by frame {i}"),
             VadDecision::SendComfortNoise(_) => saw_comfort_noise = true,
             VadDecision::Skip => {}
         }

@@ -18,15 +18,7 @@ pub type WavWriter = hound::WavWriter<BufWriter<File>>;
 /// Replace anything outside `[A-Za-z0-9._-]` with `_` (SIP Call-IDs can
 /// contain `@` and other characters not safe verbatim in a filename).
 fn sanitize_filename(s: &str) -> String {
-    s.chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect()
+    s.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') { c } else { '_' }).collect()
 }
 
 /// Whether/how/where to record a call -- bundled into one struct since
@@ -48,10 +40,8 @@ impl RecordingWriter {
     /// `recordings_dir()` if unset), in `format`.
     pub fn create(call_id: &str, dir_override: Option<&str>, format: RecordingFormat) -> anyhow::Result<Self> {
         let dir = deelip_config::recordings_dir(dir_override).context("Resolving recordings dir")?;
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
+        let timestamp =
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
         let stem = format!("{timestamp}_{}", sanitize_filename(call_id));
         match format {
             RecordingFormat::Wav => {
@@ -125,14 +115,8 @@ impl Mp3Writer {
             .map_err(|e| anyhow::anyhow!("LAME set quality: {e}"))?
             .build()
             .map_err(|e| anyhow::anyhow!("LAME build: {e}"))?;
-        let file = File::create(path)
-            .with_context(|| format!("Creating recording at {}", path.display()))?;
-        Ok(Self {
-            encoder,
-            file: BufWriter::new(file),
-            interleave_buf: Vec::new(),
-            encode_buf: Vec::new(),
-        })
+        let file = File::create(path).with_context(|| format!("Creating recording at {}", path.display()))?;
+        Ok(Self { encoder, file: BufWriter::new(file), interleave_buf: Vec::new(), encode_buf: Vec::new() })
     }
 
     fn write_frame(&mut self, near: &[i16], far: &[i16]) -> anyhow::Result<()> {
@@ -151,9 +135,7 @@ impl Mp3Writer {
 
     fn finalize(mut self) -> anyhow::Result<()> {
         let mut tail = Vec::new();
-        self.encoder
-            .flush_to_vec::<FlushNoGap>(&mut tail)
-            .map_err(|e| anyhow::anyhow!("MP3 flush: {e}"))?;
+        self.encoder.flush_to_vec::<FlushNoGap>(&mut tail).map_err(|e| anyhow::anyhow!("MP3 flush: {e}"))?;
         self.file.write_all(&tail).context("Writing final MP3 frame")?;
         self.file.flush().context("Flushing MP3 file")
     }

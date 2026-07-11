@@ -11,8 +11,8 @@ mod history;
 mod messages;
 
 pub use account::{
-    AppConfig, AudioConfig, DefaultListAction, DtmfMode, Language, MediaEncryption,
-    RecordingFormat, SipAccount, TransportProtocol, UpdateCheckFrequency,
+    AppConfig, AudioConfig, DefaultListAction, DtmfMode, Language, MediaEncryption, RecordingFormat, SipAccount,
+    TransportProtocol, UpdateCheckFrequency,
 };
 pub use autostart::{is_autostart_enabled, set_autostart};
 pub use contacts::{Contact, ContactBook};
@@ -22,8 +22,7 @@ pub use history::{CallDirection, CallHistory, CallRecord, CallStatus};
 pub use messages::{Message, MessageDirection, MessageLog};
 
 fn deelip_dir() -> anyhow::Result<PathBuf> {
-    let base = dirs::config_dir()
-        .ok_or_else(|| anyhow::anyhow!("Cannot determine user config directory"))?;
+    let base = dirs::config_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine user config directory"))?;
     Ok(base.join("deelip"))
 }
 
@@ -31,8 +30,7 @@ fn deelip_dir() -> anyhow::Result<PathBuf> {
 /// it doesn't exist yet -- used by `AppConfig::log_to_file`.
 pub fn log_file_path() -> anyhow::Result<PathBuf> {
     let dir = deelip_dir()?;
-    std::fs::create_dir_all(&dir)
-        .with_context(|| format!("Creating config dir {}", dir.display()))?;
+    std::fs::create_dir_all(&dir).with_context(|| format!("Creating config dir {}", dir.display()))?;
     Ok(dir.join("deelip.log"))
 }
 
@@ -44,8 +42,7 @@ pub fn recordings_dir(override_dir: Option<&str>) -> anyhow::Result<PathBuf> {
         Some(custom) => PathBuf::from(custom),
         None => deelip_dir()?.join("recordings"),
     };
-    std::fs::create_dir_all(&dir)
-        .with_context(|| format!("Creating recordings dir {}", dir.display()))?;
+    std::fs::create_dir_all(&dir).with_context(|| format!("Creating recordings dir {}", dir.display()))?;
     Ok(dir)
 }
 
@@ -54,7 +51,6 @@ pub fn recordings_dir(override_dir: Option<&str>) -> anyhow::Result<PathBuf> {
 /// to save local crash-report files. Never uploaded/transmitted anywhere.
 pub fn crashes_dir() -> anyhow::Result<PathBuf> {
     let dir = deelip_dir()?.join("crashes");
-    std::fs::create_dir_all(&dir)
-        .with_context(|| format!("Creating crashes dir {}", dir.display()))?;
+    std::fs::create_dir_all(&dir).with_context(|| format!("Creating crashes dir {}", dir.display()))?;
     Ok(dir)
 }

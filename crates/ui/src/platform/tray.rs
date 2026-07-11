@@ -90,8 +90,7 @@ impl QuitState {
             sent = true;
         }
         if sent {
-            self.rt
-                .block_on(tokio::time::sleep(std::time::Duration::from_millis(200)));
+            self.rt.block_on(tokio::time::sleep(std::time::Duration::from_millis(200)));
         }
         tracing::info!("Tray: Quit selected, exiting");
         std::process::exit(0);
@@ -157,8 +156,7 @@ fn restore_window(ctx_slot: &CtxSlot) {
                      // a classic (non-async) GLib main loop.
 pub fn spawn_tray_icon() -> anyhow::Result<(TrayMenuIds, BadgeSender)> {
     let (ids_tx, ids_rx) = std::sync::mpsc::channel::<TrayMenuIds>();
-    let (badge_tx, badge_rx) =
-        gtk::glib::MainContext::channel::<u32>(gtk::glib::Priority::default());
+    let (badge_tx, badge_rx) = gtk::glib::MainContext::channel::<u32>(gtk::glib::Priority::default());
     let badge_tx_ret = badge_tx.clone();
 
     std::thread::spawn(move || {
@@ -177,10 +175,7 @@ pub fn spawn_tray_icon() -> anyhow::Result<(TrayMenuIds, BadgeSender)> {
 
         let show_item = MenuItem::new(t("tray.show_item"), true, None);
         let quit_item = MenuItem::new(t("tray.quit_item"), true, None);
-        let _ = ids_tx.send(TrayMenuIds {
-            show: show_item.id().clone(),
-            quit: quit_item.id().clone(),
-        });
+        let _ = ids_tx.send(TrayMenuIds { show: show_item.id().clone(), quit: quit_item.id().clone() });
 
         let menu = Menu::new();
         if menu.append(&show_item).is_err() || menu.append(&quit_item).is_err() {
@@ -188,11 +183,7 @@ pub fn spawn_tray_icon() -> anyhow::Result<(TrayMenuIds, BadgeSender)> {
             return;
         }
 
-        let tray = match TrayIconBuilder::new()
-            .with_icon(icon)
-            .with_menu(Box::new(menu))
-            .with_tooltip("DeeLip")
-            .build()
+        let tray = match TrayIconBuilder::new().with_icon(icon).with_menu(Box::new(menu)).with_tooltip("DeeLip").build()
         {
             Ok(tray) => tray,
             Err(e) => {
@@ -215,7 +206,8 @@ pub fn spawn_tray_icon() -> anyhow::Result<(TrayMenuIds, BadgeSender)> {
                         // `ARCHITECTURE_GAPS.md` item 6) -- the English
                         // singular/plural branch stays in Rust, with each
                         // branch's fixed text as its own locale key.
-                        let key = if count == 1 { "tray.tooltip_missed_singular" } else { "tray.tooltip_missed_plural" };
+                        let key =
+                            if count == 1 { "tray.tooltip_missed_singular" } else { "tray.tooltip_missed_plural" };
                         tf(key, &[("count", &count.to_string())])
                     } else {
                         t("tray.tooltip_default")
@@ -232,9 +224,7 @@ pub fn spawn_tray_icon() -> anyhow::Result<(TrayMenuIds, BadgeSender)> {
         gtk::main();
     });
 
-    let ids = ids_rx
-        .recv()
-        .context("Tray thread failed before creating menu items")?;
+    let ids = ids_rx.recv().context("Tray thread failed before creating menu items")?;
     Ok((ids, badge_tx_ret))
 }
 
@@ -256,36 +246,16 @@ fn load_icon(count: u32) -> anyhow::Result<Icon> {
 /// existing preference for hand-rolled parsing/rendering over new deps for
 /// simple, fixed-shape needs (see `sdp.rs`/`message.rs`/`auth.rs`).
 const DIGIT_FONT: [[u8; 7]; 10] = [
-    [
-        0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110,
-    ], // 0
-    [
-        0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110,
-    ], // 1
-    [
-        0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b01000, 0b11111,
-    ], // 2
-    [
-        0b11110, 0b00001, 0b00001, 0b00110, 0b00001, 0b00001, 0b11110,
-    ], // 3
-    [
-        0b00010, 0b00110, 0b01010, 0b10010, 0b11111, 0b00010, 0b00010,
-    ], // 4
-    [
-        0b11111, 0b10000, 0b11110, 0b00001, 0b00001, 0b10001, 0b01110,
-    ], // 5
-    [
-        0b00110, 0b01000, 0b10000, 0b11110, 0b10001, 0b10001, 0b01110,
-    ], // 6
-    [
-        0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b01000, 0b01000,
-    ], // 7
-    [
-        0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110,
-    ], // 8
-    [
-        0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00010, 0b01100,
-    ], // 9
+    [0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110], // 0
+    [0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110], // 1
+    [0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b01000, 0b11111], // 2
+    [0b11110, 0b00001, 0b00001, 0b00110, 0b00001, 0b00001, 0b11110], // 3
+    [0b00010, 0b00110, 0b01010, 0b10010, 0b11111, 0b00010, 0b00010], // 4
+    [0b11111, 0b10000, 0b11110, 0b00001, 0b00001, 0b10001, 0b01110], // 5
+    [0b00110, 0b01000, 0b10000, 0b11110, 0b10001, 0b10001, 0b01110], // 6
+    [0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b01000, 0b01000], // 7
+    [0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110], // 8
+    [0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00010, 0b01100], // 9
 ];
 
 /// Draw a filled red circle with a white digit in the bottom-right corner

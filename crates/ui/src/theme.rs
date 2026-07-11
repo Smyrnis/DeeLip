@@ -244,11 +244,7 @@ pub fn card_frame(palette: &Palette) -> egui::Frame {
 /// `add_contents` (most of them) would otherwise hit a borrow conflict
 /// between `&self.palette` and the closure capturing `self` mutably, since
 /// both are evaluated as part of the same call.
-pub fn full_width_card<R>(
-    ui: &mut egui::Ui,
-    palette: Palette,
-    add_contents: impl FnOnce(&mut egui::Ui) -> R,
-) -> R {
+pub fn full_width_card<R>(ui: &mut egui::Ui, palette: Palette, add_contents: impl FnOnce(&mut egui::Ui) -> R) -> R {
     card_frame(&palette)
         .show(ui, |ui| {
             ui.set_width(ui.available_width());

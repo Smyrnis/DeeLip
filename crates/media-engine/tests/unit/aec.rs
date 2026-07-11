@@ -19,10 +19,7 @@ fn silence_in_silence_out() {
         push_ref(&echo_ref, &mic);
         let out = canceller.process(&mic, &echo_ref);
         assert_eq!(out.len(), 160);
-        assert!(
-            out.iter().all(|&s| s.abs() < 100),
-            "silence in should stay near-silent out, got {out:?}"
-        );
+        assert!(out.iter().all(|&s| s.abs() < 100), "silence in should stay near-silent out, got {out:?}");
     }
 }
 
@@ -35,11 +32,7 @@ fn always_returns_the_input_frame_length() {
     for _ in 0..20 {
         push_ref(&echo_ref, &mic);
         let out = canceller.process(&mic, &echo_ref);
-        assert_eq!(
-            out.len(),
-            160,
-            "must always return exactly one RTP frame's worth"
-        );
+        assert_eq!(out.len(), 160, "must always return exactly one RTP frame's worth");
     }
 }
 
@@ -50,9 +43,7 @@ fn converges_on_a_repeated_perfect_echo() {
 
     // A simple tone, used as both "what's playing" and "what the mic hears" —
     // simulates an undelayed, perfectly correlated acoustic echo.
-    let tone: Vec<i16> = (0..160)
-        .map(|i| ((i as f32 * 0.3).sin() * 8000.0) as i16)
-        .collect();
+    let tone: Vec<i16> = (0..160).map(|i| ((i as f32 * 0.3).sin() * 8000.0) as i16).collect();
 
     let mut first_energy = None;
     let mut last_energy = 0.0;

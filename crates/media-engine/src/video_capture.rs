@@ -16,8 +16,7 @@ use std::sync::{Arc, Mutex};
 
 use nokhwa::pixel_format::RgbFormat;
 use nokhwa::utils::{
-    ApiBackend, CameraFormat, CameraIndex, FrameFormat, RequestedFormat, RequestedFormatType,
-    Resolution,
+    ApiBackend, CameraFormat, CameraIndex, FrameFormat, RequestedFormat, RequestedFormatType, Resolution,
 };
 use nokhwa::Camera;
 use openh264::formats::{RgbSliceU8, YUVBuffer, YUVSource};
@@ -31,10 +30,7 @@ use crate::video_codec::Yuv420Frame;
 /// list rather than propagated.
 pub fn list_cameras() -> Vec<(CameraIndex, String)> {
     match nokhwa::query(ApiBackend::Auto) {
-        Ok(infos) => infos
-            .into_iter()
-            .map(|info| (info.index().clone(), info.human_name()))
-            .collect(),
+        Ok(infos) => infos.into_iter().map(|info| (info.index().clone(), info.human_name())).collect(),
         Err(e) => {
             tracing::debug!("Camera enumeration unavailable: {e}");
             Vec::new()
@@ -47,10 +43,7 @@ pub fn list_cameras() -> Vec<(CameraIndex, String)> {
 /// find-cpal-device-by-name idiom. `None` if no currently enumerable
 /// camera has that name (unplugged, or enumeration itself unavailable).
 pub fn find_camera_by_name(name: &str) -> Option<CameraIndex> {
-    list_cameras()
-        .into_iter()
-        .find(|(_, n)| n == name)
-        .map(|(idx, _)| idx)
+    list_cameras().into_iter().find(|(_, n)| n == name).map(|(idx, _)| idx)
 }
 
 /// Convert a packed RGB8 buffer (as `nokhwa`'s `Buffer::decode_image::<RgbFormat>()`
@@ -72,13 +65,7 @@ pub fn rgb8_to_yuv420(rgb: &[u8], width: u32, height: u32) -> anyhow::Result<Yuv
 
     let source = RgbSliceU8::new(rgb, (width as usize, height as usize));
     let yuv = YUVBuffer::from_rgb8_source(source);
-    Ok(Yuv420Frame {
-        width,
-        height,
-        y: yuv.y().to_vec(),
-        u: yuv.u().to_vec(),
-        v: yuv.v().to_vec(),
-    })
+    Ok(Yuv420Frame { width, height, y: yuv.y().to_vec(), u: yuv.u().to_vec(), v: yuv.v().to_vec() })
 }
 
 /// Handle to a running capture thread -- holds only the freshest captured
@@ -142,12 +129,7 @@ impl Drop for CaptureHandle {
 /// this function's own "fail fast, synchronously" contract despite that, a
 /// one-shot channel reports the open/stream-start result back before this
 /// function returns.
-pub fn start_capture(
-    index: CameraIndex,
-    width: u32,
-    height: u32,
-    fps: u32,
-) -> anyhow::Result<CaptureHandle> {
+pub fn start_capture(index: CameraIndex, width: u32, height: u32, fps: u32) -> anyhow::Result<CaptureHandle> {
     let latest_frame = Arc::new(Mutex::new(None));
     let stop = Arc::new(AtomicBool::new(false));
     let (ready_tx, ready_rx) = std::sync::mpsc::channel::<anyhow::Result<()>>();
@@ -155,9 +137,11 @@ pub fn start_capture(
     let thread_latest = latest_frame.clone();
     let thread_stop = stop.clone();
     let thread = std::thread::spawn(move || {
-        let requested = RequestedFormat::new::<RgbFormat>(RequestedFormatType::Closest(
-            CameraFormat::new(Resolution::new(width, height), FrameFormat::MJPEG, fps),
-        ));
+        let requested = RequestedFormat::new::<RgbFormat>(RequestedFormatType::Closest(CameraFormat::new(
+            Resolution::new(width, height),
+            FrameFormat::MJPEG,
+            fps,
+        )));
         let mut camera = match Camera::new(index, requested) {
             Ok(c) => c,
             Err(e) => {
@@ -196,20 +180,14 @@ pub fn start_capture(
     });
 
     match ready_rx.recv() {
-        Ok(Ok(())) => Ok(CaptureHandle {
-            latest_frame,
-            stop,
-            thread: Some(thread),
-        }),
+        Ok(Ok(())) => Ok(CaptureHandle { latest_frame, stop, thread: Some(thread) }),
         Ok(Err(e)) => {
             let _ = thread.join();
             Err(e)
         }
         Err(_) => {
             let _ = thread.join();
-            Err(anyhow::anyhow!(
-                "Camera capture thread exited unexpectedly during startup"
-            ))
+            Err(anyhow::anyhow!("Camera capture thread exited unexpectedly during startup"))
         }
     }
 }

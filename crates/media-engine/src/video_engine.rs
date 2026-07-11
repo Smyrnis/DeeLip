@@ -66,12 +66,8 @@ impl VideoEngine {
     /// - `bitrate_bps`: target H.264 encode bitrate.
     #[allow(clippy::too_many_arguments)]
     pub async fn start(
-        local_rtp_port: u16,
-        remote_rtp: SocketAddr,
-        srtp: Option<SrtpSession>,
-        relay: Option<Arc<dyn Conn + Send + Sync>>,
-        frame_source: Arc<Mutex<Option<Yuv420Frame>>>,
-        target_fps: u32,
+        local_rtp_port: u16, remote_rtp: SocketAddr, srtp: Option<SrtpSession>,
+        relay: Option<Arc<dyn Conn + Send + Sync>>, frame_source: Arc<Mutex<Option<Yuv420Frame>>>, target_fps: u32,
         bitrate_bps: u32,
     ) -> anyhow::Result<Self> {
         let socket = Arc::new(match relay {
@@ -88,15 +84,7 @@ impl VideoEngine {
         // incoming with the remote's declared key.
         let encrypt_ctx: Option<SrtpContext> = srtp
             .as_ref()
-            .map(|s| {
-                SrtpContext::new(
-                    &s.local.key,
-                    &s.local.salt,
-                    ProtectionProfile::Aes128CmHmacSha1_80,
-                    None,
-                    None,
-                )
-            })
+            .map(|s| SrtpContext::new(&s.local.key, &s.local.salt, ProtectionProfile::Aes128CmHmacSha1_80, None, None))
             .transpose()
             .context("Creating video SRTP encrypt context")?;
         let decrypt_ctx: Option<SrtpContext> = srtp
@@ -127,32 +115,16 @@ impl VideoEngine {
             stats.clone(),
             stop_rx.clone(),
         ));
-        let recv_task = tokio::spawn(Self::recv_loop(
-            socket,
-            decrypt_ctx,
-            latest_decoded_frame.clone(),
-            stats.clone(),
-            stop_rx,
-        ));
+        let recv_task =
+            tokio::spawn(Self::recv_loop(socket, decrypt_ctx, latest_decoded_frame.clone(), stats.clone(), stop_rx));
 
-        Ok(Self {
-            send_task,
-            recv_task,
-            stop_tx,
-            latest_decoded_frame,
-            stats,
-        })
+        Ok(Self { send_task, recv_task, stop_tx, latest_decoded_frame, stats })
     }
 
     #[allow(clippy::too_many_arguments)]
     async fn send_loop(
-        socket: Arc<RtpSocket>,
-        remote_rtp: SocketAddr,
-        frame_source: Arc<Mutex<Option<Yuv420Frame>>>,
-        target_fps: u32,
-        bitrate_bps: u32,
-        mut encrypt_ctx: Option<SrtpContext>,
-        stats: Arc<Mutex<LegStats>>,
+        socket: Arc<RtpSocket>, remote_rtp: SocketAddr, frame_source: Arc<Mutex<Option<Yuv420Frame>>>, target_fps: u32,
+        bitrate_bps: u32, mut encrypt_ctx: Option<SrtpContext>, stats: Arc<Mutex<LegStats>>,
         mut stop_rx: watch::Receiver<bool>,
     ) {
         let mut encoder = match H264Encoder::new(bitrate_bps) {
@@ -222,10 +194,8 @@ impl VideoEngine {
     }
 
     async fn recv_loop(
-        socket: Arc<RtpSocket>,
-        mut decrypt_ctx: Option<SrtpContext>,
-        latest_decoded_frame: Arc<Mutex<Option<Yuv420Frame>>>,
-        stats: Arc<Mutex<LegStats>>,
+        socket: Arc<RtpSocket>, mut decrypt_ctx: Option<SrtpContext>,
+        latest_decoded_frame: Arc<Mutex<Option<Yuv420Frame>>>, stats: Arc<Mutex<LegStats>>,
         mut stop_rx: watch::Receiver<bool>,
     ) {
         let mut decoder = match H264Decoder::new() {
@@ -333,9 +303,8 @@ impl JitterState {
         let now = Instant::now();
         if let (Some(prev_arrival), Some(prev_ts)) = (self.last_arrival, self.last_rtp_ts) {
             let arrival_diff_ms = now.duration_since(prev_arrival).as_secs_f64() * 1000.0;
-            let rtp_diff_ms = (pkt.timestamp as i64 - prev_ts as i64).unsigned_abs() as f64
-                / VIDEO_CLOCK_HZ as f64
-                * 1000.0;
+            let rtp_diff_ms =
+                (pkt.timestamp as i64 - prev_ts as i64).unsigned_abs() as f64 / VIDEO_CLOCK_HZ as f64 * 1000.0;
             let d = (arrival_diff_ms - rtp_diff_ms).abs();
             stats.jitter_ms += (d - stats.jitter_ms) / 16.0;
         }

@@ -415,18 +415,12 @@ impl SipAccount {
     /// otherwise `server` (the common case: registrar and domain are the
     /// same host).
     pub fn domain(&self) -> &str {
-        self.domain
-            .as_deref()
-            .filter(|s| !s.trim().is_empty())
-            .unwrap_or(&self.server)
+        self.domain.as_deref().filter(|s| !s.trim().is_empty()).unwrap_or(&self.server)
     }
 
     /// Digest-auth username -- `auth_username` if set, otherwise `username`.
     pub fn auth_username(&self) -> &str {
-        self.auth_username
-            .as_deref()
-            .filter(|s| !s.trim().is_empty())
-            .unwrap_or(&self.username)
+        self.auth_username.as_deref().filter(|s| !s.trim().is_empty()).unwrap_or(&self.username)
     }
 
     /// (host, port) to actually establish the SIP transport connection
@@ -434,12 +428,7 @@ impl SipAccount {
     /// optional trailing ":port", defaulting to this account's own `port`
     /// when absent), otherwise `server`/`port` directly.
     pub fn connect_target(&self) -> (String, u16) {
-        match self
-            .sip_proxy
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-        {
+        match self.sip_proxy.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
             Some(proxy) => match proxy.rsplit_once(':') {
                 Some((host, port_str)) if !host.is_empty() && port_str.parse::<u16>().is_ok() => {
                     (host.to_string(), port_str.parse().unwrap())
@@ -978,12 +967,9 @@ impl Default for AppConfig {
 impl AppConfig {
     pub fn load(db: &Db) -> anyhow::Result<Self> {
         let get = |key: &str| db.get_setting(key);
-        let get_bool =
-            |key: &str, default: bool| get(key).map(|v| sql_to_bool(&v)).unwrap_or(default);
-        let get_u32 =
-            |key: &str, default: u32| get(key).and_then(|v| v.parse().ok()).unwrap_or(default);
-        let get_f32 =
-            |key: &str, default: f32| get(key).and_then(|v| v.parse().ok()).unwrap_or(default);
+        let get_bool = |key: &str, default: bool| get(key).map(|v| sql_to_bool(&v)).unwrap_or(default);
+        let get_u32 = |key: &str, default: u32| get(key).and_then(|v| v.parse().ok()).unwrap_or(default);
+        let get_f32 = |key: &str, default: f32| get(key).and_then(|v| v.parse().ok()).unwrap_or(default);
 
         let mut stmt = db.conn.prepare(
             "SELECT username, password, server, port, display_name, transport, enabled, \
@@ -1019,8 +1005,7 @@ impl AppConfig {
                     dnd: sql_int_to_bool(row.get("dnd")?),
                     forward_always: row.get("forward_always")?,
                     forward_on_busy: row.get("forward_on_busy")?,
-                    codec_order: serde_json::from_str(&codec_order_json)
-                        .unwrap_or_else(|_| default_codec_order()),
+                    codec_order: serde_json::from_str(&codec_order_json).unwrap_or_else(|_| default_codec_order()),
                     dtmf_mode: dtmf_mode_from_str(&dtmf_mode_str),
                     auto_answer_enabled: sql_int_to_bool(row.get("auto_answer_enabled")?),
                     auto_answer_secs: row.get("auto_answer_secs")?,
@@ -1079,17 +1064,12 @@ impl AppConfig {
             notifications_enabled: get_bool("notifications_enabled", true),
             ringtone_enabled: get_bool("ringtone_enabled", true),
             recording_enabled: get_bool("recording_enabled", false),
-            recording_format: get("recording_format")
-                .as_deref()
-                .map(recording_format_from_str)
-                .unwrap_or_default(),
+            recording_format: get("recording_format").as_deref().map(recording_format_from_str).unwrap_or_default(),
             recordings_dir_override: get("recordings_dir_override"),
             start_minimized: get_bool("start_minimized", false),
             log_to_file: get_bool("log_to_file", false),
             crash_reporting_enabled: get_bool("crash_reporting_enabled", true),
-            blocklist: get("blocklist")
-                .and_then(|v| serde_json::from_str(&v).ok())
-                .unwrap_or_default(),
+            blocklist: get("blocklist").and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default(),
             ice_enabled: get_bool("ice_enabled", false),
             global_hotkeys_enabled: get_bool("global_hotkeys_enabled", false),
             hotkey_answer: get("hotkey_answer").unwrap_or_else(default_hotkey_answer),
@@ -1121,12 +1101,11 @@ impl AppConfig {
     }
 
     pub fn save(&self, db: &Db) -> anyhow::Result<()> {
-        db.conn
-            .execute("DELETE FROM accounts", [])
-            .context("Clearing accounts table")?;
+        db.conn.execute("DELETE FROM accounts", []).context("Clearing accounts table")?;
         for (i, acc) in self.accounts.iter().enumerate() {
-            db.conn.execute(
-                "INSERT INTO accounts (sort_order, username, password, server, port, display_name, \
+            db.conn
+                .execute(
+                    "INSERT INTO accounts (sort_order, username, password, server, port, display_name, \
                     transport, enabled, tls_insecure_skip_verify, no_answer_forward, \
                     no_answer_timeout_secs, dnd, forward_always, forward_on_busy, codec_order, \
                     dtmf_mode, auto_answer_enabled, auto_answer_secs, mailbox, account_name, \
@@ -1138,65 +1117,60 @@ impl AppConfig {
                     video_enabled) \
                  VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,\
                     ?21,?22,?23,?24,?25,?26,?27,?28,?29,?30,?31,?32,?33,?34,?35,?36,?37,?38,?39,?40)",
-                rusqlite::params![
-                    i as i64,
-                    acc.username,
-                    acc.password,
-                    acc.server,
-                    acc.port,
-                    acc.display_name,
-                    transport_to_str(&acc.transport),
-                    bool_to_sql(acc.enabled),
-                    bool_to_sql(acc.tls_insecure_skip_verify),
-                    acc.no_answer_forward,
-                    acc.no_answer_timeout_secs,
-                    bool_to_sql(acc.dnd),
-                    acc.forward_always,
-                    acc.forward_on_busy,
-                    serde_json::to_string(&acc.codec_order)?,
-                    dtmf_mode_to_str(acc.dtmf_mode),
-                    bool_to_sql(acc.auto_answer_enabled),
-                    acc.auto_answer_secs,
-                    acc.mailbox,
-                    acc.account_name,
-                    acc.sip_proxy,
-                    acc.domain,
-                    acc.auth_username,
-                    acc.dialing_prefix,
-                    bool_to_sql(acc.hide_caller_id),
-                    acc.register_expires,
-                    acc.keepalive_secs,
-                    media_encryption_to_str(acc.media_encryption),
-                    acc.public_address,
-                    acc.ice_enabled.map(bool_to_sql),
-                    acc.force_incoming_codec,
-                    bool_to_sql(acc.vad_enabled),
-                    bool_to_sql(acc.publish_presence),
-                    bool_to_sql(acc.allow_ip_rewrite),
-                    serde_json::to_string(&acc.dial_plan)?,
-                    bool_to_sql(acc.session_timers_enabled),
-                    bool_to_sql(acc.auto_answer_control_button),
-                    bool_to_sql(acc.deny_incoming_control_button),
-                    bool_to_sql(acc.local_account),
-                    bool_to_sql(acc.video_enabled),
-                ],
-            ).with_context(|| format!("Inserting account {}", acc.username))?;
+                    rusqlite::params![
+                        i as i64,
+                        acc.username,
+                        acc.password,
+                        acc.server,
+                        acc.port,
+                        acc.display_name,
+                        transport_to_str(&acc.transport),
+                        bool_to_sql(acc.enabled),
+                        bool_to_sql(acc.tls_insecure_skip_verify),
+                        acc.no_answer_forward,
+                        acc.no_answer_timeout_secs,
+                        bool_to_sql(acc.dnd),
+                        acc.forward_always,
+                        acc.forward_on_busy,
+                        serde_json::to_string(&acc.codec_order)?,
+                        dtmf_mode_to_str(acc.dtmf_mode),
+                        bool_to_sql(acc.auto_answer_enabled),
+                        acc.auto_answer_secs,
+                        acc.mailbox,
+                        acc.account_name,
+                        acc.sip_proxy,
+                        acc.domain,
+                        acc.auth_username,
+                        acc.dialing_prefix,
+                        bool_to_sql(acc.hide_caller_id),
+                        acc.register_expires,
+                        acc.keepalive_secs,
+                        media_encryption_to_str(acc.media_encryption),
+                        acc.public_address,
+                        acc.ice_enabled.map(bool_to_sql),
+                        acc.force_incoming_codec,
+                        bool_to_sql(acc.vad_enabled),
+                        bool_to_sql(acc.publish_presence),
+                        bool_to_sql(acc.allow_ip_rewrite),
+                        serde_json::to_string(&acc.dial_plan)?,
+                        bool_to_sql(acc.session_timers_enabled),
+                        bool_to_sql(acc.auto_answer_control_button),
+                        bool_to_sql(acc.deny_incoming_control_button),
+                        bool_to_sql(acc.local_account),
+                        bool_to_sql(acc.video_enabled),
+                    ],
+                )
+                .with_context(|| format!("Inserting account {}", acc.username))?;
         }
 
         db.set_setting_opt("audio.input_device", &self.audio.input_device)?;
         db.set_setting_opt("audio.output_device", &self.audio.output_device)?;
         db.set_setting("audio.sample_rate", &self.audio.sample_rate.to_string())?;
         db.set_setting("audio.frame_size_ms", &self.audio.frame_size_ms.to_string())?;
-        db.set_setting(
-            "audio.echo_cancellation",
-            bool_to_sql(self.audio.echo_cancellation),
-        )?;
+        db.set_setting("audio.echo_cancellation", bool_to_sql(self.audio.echo_cancellation))?;
         db.set_setting_opt("audio.ringtone_device", &self.audio.ringtone_device)?;
         db.set_setting_opt("audio.ringtone_file", &self.audio.ringtone_file)?;
-        db.set_setting(
-            "audio.ringtone_volume",
-            &self.audio.ringtone_volume.to_string(),
-        )?;
+        db.set_setting("audio.ringtone_volume", &self.audio.ringtone_volume.to_string())?;
         db.set_setting("audio.agc_enabled", bool_to_sql(self.audio.agc_enabled))?;
         db.set_setting_opt("audio.camera_device", &self.audio.camera_device)?;
 
@@ -1211,52 +1185,28 @@ impl AppConfig {
         db.set_setting("dns_srv_enabled", bool_to_sql(self.dns_srv_enabled))?;
         db.set_setting("single_call_mode", bool_to_sql(self.single_call_mode))?;
         db.set_setting("dark_mode", bool_to_sql(self.dark_mode))?;
-        db.set_setting(
-            "notifications_enabled",
-            bool_to_sql(self.notifications_enabled),
-        )?;
+        db.set_setting("notifications_enabled", bool_to_sql(self.notifications_enabled))?;
         db.set_setting("ringtone_enabled", bool_to_sql(self.ringtone_enabled))?;
         db.set_setting("recording_enabled", bool_to_sql(self.recording_enabled))?;
-        db.set_setting(
-            "recording_format",
-            recording_format_to_str(self.recording_format),
-        )?;
+        db.set_setting("recording_format", recording_format_to_str(self.recording_format))?;
         db.set_setting_opt("recordings_dir_override", &self.recordings_dir_override)?;
         db.set_setting("start_minimized", bool_to_sql(self.start_minimized))?;
         db.set_setting("log_to_file", bool_to_sql(self.log_to_file))?;
-        db.set_setting(
-            "crash_reporting_enabled",
-            bool_to_sql(self.crash_reporting_enabled),
-        )?;
+        db.set_setting("crash_reporting_enabled", bool_to_sql(self.crash_reporting_enabled))?;
         db.set_setting("blocklist", &serde_json::to_string(&self.blocklist)?)?;
         db.set_setting("ice_enabled", bool_to_sql(self.ice_enabled))?;
-        db.set_setting(
-            "global_hotkeys_enabled",
-            bool_to_sql(self.global_hotkeys_enabled),
-        )?;
+        db.set_setting("global_hotkeys_enabled", bool_to_sql(self.global_hotkeys_enabled))?;
         db.set_setting("hotkey_answer", &self.hotkey_answer)?;
         db.set_setting("hotkey_hangup", &self.hotkey_hangup)?;
         db.set_setting("hotkey_mute", &self.hotkey_mute)?;
         db.set_setting("handle_media_buttons", bool_to_sql(self.handle_media_buttons))?;
         db.set_setting("auto_update_enabled", bool_to_sql(self.auto_update_enabled))?;
         db.set_setting_opt("update_skip_version", &self.update_skip_version)?;
-        db.set_setting(
-            "update_check_frequency",
-            update_check_frequency_to_str(self.update_check_frequency),
-        )?;
-        db.set_setting_opt(
-            "last_update_check",
-            &self.last_update_check.map(|v| v.to_string()),
-        )?;
-        db.set_setting(
-            "default_list_action",
-            default_list_action_to_str(self.default_list_action),
-        )?;
+        db.set_setting("update_check_frequency", update_check_frequency_to_str(self.update_check_frequency))?;
+        db.set_setting_opt("last_update_check", &self.last_update_check.map(|v| v.to_string()))?;
+        db.set_setting("default_list_action", default_list_action_to_str(self.default_list_action))?;
         db.set_setting("language", language_to_str(self.language))?;
-        db.set_setting(
-            "random_popup_position",
-            bool_to_sql(self.random_popup_position),
-        )?;
+        db.set_setting("random_popup_position", bool_to_sql(self.random_popup_position))?;
         db.set_setting_opt("zrtp_zid", &self.zrtp_zid)?;
         db.set_setting_opt("ldap_server", &self.ldap_server)?;
         db.set_setting("ldap_port", &self.ldap_port.to_string())?;

@@ -2,7 +2,8 @@ use super::*;
 
 #[test]
 fn parses_open_and_closed_basic() {
-    let open = "<?xml version=\"1.0\"?><presence><tuple id=\"a\"><status><basic>open</basic></status></tuple></presence>";
+    let open =
+        "<?xml version=\"1.0\"?><presence><tuple id=\"a\"><status><basic>open</basic></status></tuple></presence>";
     assert_eq!(parse_pidf_basic(open), Some(PresenceState::Available));
     let closed = "<presence><tuple><status><basic>closed</basic></status></tuple></presence>";
     assert_eq!(parse_pidf_basic(closed), Some(PresenceState::Offline));

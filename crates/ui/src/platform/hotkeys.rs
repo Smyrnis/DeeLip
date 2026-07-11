@@ -65,24 +65,17 @@ impl Hotkeys {
     /// half-registered; the caller should log the error and continue
     /// without hotkeys rather than fail the whole app over a misconfigured
     /// binding.
-    pub fn spawn(
-        custom: Option<(&str, &str, &str)>,
-        media_buttons: bool,
-        ctx_slot: CtxSlot,
-    ) -> anyhow::Result<Self> {
+    pub fn spawn(custom: Option<(&str, &str, &str)>, media_buttons: bool, ctx_slot: CtxSlot) -> anyhow::Result<Self> {
         let manager = GlobalHotKeyManager::new()?;
 
         let custom_ids = match custom {
             Some((answer, hangup, mute)) => {
-                let answer_key: HotKey = answer
-                    .parse()
-                    .map_err(|e| anyhow::anyhow!("Parsing answer hotkey {answer:?}: {e}"))?;
-                let hangup_key: HotKey = hangup
-                    .parse()
-                    .map_err(|e| anyhow::anyhow!("Parsing hangup hotkey {hangup:?}: {e}"))?;
-                let mute_key: HotKey = mute
-                    .parse()
-                    .map_err(|e| anyhow::anyhow!("Parsing mute hotkey {mute:?}: {e}"))?;
+                let answer_key: HotKey =
+                    answer.parse().map_err(|e| anyhow::anyhow!("Parsing answer hotkey {answer:?}: {e}"))?;
+                let hangup_key: HotKey =
+                    hangup.parse().map_err(|e| anyhow::anyhow!("Parsing hangup hotkey {hangup:?}: {e}"))?;
+                let mute_key: HotKey =
+                    mute.parse().map_err(|e| anyhow::anyhow!("Parsing mute hotkey {mute:?}: {e}"))?;
                 manager.register(answer_key)?;
                 manager.register(hangup_key)?;
                 manager.register(mute_key)?;
@@ -111,12 +104,7 @@ impl Hotkeys {
             }
         });
 
-        Ok(Self {
-            _manager: manager,
-            custom_ids,
-            media_hook_id,
-            event_rx,
-        })
+        Ok(Self { _manager: manager, custom_ids, media_hook_id, event_rx })
     }
 
     /// Drain every pending event and return the actions they correspond to.

@@ -26,23 +26,11 @@ pub(crate) fn avatar_color(seed: &str) -> egui::Color32 {
 pub(crate) fn avatar(ui: &mut Ui, name: &str, uri: &str) -> egui::Response {
     let size = 28.0;
     let (rect, response) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
-    let initial = name
-        .trim()
-        .chars()
-        .next()
-        .unwrap_or('?')
-        .to_uppercase()
-        .to_string();
+    let initial = name.trim().chars().next().unwrap_or('?').to_uppercase().to_string();
     let color = avatar_color(if name.trim().is_empty() { uri } else { name });
     let painter = ui.painter();
     painter.circle_filled(rect.center(), size / 2.0, color);
-    painter.text(
-        rect.center(),
-        Align2::CENTER_CENTER,
-        initial,
-        crate::theme::font_medium(13.0),
-        egui::Color32::WHITE,
-    );
+    painter.text(rect.center(), Align2::CENTER_CENTER, initial, crate::theme::font_medium(13.0), egui::Color32::WHITE);
     response
 }
 
@@ -51,15 +39,9 @@ pub(crate) fn avatar(ui: &mut Ui, name: &str, uri: &str) -> egui::Response {
 /// Messages), so they don't inherit the default egui/eframe placeholder icon.
 pub(crate) fn window_icon() -> egui::IconData {
     const ICON_BYTES: &[u8] = include_bytes!("../../../../assets/icon.png");
-    let img = image::load_from_memory(ICON_BYTES)
-        .expect("assets/icon.png must be a valid image")
-        .into_rgba8();
+    let img = image::load_from_memory(ICON_BYTES).expect("assets/icon.png must be a valid image").into_rgba8();
     let (width, height) = img.dimensions();
-    egui::IconData {
-        rgba: img.into_raw(),
-        width,
-        height,
-    }
+    egui::IconData { rgba: img.into_raw(), width, height }
 }
 
 /// Left-hand side of the bottom status bar -- just the connection dot and
@@ -86,11 +68,7 @@ pub(crate) fn status_bar(ui: &mut Ui, palette: &Palette, text: &str, ok: bool, h
 /// extra `item_spacing.y` gap that per-row height estimates (needed for
 /// `show_rows` virtualization) can't represent.
 pub(crate) fn list_row_divider(ui: &Ui, palette: &Palette, row_rect: egui::Rect) {
-    ui.painter().hline(
-        row_rect.x_range(),
-        row_rect.bottom(),
-        egui::Stroke::new(1.0, palette.border),
-    );
+    ui.painter().hline(row_rect.x_range(), row_rect.bottom(), egui::Stroke::new(1.0, palette.border));
 }
 
 /// Render one list row: `add_contents` inside a single `ui.horizontal`, with
@@ -109,10 +87,7 @@ pub(crate) fn list_row_divider(ui: &Ui, palette: &Palette, row_rect: egui::Rect)
 /// ids, hovering one row marked *every* row hovered simultaneously. Wrapping
 /// in `ui.push_id` salts the id per row so only the actual hovered row lights up.
 pub(crate) fn list_row(
-    ui: &mut Ui,
-    palette: &Palette,
-    id_source: impl std::hash::Hash,
-    add_contents: impl FnOnce(&mut Ui),
+    ui: &mut Ui, palette: &Palette, id_source: impl std::hash::Hash, add_contents: impl FnOnce(&mut Ui),
 ) {
     let bg_idx = ui.painter().add(egui::Shape::Noop);
     let row = ui
@@ -129,10 +104,7 @@ pub(crate) fn list_row(
         .inner
         .response;
     if row.hovered() {
-        ui.painter().set(
-            bg_idx,
-            egui::Shape::rect_filled(row.rect, 0.0, palette.surface_hover),
-        );
+        ui.painter().set(bg_idx, egui::Shape::rect_filled(row.rect, 0.0, palette.surface_hover));
     }
     list_row_divider(ui, palette, row.rect);
 }
@@ -152,10 +124,7 @@ pub(crate) fn list_row(
 /// but only one runs per frame (the menu only opens on right-click), so
 /// borrowing the same `&mut` from both won't compile.
 pub(crate) fn list_row_menu(
-    ui: &mut Ui,
-    palette: &Palette,
-    id_source: impl std::hash::Hash,
-    add_contents: impl FnOnce(&mut Ui),
+    ui: &mut Ui, palette: &Palette, id_source: impl std::hash::Hash, add_contents: impl FnOnce(&mut Ui),
     menu_contents: impl FnOnce(&mut Ui),
 ) {
     let bg_idx = ui.painter().add(egui::Shape::Noop);
@@ -170,10 +139,7 @@ pub(crate) fn list_row_menu(
         .inner
         .response;
     if row.hovered() {
-        ui.painter().set(
-            bg_idx,
-            egui::Shape::rect_filled(row.rect, 0.0, palette.surface_hover),
-        );
+        ui.painter().set(bg_idx, egui::Shape::rect_filled(row.rect, 0.0, palette.surface_hover));
     }
     list_row_divider(ui, palette, row.rect);
     row.interact(egui::Sense::click()).context_menu(menu_contents);
@@ -189,8 +155,7 @@ pub(crate) fn list_row_menu(
 /// scoped to a single non-overlapping label sidesteps that entirely.
 /// Returns whether it was just double-clicked.
 pub(crate) fn double_clickable_label(ui: &mut Ui, text: impl Into<egui::WidgetText>) -> bool {
-    ui.add(egui::Label::new(text).sense(egui::Sense::click()))
-        .double_clicked()
+    ui.add(egui::Label::new(text).sense(egui::Sense::click())).double_clicked()
 }
 
 /// A Settings field-row's own label (e.g. "Account name:", "Username:") --
@@ -210,11 +175,7 @@ pub(crate) fn field_label(ui: &mut Ui, palette: &Palette, text: &str) {
 /// searches on demand rather than filtering live) can still wire that up
 /// itself; Contacts/History filter on every keystroke and just ignore it.
 pub(crate) fn search_field(
-    ui: &mut Ui,
-    palette: &Palette,
-    text: &mut String,
-    hint: &str,
-    width: f32,
+    ui: &mut Ui, palette: &Palette, text: &mut String, hint: &str, width: f32,
 ) -> egui::Response {
     ui.label(t("common.search_label"));
     text_edit_scope(ui, palette, |ui| {
@@ -235,12 +196,8 @@ pub(crate) fn search_field(
 /// ones in the bundled icon font (see `theme.rs`'s module doc); it
 /// silently rendered as scattered dots instead of a circled "i".
 pub(crate) fn info_hint(ui: &mut Ui, palette: &Palette, text: &str) {
-    ui.label(
-        RichText::new("(i)")
-            .font(egui::FontId::new(10.5, egui::FontFamily::Monospace))
-            .color(palette.ink_muted),
-    )
-    .on_hover_text(text);
+    ui.label(RichText::new("(i)").font(egui::FontId::new(10.5, egui::FontFamily::Monospace)).color(palette.ink_muted))
+        .on_hover_text(text);
 }
 
 /// One Settings section: a bold title (with an optional `info_hint` beside
@@ -249,11 +206,7 @@ pub(crate) fn info_hint(ui: &mut Ui, palette: &Palette, text: &str) {
 /// header treatment can't drift between sections (some previously had a
 /// hint, some didn't, with no reason for the difference).
 pub(crate) fn settings_section<R>(
-    ui: &mut Ui,
-    palette: &Palette,
-    title: &str,
-    hint: Option<&str>,
-    add_contents: impl FnOnce(&mut Ui) -> R,
+    ui: &mut Ui, palette: &Palette, title: &str, hint: Option<&str>, add_contents: impl FnOnce(&mut Ui) -> R,
 ) -> R {
     ui.horizontal(|ui| {
         ui.label(RichText::new(title).font(theme::font_heading(13.5)));
@@ -269,30 +222,24 @@ pub(crate) fn settings_section<R>(
 /// times over (input/output/ringtone device), differing only in label,
 /// bound field, and candidate list.
 pub(crate) fn device_picker(
-    ui: &mut Ui,
-    id_source: &str,
-    label: &str,
-    current: &mut Option<String>,
-    names: &[String],
+    ui: &mut Ui, id_source: &str, label: &str, current: &mut Option<String>, names: &[String],
 ) -> bool {
     let mut changed = false;
     ui.label(label);
     let selected = current.clone().unwrap_or_else(|| "Default".into());
-    egui::ComboBox::from_id_source(id_source)
-        .selected_text(selected)
-        .show_ui(ui, |ui| {
-            if ui.selectable_label(current.is_none(), "Default").clicked() {
-                *current = None;
+    egui::ComboBox::from_id_source(id_source).selected_text(selected).show_ui(ui, |ui| {
+        if ui.selectable_label(current.is_none(), "Default").clicked() {
+            *current = None;
+            changed = true;
+        }
+        for name in names {
+            let is_sel = current.as_deref() == Some(name.as_str());
+            if ui.selectable_label(is_sel, name).clicked() {
+                *current = Some(name.clone());
                 changed = true;
             }
-            for name in names {
-                let is_sel = current.as_deref() == Some(name.as_str());
-                if ui.selectable_label(is_sel, name).clicked() {
-                    *current = Some(name.clone());
-                    changed = true;
-                }
-            }
-        });
+        }
+    });
     changed
 }
 
@@ -312,11 +259,7 @@ pub(crate) fn empty_state(ui: &mut Ui, palette: &Palette, text: &str) {
 /// rather than changed globally -- `ui.scope` automatically restores
 /// whatever the style was before once `add_contents` returns, so there's no
 /// separate "reset" value to keep in sync with `apply_style`'s own.
-pub(crate) fn text_edit_scope<R>(
-    ui: &mut Ui,
-    palette: &Palette,
-    add_contents: impl FnOnce(&mut Ui) -> R,
-) -> R {
+pub(crate) fn text_edit_scope<R>(ui: &mut Ui, palette: &Palette, add_contents: impl FnOnce(&mut Ui) -> R) -> R {
     ui.scope(|ui| {
         ui.visuals_mut().selection.bg_fill = palette.link;
         add_contents(ui)
@@ -344,16 +287,9 @@ pub(crate) fn styled_slider(ui: &mut Ui, palette: &Palette, slider: egui::Slider
 /// export-failure handling) on error. Shared by History's CSV export and
 /// Contacts' CSV/vCard export, which each hand-rolled the same
 /// dialog+write+log-on-error sequence.
-pub(crate) fn save_text_file(
-    default_name: &str,
-    filter_name: &str,
-    filter_ext: &str,
-    content: String,
-) {
-    let Some(path) = rfd::FileDialog::new()
-        .set_file_name(default_name)
-        .add_filter(filter_name, &[filter_ext])
-        .save_file()
+pub(crate) fn save_text_file(default_name: &str, filter_name: &str, filter_ext: &str, content: String) {
+    let Some(path) =
+        rfd::FileDialog::new().set_file_name(default_name).add_filter(filter_name, &[filter_ext]).save_file()
     else {
         return;
     };
@@ -367,37 +303,12 @@ pub(crate) fn save_text_file(
 /// as one `LayoutJob` -- so account pickers read the same "online" color as
 /// the main status bar's dot instead of an uncolored `●`/`○` character
 /// baked into a plain string.
-pub(crate) fn account_status_label(
-    ui: &Ui,
-    palette: &Palette,
-    reg_ok: bool,
-    label: &str,
-) -> egui::text::LayoutJob {
+pub(crate) fn account_status_label(ui: &Ui, palette: &Palette, reg_ok: bool, label: &str) -> egui::text::LayoutJob {
     let font_id = egui::TextStyle::Body.resolve(ui.style());
-    let dot_color = if reg_ok {
-        palette.signal
-    } else {
-        palette.ink_muted
-    };
+    let dot_color = if reg_ok { palette.signal } else { palette.ink_muted };
     let mut job = egui::text::LayoutJob::default();
-    job.append(
-        "● ",
-        0.0,
-        egui::TextFormat {
-            font_id: font_id.clone(),
-            color: dot_color,
-            ..Default::default()
-        },
-    );
-    job.append(
-        label,
-        0.0,
-        egui::TextFormat {
-            font_id,
-            color: ui.visuals().text_color(),
-            ..Default::default()
-        },
-    );
+    job.append("● ", 0.0, egui::TextFormat { font_id: font_id.clone(), color: dot_color, ..Default::default() });
+    job.append(label, 0.0, egui::TextFormat { font_id, color: ui.visuals().text_color(), ..Default::default() });
     job
 }
 
@@ -406,12 +317,7 @@ pub(crate) fn account_status_label(
 /// keypad and the in-call DTMF keypad, which were previously two near-identical
 /// plain-square-button loops.
 pub(crate) fn phone_keypad(ui: &mut Ui, palette: Palette, mut on_press: impl FnMut(char)) {
-    const ROWS: [[char; 3]; 4] = [
-        ['1', '2', '3'],
-        ['4', '5', '6'],
-        ['7', '8', '9'],
-        ['*', '0', '#'],
-    ];
+    const ROWS: [[char; 3]; 4] = [['1', '2', '3'], ['4', '5', '6'], ['7', '8', '9'], ['*', '0', '#']];
     // v2: a rounded-square calculator-style key, not a circle -- one of
     // the concrete "less playful" changes -- and smaller, for the denser
     // v2 layout. Bumped back up in v4 (2026-07-11) -- user feedback that
@@ -432,8 +338,7 @@ pub(crate) fn phone_keypad(ui: &mut Ui, palette: Palette, mut on_press: impl FnM
             let margin = ((ui.available_width() - row_width) / 2.0).max(0.0);
             ui.add_space(margin);
             for digit in row {
-                let button = egui::Button::new(keypad_button_text(digit, palette))
-                    .rounding(egui::Rounding::same(6.0));
+                let button = egui::Button::new(keypad_button_text(digit, palette)).rounding(egui::Rounding::same(6.0));
                 if ui.add_sized([BUTTON, BUTTON], button).clicked() {
                     on_press(digit);
                 }
@@ -443,18 +348,11 @@ pub(crate) fn phone_keypad(ui: &mut Ui, palette: Palette, mut on_press: impl FnM
 }
 
 fn keypad_button_text(digit: char, palette: Palette) -> egui::text::LayoutJob {
-    let mut job = egui::text::LayoutJob {
-        halign: egui::Align::Center,
-        ..Default::default()
-    };
+    let mut job = egui::text::LayoutJob { halign: egui::Align::Center, ..Default::default() };
     job.append(
         &digit.to_string(),
         0.0,
-        egui::TextFormat {
-            font_id: theme::font_mono_medium(24.0),
-            color: palette.ink,
-            ..Default::default()
-        },
+        egui::TextFormat { font_id: theme::font_mono_medium(24.0), color: palette.ink, ..Default::default() },
     );
     let letters = digit_letters(digit);
     if !letters.is_empty() {

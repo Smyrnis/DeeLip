@@ -42,10 +42,7 @@ impl DeelipApp {
         let t = normalize_target_with_prefix(target, &domain, &prefix, &dial_plan);
         self.accounts[acc].handle.make_call(&t, attempt_ice);
         self.last_dialed = Some(t.clone());
-        self.pending_outbound = Some(PendingOutbound {
-            remote_uri: t.clone(),
-            start_time: unix_now(),
-        });
+        self.pending_outbound = Some(PendingOutbound { remote_uri: t.clone(), start_time: unix_now() });
         self.status_line = format!("Calling {}…", short_uri(&t));
     }
 
@@ -73,8 +70,7 @@ impl DeelipApp {
     pub(crate) fn dial_from_list(&mut self, target: String) {
         self.tab = Tab::Dialer;
         self.call_target = target.clone();
-        let can_dial =
-            self.calls.is_empty() && self.pending_call.is_none() && self.pending_outbound.is_none();
+        let can_dial = self.calls.is_empty() && self.pending_call.is_none() && self.pending_outbound.is_none();
         if can_dial && self.reg_ok {
             self.do_call(Some(target));
         }
@@ -129,9 +125,7 @@ impl DeelipApp {
         let acc = self.calls[original_idx].account;
         let original_call_id = self.calls[original_idx].call_id.clone();
         let consult_call_id = self.calls[consult_idx].call_id.clone();
-        self.accounts[acc]
-            .handle
-            .attended_transfer(&original_call_id, &consult_call_id);
+        self.accounts[acc].handle.attended_transfer(&original_call_id, &consult_call_id);
         self.status_line = t("status.completing_transfer");
     }
 
@@ -164,26 +158,16 @@ impl DeelipApp {
         // `CallConnected` handler (`event_handling.rs`), which only runs
         // once accept has actually succeeded.
         self.accounts[acc].handle.accept_call(&pending.call_id);
-        self.pending_accept = Some(PendingAccept {
-            call_id: pending.call_id,
-            remote_uri: pending.from,
-            start_time: pending.start_time,
-        });
+        self.pending_accept =
+            Some(PendingAccept { call_id: pending.call_id, remote_uri: pending.from, start_time: pending.start_time });
         self.status_line = "Accepting…".into();
         self.refresh_call_status();
     }
 
     pub(crate) fn do_reject(&mut self) {
         if let Some(pending) = self.pending_call.take() {
-            self.record_history(
-                pending.from,
-                CallDirection::Inbound,
-                pending.start_time,
-                CallStatus::Rejected,
-            );
-            self.accounts[pending.account]
-                .handle
-                .reject_call(&pending.call_id);
+            self.record_history(pending.from, CallDirection::Inbound, pending.start_time, CallStatus::Rejected);
+            self.accounts[pending.account].handle.reject_call(&pending.call_id);
             self.refresh_call_status();
         }
     }
@@ -193,12 +177,7 @@ impl DeelipApp {
         let acc = self.calls[idx].account;
         self.accounts[acc].handle.hang_up(&call_id);
         let slot = self.remove_call(idx);
-        self.record_history(
-            slot.remote_uri,
-            slot.direction,
-            slot.start_time,
-            CallStatus::Answered,
-        );
+        self.record_history(slot.remote_uri, slot.direction, slot.start_time, CallStatus::Answered);
         self.refresh_call_status();
     }
 
@@ -294,9 +273,7 @@ impl DeelipApp {
                 }
             }
             DtmfMode::SipInfo => {
-                self.accounts[call.account]
-                    .handle
-                    .send_dtmf_info(&call.call_id, digit);
+                self.accounts[call.account].handle.send_dtmf_info(&call.call_id, digit);
             }
             DtmfMode::Auto => unreachable!("resolved to Rfc2833 or SipInfo above"),
         }
@@ -399,15 +376,8 @@ impl DeelipApp {
         let Some(pending) = self.pending_call.take() else {
             return;
         };
-        self.accounts[pending.account]
-            .handle
-            .redirect_call(&pending.call_id, target);
-        self.record_history(
-            pending.from,
-            CallDirection::Inbound,
-            pending.start_time,
-            CallStatus::Missed,
-        );
+        self.accounts[pending.account].handle.redirect_call(&pending.call_id, target);
+        self.record_history(pending.from, CallDirection::Inbound, pending.start_time, CallStatus::Missed);
         self.refresh_call_status();
     }
 }

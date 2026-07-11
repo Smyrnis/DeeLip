@@ -119,7 +119,9 @@ pub fn total_hash(responder_hello: &[u8], commit: &[u8], dhpart1: &[u8], dhpart2
 /// ZIDs has one cached (`None` on a first-ever call with this peer); `s2`
 /// (aux secret) and `s3` (PBX secret) are always empty here, since neither
 /// is implemented.
-pub fn derive_s0(dh_result: &[u8], zid_i: [u8; 12], zid_r: [u8; 12], total_hash: &[u8; 32], s1: Option<&[u8]>) -> [u8; 32] {
+pub fn derive_s0(
+    dh_result: &[u8], zid_i: [u8; 12], zid_r: [u8; 12], total_hash: &[u8; 32], s1: Option<&[u8]>,
+) -> [u8; 32] {
     let mut data = Vec::new();
     data.extend_from_slice(&1u32.to_be_bytes());
     data.extend_from_slice(dh_result);
@@ -228,8 +230,8 @@ pub struct Ec25KeyPair {
 
 pub fn generate_ec25_keypair() -> Ec25KeyPair {
     let rng = ring::rand::SystemRandom::new();
-    let private = agreement::EphemeralPrivateKey::generate(&agreement::ECDH_P256, &rng)
-        .expect("system RNG must succeed");
+    let private =
+        agreement::EphemeralPrivateKey::generate(&agreement::ECDH_P256, &rng).expect("system RNG must succeed");
     let public = private.compute_public_key().expect("key generation must succeed");
     // Uncompressed SEC1 point: 0x04 || X (32 bytes) || Y (32 bytes) -- strip
     // the leading format byte, since both sides always know the curve and
@@ -237,10 +239,7 @@ pub fn generate_ec25_keypair() -> Ec25KeyPair {
     let full = public.as_ref();
     let mut public_bytes = [0u8; 64];
     public_bytes.copy_from_slice(&full[1..65]);
-    Ec25KeyPair {
-        private,
-        public_bytes,
-    }
+    Ec25KeyPair { private, public_bytes }
 }
 
 /// Computes the shared secret with `peer_public` (64-byte uncompressed

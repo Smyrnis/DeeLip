@@ -70,22 +70,12 @@ pub fn check_latest(current: &str) -> anyhow::Result<Option<ReleaseInfo>> {
     let tar_gz_asset = release.assets.iter().find(|a| a.name.ends_with(".tar.gz"));
     let tar_gz_url = tar_gz_asset.map(|a| a.browser_download_url.clone());
     let tar_gz_sha256 = tar_gz_asset.and_then(|asset| {
-        let checksums_url = release
-            .assets
-            .iter()
-            .find(|a| a.name == CHECKSUMS_ASSET_NAME)?
-            .browser_download_url
-            .as_str();
+        let checksums_url =
+            release.assets.iter().find(|a| a.name == CHECKSUMS_ASSET_NAME)?.browser_download_url.as_str();
         fetch_expected_sha256(checksums_url, &asset.name)
     });
 
-    Ok(Some(ReleaseInfo {
-        tag: release.tag_name,
-        version,
-        html_url: release.html_url,
-        tar_gz_url,
-        tar_gz_sha256,
-    }))
+    Ok(Some(ReleaseInfo { tag: release.tag_name, version, html_url: release.html_url, tar_gz_url, tar_gz_sha256 }))
 }
 
 /// Fetches `checksums_url` (a `SHA256SUMS.txt` asset) and returns the hex
@@ -176,25 +166,18 @@ fn dir_is_writable(dir: &Path) -> bool {
 /// expected to prompt the user to restart rather than doing it
 /// automatically (an in-progress call would otherwise be dropped).
 pub fn download_and_replace(release: &ReleaseInfo) -> anyhow::Result<()> {
-    let url = release
-        .tar_gz_url
-        .as_deref()
-        .ok_or_else(|| anyhow::anyhow!("Release {} has no .tar.gz asset", release.tag))?;
+    let url =
+        release.tar_gz_url.as_deref().ok_or_else(|| anyhow::anyhow!("Release {} has no .tar.gz asset", release.tag))?;
 
-    let mut res = ureq::get(url)
-        .header("User-Agent", "deelip-updater")
-        .call()
-        .context("Downloading update")?;
+    let mut res = ureq::get(url).header("User-Agent", "deelip-updater").call().context("Downloading update")?;
 
     let tmp_dir = std::env::temp_dir().join(format!("deelip-update-{}", std::process::id()));
     std::fs::create_dir_all(&tmp_dir).context("Creating temp dir for update")?;
 
     let archive_path = tmp_dir.join("deelip.tar.gz");
     {
-        let mut file =
-            std::fs::File::create(&archive_path).context("Creating temp archive file")?;
-        std::io::copy(&mut res.body_mut().as_reader(), &mut file)
-            .context("Saving downloaded archive")?;
+        let mut file = std::fs::File::create(&archive_path).context("Creating temp archive file")?;
+        std::io::copy(&mut res.body_mut().as_reader(), &mut file).context("Saving downloaded archive")?;
     }
 
     let result = verify_checksum(&archive_path, release.tar_gz_sha256.as_deref()).and_then(|()| {
@@ -216,8 +199,7 @@ fn verify_checksum(archive_path: &Path, expected: Option<&str>) -> anyhow::Resul
         tracing::warn!("No published checksum for this release -- installing unverified");
         return Ok(());
     };
-    let mut file =
-        std::fs::File::open(archive_path).context("Reopening archive to verify checksum")?;
+    let mut file = std::fs::File::open(archive_path).context("Reopening archive to verify checksum")?;
     let mut hasher = Sha256::new();
     std::io::copy(&mut file, &mut hasher).context("Hashing downloaded archive")?;
     let actual = format!("{:x}", hasher.finalize());
@@ -237,12 +219,9 @@ fn install_from_archive(archive_path: &Path, current_exe: &Path) -> anyhow::Resu
 
     let tar_gz = std::fs::File::open(archive_path).context("Opening downloaded archive")?;
     let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(tar_gz));
-    archive
-        .unpack(&extract_dir)
-        .context("Extracting update archive")?;
+    archive.unpack(&extract_dir).context("Extracting update archive")?;
 
-    let new_binary = find_named(&extract_dir, "deelip")
-        .context("Update archive did not contain the deelip binary")?;
+    let new_binary = find_named(&extract_dir, "deelip").context("Update archive did not contain the deelip binary")?;
 
     // Staged in the *same* directory as the real binary (not the temp
     // extraction dir, which may be a different filesystem) so the final

@@ -87,23 +87,23 @@ impl CallHistory {
     }
 
     pub fn save(&self, db: &Db) -> anyhow::Result<()> {
-        db.conn
-            .execute("DELETE FROM call_history", [])
-            .context("Clearing call_history table")?;
+        db.conn.execute("DELETE FROM call_history", []).context("Clearing call_history table")?;
         // `records` is newest-first (see `push`); capped at 200 there too, so
         // no separate truncation needed here.
         for r in &self.records {
-            db.conn.execute(
-                "INSERT INTO call_history (remote_uri, direction, timestamp, duration_secs, status) \
+            db.conn
+                .execute(
+                    "INSERT INTO call_history (remote_uri, direction, timestamp, duration_secs, status) \
                  VALUES (?1, ?2, ?3, ?4, ?5)",
-                rusqlite::params![
-                    r.remote_uri,
-                    call_direction_to_str(&r.direction),
-                    r.timestamp,
-                    r.duration_secs,
-                    call_status_to_str(&r.status),
-                ],
-            ).context("Inserting call history record")?;
+                    rusqlite::params![
+                        r.remote_uri,
+                        call_direction_to_str(&r.direction),
+                        r.timestamp,
+                        r.duration_secs,
+                        call_status_to_str(&r.status),
+                    ],
+                )
+                .context("Inserting call history record")?;
         }
         Ok(())
     }

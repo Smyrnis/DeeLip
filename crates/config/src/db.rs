@@ -106,13 +106,10 @@ impl Db {
         let path = default_db_path()?;
         let is_fresh = !path.exists();
 
-        let conn = Connection::open(&path)
-            .with_context(|| format!("Opening database at {}", path.display()))?;
-        conn.execute_batch(SCHEMA)
-            .context("Creating database schema")?;
+        let conn = Connection::open(&path).with_context(|| format!("Opening database at {}", path.display()))?;
+        conn.execute_batch(SCHEMA).context("Creating database schema")?;
         let db = Db { conn };
-        db.migrate_accounts_columns()
-            .context("Migrating accounts table columns")?;
+        db.migrate_accounts_columns().context("Migrating accounts table columns")?;
 
         if is_fresh {
             db.migrate_legacy_or_seed_default()?;
@@ -154,10 +151,7 @@ impl Db {
             "video_enabled INTEGER NOT NULL DEFAULT 0",
         ];
         for col in COLUMNS {
-            if let Err(e) = self
-                .conn
-                .execute(&format!("ALTER TABLE accounts ADD COLUMN {col}"), [])
-            {
+            if let Err(e) = self.conn.execute(&format!("ALTER TABLE accounts ADD COLUMN {col}"), []) {
                 if !e.to_string().contains("duplicate column name") {
                     return Err(e.into());
                 }
@@ -201,11 +195,7 @@ impl Db {
     }
 
     pub(crate) fn get_setting(&self, key: &str) -> Option<String> {
-        self.conn
-            .query_row("SELECT value FROM settings WHERE key = ?1", [key], |row| {
-                row.get(0)
-            })
-            .ok()
+        self.conn.query_row("SELECT value FROM settings WHERE key = ?1", [key], |row| row.get(0)).ok()
     }
 
     pub(crate) fn set_setting(&self, key: &str, value: &str) -> anyhow::Result<()> {
@@ -218,8 +208,7 @@ impl Db {
     }
 
     pub(crate) fn delete_setting(&self, key: &str) -> anyhow::Result<()> {
-        self.conn
-            .execute("DELETE FROM settings WHERE key = ?1", [key])?;
+        self.conn.execute("DELETE FROM settings WHERE key = ?1", [key])?;
         Ok(())
     }
 

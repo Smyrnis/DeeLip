@@ -27,9 +27,8 @@ pub struct ContactBook {
 
 impl ContactBook {
     pub fn load(db: &Db) -> anyhow::Result<Self> {
-        let mut stmt = db.conn.prepare(
-            "SELECT name, sip_uri, watch_presence, presence_account FROM contacts ORDER BY id",
-        )?;
+        let mut stmt =
+            db.conn.prepare("SELECT name, sip_uri, watch_presence, presence_account FROM contacts ORDER BY id")?;
         let contacts = stmt
             .query_map([], |row| {
                 Ok(Contact {
@@ -45,20 +44,13 @@ impl ContactBook {
     }
 
     pub fn save(&self, db: &Db) -> anyhow::Result<()> {
-        db.conn
-            .execute("DELETE FROM contacts", [])
-            .context("Clearing contacts table")?;
+        db.conn.execute("DELETE FROM contacts", []).context("Clearing contacts table")?;
         for c in &self.contacts {
             db.conn
                 .execute(
                     "INSERT INTO contacts (name, sip_uri, watch_presence, presence_account) \
                  VALUES (?1, ?2, ?3, ?4)",
-                    rusqlite::params![
-                        c.name,
-                        c.sip_uri,
-                        bool_to_sql(c.watch_presence),
-                        c.presence_account
-                    ],
+                    rusqlite::params![c.name, c.sip_uri, bool_to_sql(c.watch_presence), c.presence_account],
                 )
                 .with_context(|| format!("Inserting contact {}", c.name))?;
         }
@@ -73,9 +65,7 @@ impl ContactBook {
     /// `;param`.
     pub fn find_by_uri(&self, uri: &str) -> Option<&Contact> {
         let target = normalize_uri_for_match(uri);
-        self.contacts
-            .iter()
-            .find(|c| normalize_uri_for_match(&c.sip_uri) == target)
+        self.contacts.iter().find(|c| normalize_uri_for_match(&c.sip_uri) == target)
     }
 
     /// Contacts whose name or URI contains `query` (case-insensitive), paired
@@ -86,9 +76,7 @@ impl ContactBook {
             .iter()
             .enumerate()
             .filter(|(_, c)| {
-                q.is_empty()
-                    || c.name.to_lowercase().contains(&q)
-                    || c.sip_uri.to_lowercase().contains(&q)
+                q.is_empty() || c.name.to_lowercase().contains(&q) || c.sip_uri.to_lowercase().contains(&q)
             })
             .collect()
     }
@@ -101,15 +89,9 @@ impl ContactBook {
 /// are still recognized as the same contact.
 fn normalize_uri_for_match(uri: &str) -> String {
     let lower = uri.trim().to_ascii_lowercase();
-    let stripped = lower
-        .strip_prefix("sip:")
-        .or_else(|| lower.strip_prefix("sips:"))
-        .unwrap_or(&lower);
+    let stripped = lower.strip_prefix("sip:").or_else(|| lower.strip_prefix("sips:")).unwrap_or(&lower);
     let before_params = stripped.split(';').next().unwrap_or(stripped);
-    before_params
-        .strip_suffix(":5060")
-        .unwrap_or(before_params)
-        .to_string()
+    before_params.strip_suffix(":5060").unwrap_or(before_params).to_string()
 }
 
 #[cfg(test)]
@@ -117,59 +99,36 @@ mod tests {
     use super::*;
 
     fn contact(name: &str, sip_uri: &str) -> Contact {
-        Contact {
-            name: name.to_string(),
-            sip_uri: sip_uri.to_string(),
-            watch_presence: false,
-            presence_account: None,
-        }
+        Contact { name: name.to_string(), sip_uri: sip_uri.to_string(), watch_presence: false, presence_account: None }
     }
 
     #[test]
     fn find_by_uri_exact_match() {
-        let book = ContactBook {
-            contacts: vec![contact("Bob", "sip:600@127.0.0.1")],
-        };
+        let book = ContactBook { contacts: vec![contact("Bob", "sip:600@127.0.0.1")] };
         assert_eq!(book.find_by_uri("sip:600@127.0.0.1").unwrap().name, "Bob");
     }
 
     #[test]
     fn find_by_uri_ignores_case() {
-        let book = ContactBook {
-            contacts: vec![contact("Bob", "sip:Bob@Example.com")],
-        };
+        let book = ContactBook { contacts: vec![contact("Bob", "sip:Bob@Example.com")] };
         assert_eq!(book.find_by_uri("SIP:bob@example.com").unwrap().name, "Bob");
     }
 
     #[test]
     fn find_by_uri_ignores_trailing_params() {
-        let book = ContactBook {
-            contacts: vec![contact("Bob", "sip:600@127.0.0.1")],
-        };
-        assert_eq!(
-            book.find_by_uri("sip:600@127.0.0.1;user=phone")
-                .unwrap()
-                .name,
-            "Bob"
-        );
+        let book = ContactBook { contacts: vec![contact("Bob", "sip:600@127.0.0.1")] };
+        assert_eq!(book.find_by_uri("sip:600@127.0.0.1;user=phone").unwrap().name, "Bob");
     }
 
     #[test]
     fn find_by_uri_ignores_explicit_default_port() {
-        let book = ContactBook {
-            contacts: vec![contact("Bob", "sip:600@127.0.0.1")],
-        };
-        assert_eq!(
-            book.find_by_uri("sip:600@127.0.0.1:5060").unwrap().name,
-            "Bob"
-        );
+        let book = ContactBook { contacts: vec![contact("Bob", "sip:600@127.0.0.1")] };
+        assert_eq!(book.find_by_uri("sip:600@127.0.0.1:5060").unwrap().name, "Bob");
     }
 
     #[test]
     fn find_by_uri_no_match_returns_none() {
-        let book = ContactBook {
-            contacts: vec![contact("Bob", "sip:600@127.0.0.1")],
-        };
+        let book = ContactBook { contacts: vec![contact("Bob", "sip:600@127.0.0.1")] };
         assert!(book.find_by_uri("sip:700@127.0.0.1").is_none());
     }
 }

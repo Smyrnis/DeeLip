@@ -21,10 +21,7 @@ pub enum NotificationAction {
     Reject,
 }
 
-type ActionChannel = (
-    Sender<(String, NotificationAction)>,
-    Mutex<Receiver<(String, NotificationAction)>>,
-);
+type ActionChannel = (Sender<(String, NotificationAction)>, Mutex<Receiver<(String, NotificationAction)>>);
 
 fn action_channel() -> &'static ActionChannel {
     static CHANNEL: OnceLock<ActionChannel> = OnceLock::new();
@@ -80,9 +77,7 @@ pub fn notify_incoming_call(call_id: &str, from: &str, ctx_slot: CtxSlot) {
 /// same as above.
 pub fn notify_message_received(from: &str, body: &str) {
     let mut notification = notify_rust::Notification::new();
-    notification
-        .summary(&tf("notify.message_from", &[("from", from)]))
-        .body(body);
+    notification.summary(&tf("notify.message_from", &[("from", from)])).body(body);
     match notification.show() {
         Ok(_) => tracing::debug!("Message notification shown for {from}"),
         Err(e) => tracing::warn!("Desktop notification failed: {e}"),

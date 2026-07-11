@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
+use std::sync::Arc;
 
 use anyhow::Context;
 use tokio::sync::mpsc;
-use tokio::time::{interval, Duration, Instant, sleep_until};
+use tokio::time::{interval, sleep_until, Duration, Instant};
 use tracing::{debug, error, info};
 
 use deelip_config::{SipAccount, TransportProtocol};
@@ -25,11 +25,11 @@ use crate::{
     wire::util::local_ip_for,
 };
 
-const REG_MARGIN:         u32      = 60;
-pub(crate) const REG_RECV_TIMEOUT:   Duration = Duration::from_secs(10);
-const MAX_RETRY:          Duration = Duration::from_secs(300);
-pub(crate) const SUBSCRIBE_EXPIRES:  u32      = 3600;
-const PRESENCE_TICK:      Duration = Duration::from_secs(30);
+const REG_MARGIN: u32 = 60;
+pub(crate) const REG_RECV_TIMEOUT: Duration = Duration::from_secs(10);
+const MAX_RETRY: Duration = Duration::from_secs(300);
+pub(crate) const SUBSCRIBE_EXPIRES: u32 = 3600;
+const PRESENCE_TICK: Duration = Duration::from_secs(30);
 pub(crate) const PRESENCE_EVENT: &str = "presence";
 pub(crate) const PRESENCE_ACCEPT: &str = "application/pidf+xml";
 pub(crate) const MWI_EVENT: &str = "message-summary";
@@ -57,26 +57,26 @@ pub(crate) const SESSION_MIN_SE: u32 = 90;
 pub(crate) enum StackEvent {
     /// `initiate_call`'s offer is ready to send as the actual INVITE.
     OutgoingOfferReady {
-        call_id:       String,
-        from_tag:      String,
-        branch:        String,
-        to:            String,
-        local_sdp:     String,
+        call_id: String,
+        from_tag: String,
+        branch: String,
+        to: String,
+        local_sdp: String,
         pending_offer: PendingOfferMedia,
-        ice_gathered:  Option<IceGathered>,
+        ice_gathered: Option<IceGathered>,
         /// Video counterpart of `pending_offer`/`ice_gathered` -- `None`
         /// whenever video wasn't offered (see `PendingVideoOffer`).
         video: Option<PendingVideoOffer>,
     },
     /// `accept_call`'s answer is ready to send as the 200 OK.
     IncomingAnswerReady {
-        call_id:    String,
-        parsed:     ParsedSdp,
-        local_sdp:  String,
-        local_rtp:  u16,
+        call_id: String,
+        parsed: ParsedSdp,
+        local_sdp: String,
+        local_rtp: u16,
         local_srtp: Option<SrtpParams>,
-        relay:      Option<TurnRelay>,
-        ice:        Option<IceConnection>,
+        relay: Option<TurnRelay>,
+        ice: Option<IceConnection>,
         /// Video counterpart of this event's audio fields, bundled into
         /// one struct -- `None` whenever the remote didn't offer video, we
         /// don't have it enabled, or video setup failed for this call.
@@ -85,15 +85,15 @@ pub(crate) enum StackEvent {
     /// The offerer side's ICE connectivity checks (`on_response`'s answer
     /// handling) finished -- media is now fully resolved for an outgoing call.
     OutgoingConnected {
-        call_id:     String,
-        local_rtp:   u16,
-        local_srtp:  Option<SrtpParams>,
-        relay:       Option<TurnRelay>,
-        ice:         Option<IceConnection>,
-        codec:       AudioCodec,
-        dtmf_type:   Option<u8>,
-        cn_type:     Option<u8>,
-        remote_rtp:  SocketAddr,
+        call_id: String,
+        local_rtp: u16,
+        local_srtp: Option<SrtpParams>,
+        relay: Option<TurnRelay>,
+        ice: Option<IceConnection>,
+        codec: AudioCodec,
+        dtmf_type: Option<u8>,
+        cn_type: Option<u8>,
+        remote_rtp: SocketAddr,
         remote_srtp: Option<SrtpParams>,
         /// Video counterpart of this event's audio fields, bundled into
         /// one struct -- `None` whenever we didn't offer video, the remote
@@ -105,22 +105,22 @@ pub(crate) enum StackEvent {
 /// Bundles `accept_call`'s resolved video-answer state for
 /// `StackEvent::IncomingAnswerReady` -- see that variant's doc comment.
 pub(crate) struct IncomingVideoAnswer {
-    pub parsed:     ParsedVideoMedia,
-    pub local_rtp:  u16,
+    pub parsed: ParsedVideoMedia,
+    pub local_rtp: u16,
     pub local_srtp: Option<SrtpParams>,
-    pub relay:      Option<TurnRelay>,
-    pub ice:        Option<IceConnection>,
+    pub relay: Option<TurnRelay>,
+    pub ice: Option<IceConnection>,
 }
 
 /// Bundles `on_response`'s resolved video-connected state for
 /// `StackEvent::OutgoingConnected` -- see that variant's doc comment.
 pub(crate) struct OutgoingVideoConnected {
-    pub local_rtp:   u16,
-    pub local_srtp:  Option<SrtpParams>,
-    pub relay:       Option<TurnRelay>,
-    pub ice:         Option<IceConnection>,
-    pub codec:       VideoCodec,
-    pub remote_rtp:  SocketAddr,
+    pub local_rtp: u16,
+    pub local_srtp: Option<SrtpParams>,
+    pub relay: Option<TurnRelay>,
+    pub ice: Option<IceConnection>,
+    pub codec: VideoCodec,
+    pub remote_rtp: SocketAddr,
     pub remote_srtp: Option<SrtpParams>,
 }
 
@@ -163,13 +163,13 @@ impl EventSender {
 // ── SIP Stack ─────────────────────────────────────────────────────────────────
 
 pub struct SipStack {
-    pub(crate) transport:     Arc<SipTransport>,
-    pub(crate) account:       SipAccount,
-    pub(crate) network:       NetworkConfig,
-    pub(crate) local_ip:      String,
+    pub(crate) transport: Arc<SipTransport>,
+    pub(crate) account: SipAccount,
+    pub(crate) network: NetworkConfig,
+    pub(crate) local_ip: String,
     pub(crate) advertised_ip: String,
-    pub(crate) local_port:    u16,
-    pub(crate) server_addr:   SocketAddr,
+    pub(crate) local_port: u16,
+    pub(crate) server_addr: SocketAddr,
     /// Host (`account.domain()`, or `local_ip:local_port` when that's empty
     /// -- only possible for `SipAccount::local_account`, which has no
     /// `server`/`domain` to fall back to) used to build this account's own
@@ -185,11 +185,11 @@ pub struct SipStack {
     /// reads this, never `account.transport` directly.
     pub(crate) resolved_transport: TransportProtocol,
 
-    pub(crate) reg_call_id:  String,
+    pub(crate) reg_call_id: String,
     pub(crate) reg_from_tag: String,
-    pub(crate) reg_cseq:     Arc<AtomicU32>,
+    pub(crate) reg_cseq: Arc<AtomicU32>,
 
-    pub(crate) dialogs:       HashMap<String, Dialog>,
+    pub(crate) dialogs: HashMap<String, Dialog>,
     pub(crate) subscriptions: HashMap<String, PresenceSubscription>,
     pub(crate) mwi_subscriptions: HashMap<String, MwiSubscription>,
     /// This account's own outgoing presence PUBLISH state -- `None` until
@@ -201,7 +201,7 @@ pub struct SipStack {
     /// of any `Dialog`, so it can't be resolved via `dialogs`.
     pub(crate) pending_messages: HashMap<String, crate::message_method::PendingMessage>,
     pub(crate) event_tx: EventSender,
-    pub(crate) cmd_rx:   mpsc::UnboundedReceiver<SipCommand>,
+    pub(crate) cmd_rx: mpsc::UnboundedReceiver<SipCommand>,
 
     /// See `StackEvent`'s doc comment -- `internal_tx` is cloned into each
     /// background call-setup task; `internal_rx` is polled by `run()`'s own
@@ -219,12 +219,8 @@ pub(crate) type CmdRx = mpsc::UnboundedReceiver<SipCommand>;
 
 impl SipStack {
     pub async fn new(
-        account:      SipAccount,
-        network:      NetworkConfig,
-        local_port:   u16,
-        external_ip:  Option<String>,
-        event_tx:     EventSender,
-        cmd_rx:       CmdRx,
+        account: SipAccount, network: NetworkConfig, local_port: u16, external_ip: Option<String>,
+        event_tx: EventSender, cmd_rx: CmdRx,
     ) -> Result<Self, (anyhow::Error, CmdRx)> {
         let (transport, local_ip, advertised_ip, server_addr, resolved_transport) =
             match Self::connect_transport(&account, &network, local_port, &external_ip).await {
@@ -232,14 +228,11 @@ impl SipStack {
                 Err(e) => return Err((e, cmd_rx)),
             };
 
-        let reg_call_id  = crate::wire::util::new_call_id(&local_ip);
+        let reg_call_id = crate::wire::util::new_call_id(&local_ip);
         let reg_from_tag = crate::wire::util::new_tag();
         let (internal_tx, internal_rx) = mpsc::unbounded_channel();
-        let identity_host = if account.domain().is_empty() {
-            format!("{local_ip}:{local_port}")
-        } else {
-            account.domain().to_string()
-        };
+        let identity_host =
+            if account.domain().is_empty() { format!("{local_ip}:{local_port}") } else { account.domain().to_string() };
 
         Ok(Self {
             transport,
@@ -253,8 +246,8 @@ impl SipStack {
             resolved_transport,
             reg_call_id,
             reg_from_tag,
-            reg_cseq:  Arc::new(AtomicU32::new(1)),
-            dialogs:   HashMap::new(),
+            reg_cseq: Arc::new(AtomicU32::new(1)),
+            dialogs: HashMap::new(),
             subscriptions: HashMap::new(),
             mwi_subscriptions: HashMap::new(),
             presence_publish: None,
@@ -274,10 +267,7 @@ impl SipStack {
     /// command-channel receiver `spawn`'s reconnect loop needs to keep
     /// retrying with.
     async fn connect_transport(
-        account:     &SipAccount,
-        network:     &NetworkConfig,
-        local_port:  u16,
-        external_ip: &Option<String>,
+        account: &SipAccount, network: &NetworkConfig, local_port: u16, external_ip: &Option<String>,
     ) -> anyhow::Result<(Arc<SipTransport>, String, String, SocketAddr, TransportProtocol)> {
         if account.local_account {
             Self::connect_local(account, local_port, external_ip).await
@@ -302,17 +292,14 @@ impl SipStack {
     /// `SipTransport::connect`'s Tcp/Tls arms), which doesn't exist without
     /// a fixed server.
     async fn connect_local(
-        account:     &SipAccount,
-        local_port:  u16,
-        external_ip: &Option<String>,
+        account: &SipAccount, local_port: u16, external_ip: &Option<String>,
     ) -> anyhow::Result<(Arc<SipTransport>, String, String, SocketAddr, TransportProtocol)> {
         // Ask the OS routing table which local IP it would use to reach the
         // public internet -- purely a local routing-table lookup (a UDP
         // `connect()` sends no packet), used here only as a stand-in for
         // "this machine's own outbound-facing address" since there's no
         // registrar to ask instead.
-        let local_ip =
-            local_ip_for("8.8.8.8", 80).unwrap_or_else(|_| "127.0.0.1".to_string());
+        let local_ip = local_ip_for("8.8.8.8", 80).unwrap_or_else(|_| "127.0.0.1".to_string());
         let advertised_ip = account
             .public_address
             .as_deref()
@@ -321,13 +308,10 @@ impl SipStack {
             .or_else(|| external_ip.clone())
             .unwrap_or_else(|| local_ip.clone());
 
-        let bind_addr: SocketAddr = format!("0.0.0.0:{local_port}")
-            .parse()
-            .context("Invalid bind address")?;
+        let bind_addr: SocketAddr = format!("0.0.0.0:{local_port}").parse().context("Invalid bind address")?;
         let server_addr: SocketAddr = "0.0.0.0:0".parse().unwrap();
-        let transport = Arc::new(
-            SipTransport::connect(TransportProtocol::Udp, bind_addr, server_addr, "", false).await?,
-        );
+        let transport =
+            Arc::new(SipTransport::connect(TransportProtocol::Udp, bind_addr, server_addr, "", false).await?);
 
         info!(
             local = %format!("{local_ip}:{local_port}"),
@@ -342,10 +326,7 @@ impl SipStack {
     /// transport connect) for one concrete transport -- shared by the
     /// direct (non-`Auto`) path and each candidate `connect_transport_auto` tries.
     async fn connect_transport_concrete(
-        account:     &SipAccount,
-        network:     &NetworkConfig,
-        proto:       TransportProtocol,
-        local_port:  u16,
+        account: &SipAccount, network: &NetworkConfig, proto: TransportProtocol, local_port: u16,
         external_ip: &Option<String>,
     ) -> anyhow::Result<(Arc<SipTransport>, String, String, SocketAddr)> {
         let (connect_host, connect_port) = account.connect_target();
@@ -367,18 +348,10 @@ impl SipStack {
         )
         .await?;
 
-        let bind_addr: SocketAddr = format!("0.0.0.0:{local_port}")
-            .parse()
-            .context("Invalid bind address")?;
+        let bind_addr: SocketAddr = format!("0.0.0.0:{local_port}").parse().context("Invalid bind address")?;
         let transport = Arc::new(
-            SipTransport::connect(
-                proto,
-                bind_addr,
-                server_addr,
-                &connect_host,
-                account.tls_insecure_skip_verify,
-            )
-            .await?,
+            SipTransport::connect(proto, bind_addr, server_addr, &connect_host, account.tls_insecure_skip_verify)
+                .await?,
         );
 
         info!(
@@ -402,21 +375,14 @@ impl SipStack {
     /// exactly as if that concrete transport had been configured directly
     /// (see `resolved_transport`).
     async fn connect_transport_auto(
-        account:     &SipAccount,
-        network:     &NetworkConfig,
-        local_port:  u16,
-        external_ip: &Option<String>,
+        account: &SipAccount, network: &NetworkConfig, local_port: u16, external_ip: &Option<String>,
     ) -> anyhow::Result<(Arc<SipTransport>, String, String, SocketAddr, TransportProtocol)> {
-        const CANDIDATES: [TransportProtocol; 3] = [
-            TransportProtocol::Udp,
-            TransportProtocol::Tcp,
-            TransportProtocol::Tls,
-        ];
+        const CANDIDATES: [TransportProtocol; 3] =
+            [TransportProtocol::Udp, TransportProtocol::Tcp, TransportProtocol::Tls];
         let mut last_err: Option<anyhow::Error> = None;
 
         for proto in CANDIDATES {
-            let connected =
-                Self::connect_transport_concrete(account, network, proto, local_port, external_ip).await;
+            let connected = Self::connect_transport_concrete(account, network, proto, local_port, external_ip).await;
             let (transport, local_ip, advertised_ip, server_addr) = match connected {
                 Ok(c) => c,
                 Err(e) => {
@@ -433,9 +399,7 @@ impl SipStack {
             debug!("Auto-transport: {proto:?} connected but didn't respond to probe REGISTER");
         }
 
-        Err(last_err.unwrap_or_else(|| {
-            anyhow::anyhow!("Auto-transport: no candidate transport reached a live server")
-        }))
+        Err(last_err.unwrap_or_else(|| anyhow::anyhow!("Auto-transport: no candidate transport reached a live server")))
     }
 
     /// Spawns the background task that runs this account's SIP stack for
@@ -450,18 +414,16 @@ impl SipStack {
     /// disconnect happened -- but the account itself now recovers instead
     /// of staying dead until the whole process is restarted).
     pub async fn spawn(
-        account:     SipAccount,
-        network:     NetworkConfig,
-        local_port:  u16,
-        external_ip: Option<String>,
-        waker:       Arc<dyn Fn() + Send + Sync>,
+        account: SipAccount, network: NetworkConfig, local_port: u16, external_ip: Option<String>,
+        waker: Arc<dyn Fn() + Send + Sync>,
     ) -> anyhow::Result<SipHandle> {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let event_tx = EventSender::new(event_tx, waker);
-        let (cmd_tx,   cmd_rx)   = mpsc::unbounded_channel();
-        let stack = SipStack::new(account.clone(), network.clone(), local_port, external_ip.clone(), event_tx.clone(), cmd_rx)
-            .await
-            .map_err(|(e, _)| e)?;
+        let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+        let stack =
+            SipStack::new(account.clone(), network.clone(), local_port, external_ip.clone(), event_tx.clone(), cmd_rx)
+                .await
+                .map_err(|(e, _)| e)?;
         let advertised_ip = stack.advertised_ip.clone();
         let secure = stack.resolved_transport == TransportProtocol::Tls;
         let domain = stack.identity_host.clone();
@@ -473,9 +435,18 @@ impl SipStack {
 
             loop {
                 if stack.is_none() {
-                    let cmd_rx = pending_cmd_rx.take()
-                        .expect("no live stack means a previous attempt stashed its cmd_rx");
-                    match SipStack::new(account.clone(), network.clone(), local_port, external_ip.clone(), event_tx.clone(), cmd_rx).await {
+                    let cmd_rx =
+                        pending_cmd_rx.take().expect("no live stack means a previous attempt stashed its cmd_rx");
+                    match SipStack::new(
+                        account.clone(),
+                        network.clone(),
+                        local_port,
+                        external_ip.clone(),
+                        event_tx.clone(),
+                        cmd_rx,
+                    )
+                    .await
+                    {
                         Ok(s) => {
                             info!("Reconnected");
                             stack = Some(s);
@@ -498,9 +469,7 @@ impl SipStack {
                     Ok(()) => break,
                     Err((e, cmd_rx)) => {
                         error!("SIP stack disconnected ({e:#}), reconnecting in {retry_delay:?}");
-                        let _ = event_tx.send(SipEvent::RegistrationFailed {
-                            reason: format!("Disconnected: {e:#}"),
-                        });
+                        let _ = event_tx.send(SipEvent::RegistrationFailed { reason: format!("Disconnected: {e:#}") });
                         pending_cmd_rx = Some(cmd_rx);
                         tokio::time::sleep(retry_delay).await;
                         retry_delay = (retry_delay * 2).min(MAX_RETRY);
@@ -523,17 +492,14 @@ impl SipStack {
             let _ = self.event_tx.send(SipEvent::Registered { expires: 0 });
         }
         let mut reregister_at = Instant::now();
-        let mut retry_delay   = Duration::from_secs(5);
+        let mut retry_delay = Duration::from_secs(5);
         let mut presence_tick = interval(PRESENCE_TICK);
         // NAT/firewall keepalive -- only ticks when the account has one
         // configured; `if keepalive_tick.is_some()` below guards the whole
         // branch, so an unset value just never sends anything (today's
         // behavior, unchanged).
-        let mut keepalive_tick = self
-            .account
-            .keepalive_secs
-            .filter(|&s| s > 0)
-            .map(|s| interval(Duration::from_secs(s as u64)));
+        let mut keepalive_tick =
+            self.account.keepalive_secs.filter(|&s| s > 0).map(|s| interval(Duration::from_secs(s as u64)));
 
         loop {
             tokio::select! {
@@ -630,9 +596,9 @@ impl SipStack {
     /// alongside the rest of the call-establishment logic they finish.
     async fn handle_stack_event(&mut self, ev: StackEvent) {
         match ev {
-            ev @ StackEvent::OutgoingOfferReady { .. }  => self.on_outgoing_offer_ready(ev).await,
+            ev @ StackEvent::OutgoingOfferReady { .. } => self.on_outgoing_offer_ready(ev).await,
             ev @ StackEvent::IncomingAnswerReady { .. } => self.on_incoming_answer_ready(ev).await,
-            ev @ StackEvent::OutgoingConnected { .. }   => self.on_outgoing_connected(ev).await,
+            ev @ StackEvent::OutgoingConnected { .. } => self.on_outgoing_connected(ev).await,
         }
     }
 
@@ -656,11 +622,11 @@ impl SipStack {
         match msg.start_line.clone() {
             SipStartLine::Request { method, .. } => {
                 match method {
-                    SipMethod::Invite  => self.on_invite(msg, from).await,
-                    SipMethod::Bye     => self.on_bye(msg, from).await,
-                    SipMethod::Ack     => self.on_ack(msg),
-                    SipMethod::Cancel  => self.on_cancel(msg, from).await,
-                    SipMethod::Notify  => self.on_notify(msg, from).await,
+                    SipMethod::Invite => self.on_invite(msg, from).await,
+                    SipMethod::Bye => self.on_bye(msg, from).await,
+                    SipMethod::Ack => self.on_ack(msg),
+                    SipMethod::Cancel => self.on_cancel(msg, from).await,
+                    SipMethod::Notify => self.on_notify(msg, from).await,
                     SipMethod::Options => self.send_ok(&msg, from).await,
                     // A peer's own INFO (e.g. Asterisk echoing DTMF back once
                     // `dtmf_mode=info` is set) doesn't carry anything DeeLip
@@ -669,9 +635,9 @@ impl SipStack {
                     // retransmit it several times before giving up, which is
                     // exactly what was observed live (three "unhandled
                     // request" log lines for what was really 1-2 messages).
-                    SipMethod::Info    => self.send_ok(&msg, from).await,
+                    SipMethod::Info => self.send_ok(&msg, from).await,
                     SipMethod::Message => self.on_message(msg, from).await,
-                    _                  => debug!(?method, "Ignoring unhandled request"),
+                    _ => debug!(?method, "Ignoring unhandled request"),
                 }
             }
             SipStartLine::Response { status, .. } => {
@@ -684,18 +650,19 @@ impl SipStack {
 
     async fn handle_command(&mut self, cmd: SipCommand) {
         match cmd {
-            SipCommand::MakeCall   { to, attempt_ice }   => self.initiate_call(&to, attempt_ice).await,
-            SipCommand::AcceptCall { call_id }             => self.accept_call(&call_id).await,
-            SipCommand::RejectCall { call_id }             => self.reject_call(&call_id).await,
-            SipCommand::HangUp     { call_id }             => self.hang_up(&call_id).await,
-            SipCommand::HoldCall   { call_id }             => self.send_reinvite(&call_id, true).await,
-            SipCommand::ResumeCall { call_id }             => self.send_reinvite(&call_id, false).await,
-            SipCommand::BlindTransfer { call_id, target }  => self.blind_transfer(&call_id, &target).await,
-            SipCommand::RedirectCall  { call_id, target }  => self.redirect_call(&call_id, &target).await,
-            SipCommand::SubscribePresence   { target_uri } => self.subscribe_presence(&target_uri).await,
+            SipCommand::MakeCall { to, attempt_ice } => self.initiate_call(&to, attempt_ice).await,
+            SipCommand::AcceptCall { call_id } => self.accept_call(&call_id).await,
+            SipCommand::RejectCall { call_id } => self.reject_call(&call_id).await,
+            SipCommand::HangUp { call_id } => self.hang_up(&call_id).await,
+            SipCommand::HoldCall { call_id } => self.send_reinvite(&call_id, true).await,
+            SipCommand::ResumeCall { call_id } => self.send_reinvite(&call_id, false).await,
+            SipCommand::BlindTransfer { call_id, target } => self.blind_transfer(&call_id, &target).await,
+            SipCommand::RedirectCall { call_id, target } => self.redirect_call(&call_id, &target).await,
+            SipCommand::SubscribePresence { target_uri } => self.subscribe_presence(&target_uri).await,
             SipCommand::UnsubscribePresence { target_uri } => self.unsubscribe_presence(&target_uri).await,
-            SipCommand::AttendedTransfer { call_id, consultation_call_id } =>
-                self.attended_transfer(&call_id, &consultation_call_id).await,
+            SipCommand::AttendedTransfer { call_id, consultation_call_id } => {
+                self.attended_transfer(&call_id, &consultation_call_id).await
+            }
             SipCommand::SendDtmfInfo { call_id, digit } => self.send_dtmf_info(&call_id, digit).await,
             SipCommand::SubscribeMwi { target_uri } => self.subscribe_mwi(&target_uri).await,
             SipCommand::SendMessage { to, body } => self.send_message(&to, &body).await,
@@ -718,25 +685,20 @@ impl SipStack {
         self.build_response_with_body(req, code, phrase, to_tag, body)
     }
 
-    pub(crate) fn build_response_with_body(&self, req: &SipMessage, code: u16, phrase: &str, to_tag: &str, body: &str) -> String {
-        let via      = req.header("Via").unwrap_or("");
-        let from     = req.header("From").unwrap_or("");
-        let to       = req.header("To").unwrap_or("");
-        let call_id  = req.header("Call-ID").unwrap_or("");
-        let cseq     = req.header("CSeq").unwrap_or("");
+    pub(crate) fn build_response_with_body(
+        &self, req: &SipMessage, code: u16, phrase: &str, to_tag: &str, body: &str,
+    ) -> String {
+        let via = req.header("Via").unwrap_or("");
+        let from = req.header("From").unwrap_or("");
+        let to = req.header("To").unwrap_or("");
+        let call_id = req.header("Call-ID").unwrap_or("");
+        let cseq = req.header("CSeq").unwrap_or("");
         let body_len = body.len();
 
-        let to_line = if !to_tag.is_empty() && !to.contains(";tag=") {
-            format!("{to};tag={to_tag}")
-        } else {
-            to.to_string()
-        };
+        let to_line =
+            if !to_tag.is_empty() && !to.contains(";tag=") { format!("{to};tag={to_tag}") } else { to.to_string() };
 
-        let ct_header = if !body.is_empty() {
-            "Content-Type: application/sdp\r\n"
-        } else {
-            ""
-        };
+        let ct_header = if !body.is_empty() { "Content-Type: application/sdp\r\n" } else { "" };
 
         let mut resp = format!(
             "SIP/2.0 {code} {phrase}\r\n\
@@ -749,27 +711,23 @@ impl SipStack {
              {ct_header}\
              Content-Length: {body_len}\r\n\r\n"
         );
-        if !body.is_empty() { resp.push_str(body); }
+        if !body.is_empty() {
+            resp.push_str(body);
+        }
         resp
     }
 
     pub(crate) fn build_ack(
-        &self,
-        call_id:  &str,
-        from_tag: &str,
-        to_uri:   &str,
-        to_tag:   Option<&str>,
-        cseq:     u32,
-        branch:   &str,
+        &self, call_id: &str, from_tag: &str, to_uri: &str, to_tag: Option<&str>, cseq: u32, branch: &str,
     ) -> String {
-        let server      = &self.identity_host;
-        let username    = &self.account.username;
-        let adv_ip      = &self.advertised_ip;
-        let local_ip    = &self.local_ip;
-        let local_port  = self.local_port;
+        let server = &self.identity_host;
+        let username = &self.account.username;
+        let adv_ip = &self.advertised_ip;
+        let local_ip = &self.local_ip;
+        let local_port = self.local_port;
         let to_tag_part = to_tag.map(|t| format!(";tag={t}")).unwrap_or_default();
-        let display     = self.account.display_name.as_deref().unwrap_or(username);
-        let via_proto   = self.via_proto();
+        let display = self.account.display_name.as_deref().unwrap_or(username);
+        let via_proto = self.via_proto();
         let contact_transport = self.contact_transport_param();
 
         format!(
@@ -817,13 +775,8 @@ const AUTO_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 /// (`reg_call_id`/`reg_from_tag`/`reg_cseq` etc.) that doesn't exist yet
 /// this early in connection setup.
 async fn probe_register(
-    transport:     &SipTransport,
-    proto:         TransportProtocol,
-    account:       &SipAccount,
-    local_ip:      &str,
-    advertised_ip: &str,
-    local_port:    u16,
-    server_addr:   SocketAddr,
+    transport: &SipTransport, proto: TransportProtocol, account: &SipAccount, local_ip: &str, advertised_ip: &str,
+    local_port: u16, server_addr: SocketAddr,
 ) -> bool {
     let call_id = crate::wire::util::new_call_id(local_ip);
     let branch = crate::wire::util::new_branch();

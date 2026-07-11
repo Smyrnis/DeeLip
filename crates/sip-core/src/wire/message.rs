@@ -122,11 +122,7 @@ impl SipMessage {
         }
 
         let body = body_parts.join("\r\n").into_bytes();
-        Some(SipMessage {
-            start_line,
-            headers,
-            body,
-        })
+        Some(SipMessage { start_line, headers, body })
     }
 
     // ── Header accessors ──────────────────────────────────────────────────────
@@ -134,20 +130,13 @@ impl SipMessage {
     /// Case-insensitive header lookup; returns the first match.
     pub fn header(&self, name: &str) -> Option<&str> {
         let lower = name.to_ascii_lowercase();
-        self.headers
-            .iter()
-            .find(|(k, _)| k.to_ascii_lowercase() == lower)
-            .map(|(_, v)| v.as_str())
+        self.headers.iter().find(|(k, _)| k.to_ascii_lowercase() == lower).map(|(_, v)| v.as_str())
     }
 
     /// All values for a header name (some headers repeat).
     pub fn headers_all(&self, name: &str) -> Vec<&str> {
         let lower = name.to_ascii_lowercase();
-        self.headers
-            .iter()
-            .filter(|(k, _)| k.to_ascii_lowercase() == lower)
-            .map(|(_, v)| v.as_str())
-            .collect()
+        self.headers.iter().filter(|(k, _)| k.to_ascii_lowercase() == lower).map(|(_, v)| v.as_str()).collect()
     }
 
     // ── Convenience getters ───────────────────────────────────────────────────

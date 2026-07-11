@@ -13,57 +13,69 @@ impl DeelipApp {
         let mut edited = false;
         ui.label(RichText::new(t("settings.tab_network")).font(theme::font_heading(13.5)));
         theme::full_width_card(ui, *palette, |ui| {
-            egui::Grid::new("settings_network_grid")
-                .num_columns(2)
-                .spacing([8.0, 4.0])
-                .show(ui, |ui| {
-                    field_label(ui, palette, &t("settings.network.local_sip_port_label"));
-                    ui.horizontal(|ui| {
-                        edited |= ui.add(egui::DragValue::new(&mut self.config.local_sip_port)).changed();
-                        info_hint(ui, palette, &t("settings.network.local_sip_port_hint"));
-                    });
-                    ui.end_row();
-
-                    field_label(ui, palette, &t("settings.network.stun_server_label"));
-                    ui.horizontal(|ui| {
-                        edited |= optional_text_field_sized(ui, palette, &mut self.config.stun_server, &t("settings.network.stun_server_hint"), 240.0);
-                        info_hint(ui, palette, &t("settings.network.stun_server_info"));
-                    });
-                    ui.end_row();
-
-                    field_label(ui, palette, &t("settings.network.turn_server_label"));
-                    ui.horizontal(|ui| {
-                        edited |= optional_text_field_sized(ui, palette, &mut self.config.turn_server, &t("settings.network.turn_server_hint"), 240.0);
-                        info_hint(ui, palette, &t("settings.network.turn_server_info"));
-                    });
-                    ui.end_row();
-
-                    field_label(ui, palette, &t("settings.network.turn_username_label"));
-                    edited |= optional_text_field(ui, palette, &mut self.config.turn_username, "");
-                    ui.end_row();
-
-                    field_label(ui, palette, &t("settings.network.turn_password_label"));
-                    edited |= optional_password_field(ui, palette, &mut self.config.turn_password);
-                    ui.end_row();
-
-                    field_label(ui, palette, &t("settings.network.custom_nameserver_label"));
-                    ui.horizontal(|ui| {
-                        edited |= optional_text_field_sized(ui, palette, &mut self.config.custom_nameserver, &t("settings.network.custom_nameserver_hint"), 240.0);
-                        info_hint(ui, palette, &t("settings.network.custom_nameserver_info"));
-                    });
-                    ui.end_row();
+            egui::Grid::new("settings_network_grid").num_columns(2).spacing([8.0, 4.0]).show(ui, |ui| {
+                field_label(ui, palette, &t("settings.network.local_sip_port_label"));
+                ui.horizontal(|ui| {
+                    edited |= ui.add(egui::DragValue::new(&mut self.config.local_sip_port)).changed();
+                    info_hint(ui, palette, &t("settings.network.local_sip_port_hint"));
                 });
+                ui.end_row();
+
+                field_label(ui, palette, &t("settings.network.stun_server_label"));
+                ui.horizontal(|ui| {
+                    edited |= optional_text_field_sized(
+                        ui,
+                        palette,
+                        &mut self.config.stun_server,
+                        &t("settings.network.stun_server_hint"),
+                        240.0,
+                    );
+                    info_hint(ui, palette, &t("settings.network.stun_server_info"));
+                });
+                ui.end_row();
+
+                field_label(ui, palette, &t("settings.network.turn_server_label"));
+                ui.horizontal(|ui| {
+                    edited |= optional_text_field_sized(
+                        ui,
+                        palette,
+                        &mut self.config.turn_server,
+                        &t("settings.network.turn_server_hint"),
+                        240.0,
+                    );
+                    info_hint(ui, palette, &t("settings.network.turn_server_info"));
+                });
+                ui.end_row();
+
+                field_label(ui, palette, &t("settings.network.turn_username_label"));
+                edited |= optional_text_field(ui, palette, &mut self.config.turn_username, "");
+                ui.end_row();
+
+                field_label(ui, palette, &t("settings.network.turn_password_label"));
+                edited |= optional_password_field(ui, palette, &mut self.config.turn_password);
+                ui.end_row();
+
+                field_label(ui, palette, &t("settings.network.custom_nameserver_label"));
+                ui.horizontal(|ui| {
+                    edited |= optional_text_field_sized(
+                        ui,
+                        palette,
+                        &mut self.config.custom_nameserver,
+                        &t("settings.network.custom_nameserver_hint"),
+                        240.0,
+                    );
+                    info_hint(ui, palette, &t("settings.network.custom_nameserver_info"));
+                });
+                ui.end_row();
+            });
             ui.horizontal(|ui| {
-                edited |= ui.checkbox(&mut self.config.dns_srv_enabled,
-                    t("settings.network.dns_srv_checkbox")
-                ).changed();
+                edited |=
+                    ui.checkbox(&mut self.config.dns_srv_enabled, t("settings.network.dns_srv_checkbox")).changed();
                 info_hint(ui, palette, &t("settings.network.dns_srv_hint"));
             });
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                edited |= ui.checkbox(&mut self.config.ice_enabled,
-                    t("settings.network.ice_checkbox")
-                ).changed();
+                edited |= ui.checkbox(&mut self.config.ice_enabled, t("settings.network.ice_checkbox")).changed();
                 info_hint(ui, palette, &t("settings.network.ice_hint"));
             });
             ui.add_space(6.0);

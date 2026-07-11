@@ -14,10 +14,7 @@ impl DeelipApp {
         let (tx, rx) = std::sync::mpsc::channel();
         let ctx_slot = self.ctx_slot.clone();
         std::thread::spawn(move || {
-            let names = deelip_media::video_capture::list_cameras()
-                .into_iter()
-                .map(|(_, name)| name)
-                .collect();
+            let names = deelip_media::video_capture::list_cameras().into_iter().map(|(_, name)| name).collect();
             let _ = tx.send(names);
             if let Some(ctx) = ctx_slot.lock().unwrap().as_ref() {
                 ctx.request_repaint_of(egui::ViewportId::ROOT);
@@ -53,7 +50,13 @@ impl DeelipApp {
             });
 
             ui.horizontal(|ui| {
-                edited |= device_picker(ui, "settings_camera_device", &t("settings.video.camera_label"), &mut self.config.audio.camera_device, &cameras);
+                edited |= device_picker(
+                    ui,
+                    "settings_camera_device",
+                    &t("settings.video.camera_label"),
+                    &mut self.config.audio.camera_device,
+                    &cameras,
+                );
                 info_hint(ui, palette, &t("settings.video.camera_hint"));
             });
             if cameras.is_empty() {

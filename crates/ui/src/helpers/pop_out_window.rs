@@ -39,18 +39,9 @@ use crate::helpers::window_icon;
                                      // piece of this window's identity; bundling them
                                      // into a struct wouldn't reduce real complexity.
 pub(crate) fn show_pop_out_window(
-    app: &mut DeelipApp,
-    ctx: &egui::Context,
-    self_app: SharedApp,
-    key: &'static str,
-    window_title: String,
-    size: [f32; 2],
-    min_size: [f32; 2],
-    resizable: bool,
-    is_open: fn(&DeelipApp) -> bool,
-    on_close: fn(&mut DeelipApp),
-    title: fn(&DeelipApp) -> String,
-    content: impl Fn(&mut DeelipApp, &mut egui::Ui) + Send + Sync + 'static,
+    app: &mut DeelipApp, ctx: &egui::Context, self_app: SharedApp, key: &'static str, window_title: String,
+    size: [f32; 2], min_size: [f32; 2], resizable: bool, is_open: fn(&DeelipApp) -> bool, on_close: fn(&mut DeelipApp),
+    title: fn(&DeelipApp) -> String, content: impl Fn(&mut DeelipApp, &mut egui::Ui) + Send + Sync + 'static,
 ) {
     if !is_open(app) {
         return;
@@ -100,9 +91,7 @@ pub(crate) fn show_pop_out_window(
             // now, not just Settings, to preempt the same class of bug
             // recurring in one of the others later.
             let frame = egui::Frame::central_panel(&child_ctx.style()).inner_margin(14.0);
-            egui::CentralPanel::default()
-                .frame(frame)
-                .show(child_ctx, |ui| content(&mut app, ui));
+            egui::CentralPanel::default().frame(frame).show(child_ctx, |ui| content(&mut app, ui));
 
             if child_ctx.input(|i| i.viewport().close_requested()) {
                 on_close(&mut app);

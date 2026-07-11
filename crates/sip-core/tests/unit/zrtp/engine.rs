@@ -46,12 +46,7 @@ impl Handshake {
         }
     }
 
-    fn drain_events(
-        &mut self,
-        from_initiator: bool,
-        events: Vec<EngineEvent>,
-        queue: &mut VecDeque<(bool, Vec<u8>)>,
-    ) {
+    fn drain_events(&mut self, from_initiator: bool, events: Vec<EngineEvent>, queue: &mut VecDeque<(bool, Vec<u8>)>) {
         for event in events {
             match event {
                 EngineEvent::Send(msg) => queue.push_back((from_initiator, msg.encode())),
@@ -137,18 +132,10 @@ fn tampered_dhpart2_breaks_hvi_verification() {
     // A bit-flipped DHPart2 must be rejected by the responder rather than
     // silently accepted -- this is the check that binds Commit's `hvi` to
     // the actual DH exchange.
-    let mut initiator = ZrtpEngine::new(
-        Role::Initiator,
-        [1; 12],
-        client_id(b"AliceD"),
-        MemorySharedSecretStore::default(),
-    );
-    let mut responder = ZrtpEngine::new(
-        Role::Responder,
-        [2; 12],
-        client_id(b"BobDee"),
-        MemorySharedSecretStore::default(),
-    );
+    let mut initiator =
+        ZrtpEngine::new(Role::Initiator, [1; 12], client_id(b"AliceD"), MemorySharedSecretStore::default());
+    let mut responder =
+        ZrtpEngine::new(Role::Responder, [2; 12], client_id(b"BobDee"), MemorySharedSecretStore::default());
 
     let hello_i = pop_send(initiator.start());
     let hello_r = pop_send(responder.start());

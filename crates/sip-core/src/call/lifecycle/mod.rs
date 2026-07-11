@@ -46,11 +46,7 @@ pub(super) struct StackIdentity {
 impl SipStack {
     pub(super) fn stack_identity(&self) -> StackIdentity {
         let username = self.account.username.clone();
-        let display = self
-            .account
-            .display_name
-            .clone()
-            .unwrap_or_else(|| username.clone());
+        let display = self.account.display_name.clone().unwrap_or_else(|| username.clone());
         StackIdentity {
             server: self.identity_host.clone(),
             username,
@@ -101,17 +97,9 @@ impl DialogRequestContext {
             call_id: dialog.call_id.clone(),
             local_tag: dialog.local_tag.clone(),
             remote_uri: dialog.remote_uri.clone(),
-            remote_tag_param: dialog
-                .remote_tag
-                .as_deref()
-                .map(|t| format!(";tag={t}"))
-                .unwrap_or_default(),
+            remote_tag_param: dialog.remote_tag.as_deref().map(|t| format!(";tag={t}")).unwrap_or_default(),
             remote_via: dialog.remote_via.clone(),
-            contact: dialog
-                .remote_contact
-                .as_deref()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(identity.server_addr),
+            contact: dialog.remote_contact.as_deref().and_then(|s| s.parse().ok()).unwrap_or(identity.server_addr),
             via_proto: identity.via_proto,
             contact_transport: identity.contact_transport,
         }

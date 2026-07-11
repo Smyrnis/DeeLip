@@ -15,8 +15,8 @@ use crate::{
     events::SipEvent,
     wire::message::{SipMessage, SipMethod},
     wire::sdp::{
-        build_answer, build_video_media_section, parse_sdp_forcing, parse_video_section,
-        split_media_sections, SrtpParams,
+        build_answer, build_video_media_section, parse_sdp_forcing, parse_video_section, split_media_sections,
+        SrtpParams,
     },
     wire::util::{new_tag, parse_tag, parse_uri},
 };
@@ -48,8 +48,7 @@ impl SipStack {
                 // redundant one of our own.
                 if let Some(interval) = dialog.session_expires {
                     dialog.session_refresh_at = Some(
-                        tokio::time::Instant::now()
-                            + tokio::time::Duration::from_secs((interval / 2).max(1) as u64),
+                        tokio::time::Instant::now() + tokio::time::Duration::from_secs((interval / 2).max(1) as u64),
                     );
                 }
                 Some((is_sendonly, was_held, local_sdp, local_tag))
@@ -63,13 +62,9 @@ impl SipStack {
             let ok = self.build_response_with_body(&msg, 200, "OK", &local_tag, &local_sdp);
             let _ = self.transport.send(ok.as_bytes(), from).await;
             let ev = if is_sendonly {
-                Some(SipEvent::RemoteHeld {
-                    call_id: call_id.clone(),
-                })
+                Some(SipEvent::RemoteHeld { call_id: call_id.clone() })
             } else if was_held {
-                Some(SipEvent::RemoteResumed {
-                    call_id: call_id.clone(),
-                })
+                Some(SipEvent::RemoteResumed { call_id: call_id.clone() })
             } else {
                 // Same direction as before (typically a session-refresh
                 // re-INVITE with unchanged SDP) -- nothing actually changed,
@@ -111,17 +106,12 @@ impl SipStack {
         // `accept_call`/`on_incoming_answer_ready` to echo back in the 200
         // OK -- `self.account.session_timers_enabled` is checked there, not
         // here, since accepting is what actually commits to it.
-        dialog.incoming_session_expires = msg
-            .header("Session-Expires")
-            .and_then(crate::wire::util::parse_session_expires);
+        dialog.incoming_session_expires =
+            msg.header("Session-Expires").and_then(crate::wire::util::parse_session_expires);
         self.dialogs.insert(call_id.clone(), dialog);
 
         let remote_answer_after = crate::wire::util::parse_call_info_answer_after(&msg);
-        let _ = self.event_tx.send(SipEvent::IncomingCall {
-            call_id,
-            from: from_uri,
-            remote_answer_after,
-        });
+        let _ = self.event_tx.send(SipEvent::IncomingCall { call_id, from: from_uri, remote_answer_after });
     }
 
     /// Check codec compatibility and allocate a local RTP port -- both fast,
@@ -139,11 +129,7 @@ impl SipStack {
         let remote_sdp = dialog.remote_sdp.clone().unwrap_or_default();
 
         let codecs = media_setup::account_codecs(&self.account);
-        let force_codec = self
-            .account
-            .force_incoming_codec
-            .as_deref()
-            .and_then(media_setup::codec_from_str);
+        let force_codec = self.account.force_incoming_codec.as_deref().and_then(media_setup::codec_from_str);
         let Some(parsed) = parse_sdp_forcing(&remote_sdp, &codecs, force_codec) else {
             self.reject_call(call_id).await;
             let _ = self.event_tx.send(SipEvent::CallFailed {
@@ -193,34 +179,17 @@ impl SipStack {
             let mut relay = None;
             let ice_result = media_setup::try_answer_with_ice(&network, wants_ice, &parsed).await;
             let (rtp_ip, rtp_port, ice_attrs, ice) = match ice_result {
-                Some((attrs, addr, conn)) => {
-                    (addr.ip().to_string(), addr.port(), Some(attrs), Some(conn))
-                }
+                Some((attrs, addr, conn)) => (addr.ip().to_string(), addr.port(), Some(attrs), Some(conn)),
                 None => {
-                    let (ip, port) = media_setup::resolve_rtp_endpoint(
-                        &network,
-                        &advertised_ip,
-                        local_rtp,
-                        &mut relay,
-                    )
-                    .await;
+                    let (ip, port) =
+                        media_setup::resolve_rtp_endpoint(&network, &advertised_ip, local_rtp, &mut relay).await;
                     (ip, port, None, None)
                 }
             };
 
-            let local_srtp = if wants_srtp {
-                Some(SrtpParams::generate())
-            } else {
-                None
-            };
-            let mut local_sdp = build_answer(
-                &rtp_ip,
-                rtp_port,
-                parsed.codec,
-                local_srtp.as_ref(),
-                ice_attrs.as_ref(),
-                vad_enabled,
-            );
+            let local_srtp = if wants_srtp { Some(SrtpParams::generate()) } else { None };
+            let mut local_sdp =
+                build_answer(&rtp_ip, rtp_port, parsed.codec, local_srtp.as_ref(), ice_attrs.as_ref(), vad_enabled);
 
             let video = Self::prepare_video_answer(
                 &network,
@@ -253,12 +222,8 @@ impl SipStack {
     /// video or our own port allocation fails -- video is always
     /// additive, never a reason to decline the whole call.
     async fn prepare_video_answer(
-        network: &NetworkConfig,
-        advertised_ip: &str,
-        wants_ice: bool,
-        wants_srtp: bool,
-        parsed_video: Option<crate::wire::sdp::ParsedVideoMedia>,
-        local_sdp: &mut String,
+        network: &NetworkConfig, advertised_ip: &str, wants_ice: bool, wants_srtp: bool,
+        parsed_video: Option<crate::wire::sdp::ParsedVideoMedia>, local_sdp: &mut String,
     ) -> Option<IncomingVideoAnswer> {
         let parsed = parsed_video?;
         let local_rtp = match deelip_nat::alloc_rtp_port(network.rtp_port_range) {
@@ -278,21 +243,13 @@ impl SipStack {
         )
         .await;
         let (rtp_ip, rtp_port, ice_attrs, ice) = match ice_result {
-            Some((attrs, addr, conn)) => {
-                (addr.ip().to_string(), addr.port(), Some(attrs), Some(conn))
-            }
+            Some((attrs, addr, conn)) => (addr.ip().to_string(), addr.port(), Some(attrs), Some(conn)),
             None => {
-                let (ip, port) =
-                    media_setup::resolve_rtp_endpoint(network, advertised_ip, local_rtp, &mut relay)
-                        .await;
+                let (ip, port) = media_setup::resolve_rtp_endpoint(network, advertised_ip, local_rtp, &mut relay).await;
                 (ip, port, None, None)
             }
         };
-        let local_srtp = if wants_srtp {
-            Some(crate::wire::sdp::SrtpParams::generate())
-        } else {
-            None
-        };
+        let local_srtp = if wants_srtp { Some(crate::wire::sdp::SrtpParams::generate()) } else { None };
         local_sdp.push_str(&build_video_media_section(
             &rtp_ip,
             rtp_port,
@@ -310,16 +267,8 @@ impl SipStack {
     /// dialog is already gone (CANCELed/hung-up while this was resolving) --
     /// there's nothing left to answer.
     pub(crate) async fn on_incoming_answer_ready(&mut self, ev: StackEvent) {
-        let StackEvent::IncomingAnswerReady {
-            call_id,
-            parsed,
-            local_sdp,
-            local_rtp,
-            local_srtp,
-            relay,
-            ice,
-            video,
-        } = ev
+        let StackEvent::IncomingAnswerReady { call_id, parsed, local_sdp, local_rtp, local_srtp, relay, ice, video } =
+            ev
         else {
             unreachable!("caller already matched this variant")
         };
@@ -412,10 +361,8 @@ impl SipStack {
             ready.video = Some(video_ready);
         }
 
-        let dialog = self
-            .dialogs
-            .get_mut(&call_id)
-            .expect("dialog present -- checked above, nothing removes it in between");
+        let dialog =
+            self.dialogs.get_mut(&call_id).expect("dialog present -- checked above, nothing removes it in between");
         dialog.state = DialogState::Confirmed;
         dialog.local_sdp = Some(local_sdp);
         dialog.media = Some(media);
@@ -423,17 +370,12 @@ impl SipStack {
             dialog.session_expires = Some(interval);
             dialog.we_are_refresher = we_are_refresher;
             if we_are_refresher {
-                dialog.session_refresh_at = Some(
-                    tokio::time::Instant::now()
-                        + tokio::time::Duration::from_secs((interval / 2).max(1) as u64),
-                );
+                dialog.session_refresh_at =
+                    Some(tokio::time::Instant::now() + tokio::time::Duration::from_secs((interval / 2).max(1) as u64));
             }
         }
 
-        let _ = self.event_tx.send(SipEvent::CallConnected {
-            call_id,
-            media: ready,
-        });
+        let _ = self.event_tx.send(SipEvent::CallConnected { call_id, media: ready });
     }
 
     pub(crate) async fn reject_call(&mut self, call_id: &str) {

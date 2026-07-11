@@ -110,10 +110,7 @@ impl H264Encoder {
     /// bitstream -- may contain multiple NAL units (e.g. SPS+PPS+slice on
     /// a keyframe). Ready for `video_rtp::fragment_nal_units`.
     pub fn encode(&mut self, frame: &Yuv420Frame) -> anyhow::Result<Vec<u8>> {
-        let bitstream = self
-            .inner
-            .encode(frame)
-            .map_err(|e| anyhow::anyhow!("H.264 encode: {e}"))?;
+        let bitstream = self.inner.encode(frame).map_err(|e| anyhow::anyhow!("H.264 encode: {e}"))?;
         Ok(bitstream.to_vec())
     }
 }
@@ -125,8 +122,7 @@ pub struct H264Decoder {
 
 impl H264Decoder {
     pub fn new() -> anyhow::Result<Self> {
-        let inner =
-            OpenH264Decoder::new().map_err(|e| anyhow::anyhow!("Creating H.264 decoder: {e}"))?;
+        let inner = OpenH264Decoder::new().map_err(|e| anyhow::anyhow!("Creating H.264 decoder: {e}"))?;
         Ok(Self { inner })
     }
 
@@ -135,19 +131,10 @@ impl H264Decoder {
     /// data has accumulated yet to emit a frame (e.g. still waiting on a
     /// keyframe/SPS/PPS) -- matches `openh264`'s own `Option`-returning decode.
     pub fn decode(&mut self, nal_data: &[u8]) -> anyhow::Result<Option<Yuv420Frame>> {
-        let decoded = self
-            .inner
-            .decode(nal_data)
-            .map_err(|e| anyhow::anyhow!("H.264 decode: {e}"))?;
+        let decoded = self.inner.decode(nal_data).map_err(|e| anyhow::anyhow!("H.264 decode: {e}"))?;
         Ok(decoded.map(|d| {
             let (w, h) = d.dimensions();
-            Yuv420Frame {
-                width: w as u32,
-                height: h as u32,
-                y: d.y().to_vec(),
-                u: d.u().to_vec(),
-                v: d.v().to_vec(),
-            }
+            Yuv420Frame { width: w as u32, height: h as u32, y: d.y().to_vec(), u: d.u().to_vec(), v: d.v().to_vec() }
         }))
     }
 }

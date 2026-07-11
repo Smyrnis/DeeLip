@@ -46,10 +46,7 @@ fn rgb8_to_yuv420_known_color_lands_in_expected_range() {
     let blue_frame = rgb8_to_yuv420(&blue, 32, 32).unwrap();
     assert!(blue_frame.u[0] > 128, "blue should have above-neutral U (Cb)");
     assert!(blue_frame.v[0] < 128, "blue should have below-neutral V (Cr)");
-    assert!(
-        blue_frame.y[0] < red_frame.y[0],
-        "blue's luma contribution is lower than red's"
-    );
+    assert!(blue_frame.y[0] < red_frame.y[0], "blue's luma contribution is lower than red's");
 }
 
 #[test]

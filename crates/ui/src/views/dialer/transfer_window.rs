@@ -84,10 +84,7 @@ impl DeelipApp {
             transfer_target_editor(ui, palette, &mut self.transfer_target);
             ui.add_space(8.0);
             ui.vertical_centered(|ui| {
-                if ui
-                    .button(format!("{}  {}", egui_phosphor::regular::EXPORT, t("common.send_button")))
-                    .clicked()
-                {
+                if ui.button(format!("{}  {}", egui_phosphor::regular::EXPORT, t("common.send_button"))).clicked() {
                     self.do_transfer();
                 }
             });

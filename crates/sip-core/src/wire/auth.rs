@@ -11,12 +11,7 @@ fn md5_hex(data: &str) -> String {
 
 /// Compute the RFC 2617 digest response value.
 pub fn compute_digest_response(
-    username: &str,
-    realm: &str,
-    password: &str,
-    method: &str,
-    uri: &str,
-    nonce: &str,
+    username: &str, realm: &str, password: &str, method: &str, uri: &str, nonce: &str,
 ) -> String {
     let ha1 = md5_hex(&format!("{username}:{realm}:{password}"));
     let ha2 = md5_hex(&format!("{method}:{uri}"));
@@ -24,13 +19,7 @@ pub fn compute_digest_response(
 }
 
 /// Build an `Authorization:` header value.
-pub fn build_auth_header(
-    username: &str,
-    realm: &str,
-    nonce: &str,
-    uri: &str,
-    response: &str,
-) -> String {
+pub fn build_auth_header(username: &str, realm: &str, nonce: &str, uri: &str, response: &str) -> String {
     format!(
         "Authorization: Digest username=\"{username}\", realm=\"{realm}\", \
          nonce=\"{nonce}\", uri=\"{uri}\", response=\"{response}\", algorithm=MD5"
@@ -42,28 +31,11 @@ pub fn build_auth_header(
 /// parse-compute-build sequence shared by REGISTER, INVITE, and SUBSCRIBE's
 /// 401/407 retry handling (previously duplicated inline at each call site).
 pub fn build_challenge_response(
-    username: &str,
-    password: &str,
-    method: &str,
-    uri: &str,
-    challenge_header: &str,
+    username: &str, password: &str, method: &str, uri: &str, challenge_header: &str,
 ) -> Option<String> {
     let challenge = DigestChallenge::parse(challenge_header)?;
-    let digest = compute_digest_response(
-        username,
-        &challenge.realm,
-        password,
-        method,
-        uri,
-        &challenge.nonce,
-    );
-    Some(build_auth_header(
-        username,
-        &challenge.realm,
-        &challenge.nonce,
-        uri,
-        &digest,
-    ))
+    let digest = compute_digest_response(username, &challenge.realm, password, method, uri, &challenge.nonce);
+    Some(build_auth_header(username, &challenge.realm, &challenge.nonce, uri, &digest))
 }
 
 // ── Challenge parsing ─────────────────────────────────────────────────────────
@@ -79,20 +51,14 @@ pub struct DigestChallenge {
 impl DigestChallenge {
     /// Parse a `WWW-Authenticate: Digest ...` header value.
     pub fn parse(header: &str) -> Option<Self> {
-        let body = header
-            .trim_start_matches("Digest")
-            .trim_start_matches("digest")
-            .trim();
+        let body = header.trim_start_matches("Digest").trim_start_matches("digest").trim();
 
         let params = parse_kv_pairs(body);
 
         Some(DigestChallenge {
             realm: params.get("realm")?.clone(),
             nonce: params.get("nonce")?.clone(),
-            algorithm: params
-                .get("algorithm")
-                .cloned()
-                .unwrap_or_else(|| "MD5".into()),
+            algorithm: params.get("algorithm").cloned().unwrap_or_else(|| "MD5".into()),
             opaque: params.get("opaque").cloned(),
         })
     }

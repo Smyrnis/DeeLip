@@ -19,18 +19,16 @@ use deelip_sip::{AudioCodec, SrtpSession};
 
 use crate::aec::EchoCanceller;
 use crate::agc::AutomaticGainControl;
-use crate::zrtp_session::{client_id as zrtp_client_id, ZrtpOutcome, ZrtpParams, ZrtpRuntime};
 use crate::audio::{open_streams, AudioStreams, PlaybackTx, FRAME_SAMPLES};
 use crate::codec::{
-    decode_pcma, decode_pcmu, encode_pcma, encode_pcmu, G722Decoder, G722Encoder, G729Decoder,
-    G729Encoder, GsmDecoder, GsmEncoder, IlbcDecoder, IlbcEncoder, OpusDecoder, OpusEncoder,
+    decode_pcma, decode_pcmu, encode_pcma, encode_pcmu, G722Decoder, G722Encoder, G729Decoder, G729Encoder, GsmDecoder,
+    GsmEncoder, IlbcDecoder, IlbcEncoder, OpusDecoder, OpusEncoder,
 };
-use crate::dtmf::{
-    build_dtmf_burst, char_to_event, dtmf_tone_frame, DTMF_PAYLOAD_TYPE, INBAND_FRAME_COUNT,
-};
+use crate::dtmf::{build_dtmf_burst, char_to_event, dtmf_tone_frame, DTMF_PAYLOAD_TYPE, INBAND_FRAME_COUNT};
 use crate::recording::{RecordingOptions, RecordingWriter};
 use crate::rtp::{RtpPacket, RtpSender};
-use crate::vad::{ComfortNoiseState, VadDecision, VoiceActivityDetector, synthesize_comfort_noise};
+use crate::vad::{synthesize_comfort_noise, ComfortNoiseState, VadDecision, VoiceActivityDetector};
+use crate::zrtp_session::{client_id as zrtp_client_id, ZrtpOutcome, ZrtpParams, ZrtpRuntime};
 
 /// One live encoder for whichever `AudioCodec` a leg negotiated -- replaces
 /// 5 separate `Option<XEncoder>` locals plus a 7-arm `match codec { ... }`
@@ -54,14 +52,14 @@ enum AudioEncoder {
 impl AudioEncoder {
     fn new(codec: AudioCodec, leg_label: &str) -> anyhow::Result<Self> {
         Ok(match codec {
-            AudioCodec::Opus => Self::Opus(
-                OpusEncoder::new().with_context(|| format!("Creating Opus encoder{leg_label}"))?,
-            ),
+            AudioCodec::Opus => {
+                Self::Opus(OpusEncoder::new().with_context(|| format!("Creating Opus encoder{leg_label}"))?)
+            }
             AudioCodec::G722 => Self::G722(Box::default()),
             AudioCodec::Gsm => Self::Gsm(GsmEncoder::new()),
-            AudioCodec::Ilbc => Self::Ilbc(
-                IlbcEncoder::new().with_context(|| format!("Creating iLBC encoder{leg_label}"))?,
-            ),
+            AudioCodec::Ilbc => {
+                Self::Ilbc(IlbcEncoder::new().with_context(|| format!("Creating iLBC encoder{leg_label}"))?)
+            }
             AudioCodec::G729 => Self::G729(Box::default()),
             AudioCodec::Pcma => Self::Pcma,
             AudioCodec::Pcmu => Self::Pcmu,
@@ -98,14 +96,14 @@ enum AudioDecoder {
 impl AudioDecoder {
     fn new(codec: AudioCodec, leg_label: &str) -> anyhow::Result<Self> {
         Ok(match codec {
-            AudioCodec::Opus => Self::Opus(
-                OpusDecoder::new().with_context(|| format!("Creating Opus decoder{leg_label}"))?,
-            ),
+            AudioCodec::Opus => {
+                Self::Opus(OpusDecoder::new().with_context(|| format!("Creating Opus decoder{leg_label}"))?)
+            }
             AudioCodec::G722 => Self::G722(Box::default()),
             AudioCodec::Gsm => Self::Gsm(GsmDecoder::new()),
-            AudioCodec::Ilbc => Self::Ilbc(
-                IlbcDecoder::new().with_context(|| format!("Creating iLBC decoder{leg_label}"))?,
-            ),
+            AudioCodec::Ilbc => {
+                Self::Ilbc(IlbcDecoder::new().with_context(|| format!("Creating iLBC decoder{leg_label}"))?)
+            }
             AudioCodec::G729 => Self::G729(Box::default()),
             AudioCodec::Pcma => Self::Pcma,
             AudioCodec::Pcmu => Self::Pcmu,
@@ -148,12 +146,8 @@ fn ts_increment_for(codec: AudioCodec) -> u32 {
 /// material to the send task over `encrypt_tx` (the two tasks each own
 /// their own `SrtpContext`, so this is the only way to update both).
 async fn handle_zrtp_outcomes(
-    outcomes: Vec<ZrtpOutcome>,
-    sock: &RtpSocket,
-    remote_rtp: SocketAddr,
-    decrypt_ctx: &mut Option<SrtpContext>,
-    encrypt_tx: &mpsc::UnboundedSender<([u8; 16], [u8; 14])>,
-    sas: &Arc<Mutex<Option<String>>>,
+    outcomes: Vec<ZrtpOutcome>, sock: &RtpSocket, remote_rtp: SocketAddr, decrypt_ctx: &mut Option<SrtpContext>,
+    encrypt_tx: &mpsc::UnboundedSender<([u8; 16], [u8; 14])>, sas: &Arc<Mutex<Option<String>>>,
 ) {
     for outcome in outcomes {
         match outcome {
@@ -165,13 +159,7 @@ async fn handle_zrtp_outcomes(
             ZrtpOutcome::Sas(value) => {
                 *sas.lock().unwrap() = Some(value);
             }
-            ZrtpOutcome::Secure {
-                srtp_key_i,
-                srtp_salt_i,
-                srtp_key_r,
-                srtp_salt_r,
-                role,
-            } => {
+            ZrtpOutcome::Secure { srtp_key_i, srtp_salt_i, srtp_key_r, srtp_salt_r, role } => {
                 let (encrypt_key, encrypt_salt, decrypt_key, decrypt_salt) = match role {
                     Role::Initiator => (srtp_key_i, srtp_salt_i, srtp_key_r, srtp_salt_r),
                     Role::Responder => (srtp_key_r, srtp_salt_r, srtp_key_i, srtp_salt_i),
@@ -297,8 +285,7 @@ impl JitterTracker {
         let now = Instant::now();
         if let (Some(prev_arrival), Some(prev_ts)) = (self.last_arrival, self.last_rtp_ts) {
             let arrival_diff_ms = now.duration_since(prev_arrival).as_secs_f64() * 1000.0;
-            let rtp_diff_ms =
-                (pkt.timestamp as i64 - prev_ts as i64).unsigned_abs() as f64 / clock_hz * 1000.0;
+            let rtp_diff_ms = (pkt.timestamp as i64 - prev_ts as i64).unsigned_abs() as f64 / clock_hz * 1000.0;
             let d = (arrival_diff_ms - rtp_diff_ms).abs();
             stats.jitter_ms += (d - stats.jitter_ms) / 16.0;
         }
@@ -434,8 +421,7 @@ impl MediaEngine {
         } = opts;
 
         let (audio_streams, mut cap_rx, hw_playback_tx, echo_ref, output_gain) =
-            open_streams(input_device, output_device, echo_cancellation)
-                .context("Opening audio streams")?;
+            open_streams(input_device, output_device, echo_cancellation).context("Opening audio streams")?;
         let input_gain = crate::audio::new_shared_gain();
 
         let stats: SharedStats = Arc::new(Mutex::new(CallStatsSnapshot {
@@ -466,15 +452,7 @@ impl MediaEngine {
         // traffic with the REMOTE's declared key.
         let mut encrypt_ctx: Option<SrtpContext> = srtp
             .as_ref()
-            .map(|s| {
-                SrtpContext::new(
-                    &s.local.key,
-                    &s.local.salt,
-                    ProtectionProfile::Aes128CmHmacSha1_80,
-                    None,
-                    None,
-                )
-            })
+            .map(|s| SrtpContext::new(&s.local.key, &s.local.salt, ProtectionProfile::Aes128CmHmacSha1_80, None, None))
             .transpose()
             .context("Creating SRTP encrypt context")?;
         let mut decrypt_ctx: Option<SrtpContext> = srtp
@@ -493,8 +471,7 @@ impl MediaEngine {
 
         // ── ZRTP (leg 1 only -- see `start`'s doc comment) ───────────────────────
         let zrtp_sas: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
-        let (zrtp_encrypt_tx, mut zrtp_encrypt_rx) =
-            mpsc::unbounded_channel::<([u8; 16], [u8; 14])>();
+        let (zrtp_encrypt_tx, mut zrtp_encrypt_rx) = mpsc::unbounded_channel::<([u8; 16], [u8; 14])>();
         let mut zrtp_runtime: Option<ZrtpRuntime> = None;
         let mut zrtp_pending_sends: Vec<Vec<u8>> = Vec::new();
         if let Some(params) = zrtp {
@@ -543,13 +520,7 @@ impl MediaEngine {
                 .srtp
                 .as_ref()
                 .map(|s| {
-                    SrtpContext::new(
-                        &s.local.key,
-                        &s.local.salt,
-                        ProtectionProfile::Aes128CmHmacSha1_80,
-                        None,
-                        None,
-                    )
+                    SrtpContext::new(&s.local.key, &s.local.salt, ProtectionProfile::Aes128CmHmacSha1_80, None, None)
                 })
                 .transpose()
                 .context("Creating leg2 SRTP encrypt context")?;
@@ -571,10 +542,7 @@ impl MediaEngine {
             leg2_remote = Some(leg.remote_rtp);
             leg2_codec = Some(leg.codec);
             leg2_dtmf_pt = Some(leg.dtmf_pt.unwrap_or(DTMF_PAYLOAD_TYPE));
-            debug!(
-                "Conference mode: leg1={remote_rtp} ({codec:?}), leg2={} ({:?})",
-                leg.remote_rtp, leg.codec
-            );
+            debug!("Conference mode: leg1={remote_rtp} ({codec:?}), leg2={} ({:?})", leg.remote_rtp, leg.codec);
         }
 
         // Per-leg decode buffers, mixed together (if leg2 present) once per
@@ -583,9 +551,7 @@ impl MediaEngine {
         // buffer drained with nothing to mix, functionally identical to the
         // old direct recv-task-to-playback push.
         let leg1_buf: PlaybackTx = Arc::new(Mutex::new(VecDeque::new()));
-        let leg2_buf: Option<PlaybackTx> = second_leg
-            .as_ref()
-            .map(|_| Arc::new(Mutex::new(VecDeque::new())));
+        let leg2_buf: Option<PlaybackTx> = second_leg.as_ref().map(|_| Arc::new(Mutex::new(VecDeque::new())));
 
         let (stop_tx, stop_rx) = watch::channel(false);
         let mut stop_send = stop_rx.clone();
@@ -614,8 +580,7 @@ impl MediaEngine {
         let mut dtmf_seq = 0u16;
         let mut encoder = AudioEncoder::new(codec, "")?;
         let mut encoder2 = leg2_codec.map(|c| AudioEncoder::new(c, " (leg2)")).transpose()?;
-        let mut rtp_send2 =
-            leg2_codec.map(|c| RtpSender::new(c.payload_type(), ts_increment_for(c)));
+        let mut rtp_send2 = leg2_codec.map(|c| RtpSender::new(c.payload_type(), ts_increment_for(c)));
         let dtmf_ssrc2 = rtp_send2.as_ref().map(|r| r.ssrc);
         let mut dtmf_seq2 = 0u16;
 
@@ -1051,11 +1016,8 @@ impl MediaEngine {
             if guard.is_some() {
                 return;
             }
-            match RecordingWriter::create(
-                &self.call_id,
-                self.recordings_dir_override.as_deref(),
-                self.recording_format,
-            ) {
+            match RecordingWriter::create(&self.call_id, self.recordings_dir_override.as_deref(), self.recording_format)
+            {
                 Ok(w) => *guard = Some(w),
                 Err(e) => error!("Failed to start call recording: {e}"),
             }
@@ -1135,9 +1097,7 @@ fn push_to_jitter(jitter: &PlaybackTx, pcm: &[i16]) {
 /// cadence (same idiom as `write_recording`'s near/far pairing).
 fn drain_leg(buf: &PlaybackTx) -> Vec<i16> {
     let mut b = buf.lock().unwrap();
-    (0..FRAME_SAMPLES)
-        .map(|_| b.pop_front().unwrap_or(0))
-        .collect()
+    (0..FRAME_SAMPLES).map(|_| b.pop_front().unwrap_or(0)).collect()
 }
 
 /// Sum two PCM frames sample-by-sample, halving each first so two

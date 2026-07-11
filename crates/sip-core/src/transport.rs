@@ -23,24 +23,19 @@ pub enum SipTransport {
 
 impl SipTransport {
     pub async fn connect(
-        proto: TransportProtocol,
-        bind_addr: SocketAddr,
-        server_addr: SocketAddr,
-        server_name: &str,
+        proto: TransportProtocol, bind_addr: SocketAddr, server_addr: SocketAddr, server_name: &str,
         insecure_skip_verify: bool,
     ) -> anyhow::Result<Self> {
         match proto {
             TransportProtocol::Tls => {
-                let conn =
-                    TlsConn::connect(bind_addr, server_addr, server_name, insecure_skip_verify)
-                        .await
-                        .context("Connecting SIP-over-TLS transport")?;
+                let conn = TlsConn::connect(bind_addr, server_addr, server_name, insecure_skip_verify)
+                    .await
+                    .context("Connecting SIP-over-TLS transport")?;
                 Ok(Self::Tls(conn))
             }
             TransportProtocol::Tcp => {
-                let conn = TcpConn::connect(bind_addr, server_addr)
-                    .await
-                    .context("Connecting SIP-over-TCP transport")?;
+                let conn =
+                    TcpConn::connect(bind_addr, server_addr).await.context("Connecting SIP-over-TCP transport")?;
                 Ok(Self::Tcp(conn))
             }
             TransportProtocol::Udp => {
@@ -49,9 +44,7 @@ impl SipTransport {
                 Ok(Self::Udp(socket))
             }
             TransportProtocol::Auto => {
-                unreachable!(
-                    "Auto must be resolved to a concrete transport before SipTransport::connect"
-                )
+                unreachable!("Auto must be resolved to a concrete transport before SipTransport::connect")
             }
         }
     }
@@ -109,11 +102,7 @@ struct StreamHalves<S> {
 impl<S: AsyncRead + AsyncWrite + Unpin> StreamHalves<S> {
     fn new(stream: S, local_addr: SocketAddr) -> Self {
         let (read_half, write_half) = split(stream);
-        Self {
-            local_addr,
-            write: Mutex::new(write_half),
-            read: Mutex::new((read_half, MessageFramer::new())),
-        }
+        Self { local_addr, write: Mutex::new(write_half), read: Mutex::new((read_half, MessageFramer::new())) }
     }
 
     async fn send(&self, data: &[u8]) -> anyhow::Result<()> {
@@ -147,24 +136,14 @@ pub struct TcpConn {
 
 impl TcpConn {
     async fn connect(bind_addr: SocketAddr, server_addr: SocketAddr) -> anyhow::Result<Self> {
-        let socket = if bind_addr.is_ipv4() {
-            TcpSocket::new_v4()?
-        } else {
-            TcpSocket::new_v6()?
-        };
+        let socket = if bind_addr.is_ipv4() { TcpSocket::new_v4()? } else { TcpSocket::new_v6()? };
         socket.set_reuseaddr(true)?;
         socket.bind(bind_addr).context("Binding TCP socket")?;
-        let stream = socket
-            .connect(server_addr)
-            .await
-            .context("Connecting TCP")?;
+        let stream = socket.connect(server_addr).await.context("Connecting TCP")?;
         let local_addr = stream.local_addr()?;
         debug!("SIP transport (TCP) connected to {server_addr} (local {local_addr})");
 
-        Ok(Self {
-            server_addr,
-            halves: StreamHalves::new(stream, local_addr),
-        })
+        Ok(Self { server_addr, halves: StreamHalves::new(stream, local_addr) })
     }
 }
 
@@ -177,10 +156,7 @@ pub struct TlsConn {
 
 impl TlsConn {
     async fn connect(
-        bind_addr: SocketAddr,
-        server_addr: SocketAddr,
-        server_name: &str,
-        insecure_skip_verify: bool,
+        bind_addr: SocketAddr, server_addr: SocketAddr, server_name: &str, insecure_skip_verify: bool,
     ) -> anyhow::Result<Self> {
         // rustls 0.23 requires an explicit process-wide crypto provider; idempotent.
         let _ = rustls::crypto::ring::default_provider().install_default();
@@ -199,38 +175,23 @@ impl TlsConn {
             for cert in rustls_native_certs::load_native_certs().certs {
                 let _ = roots.add(cert);
             }
-            rustls::ClientConfig::builder()
-                .with_root_certificates(roots)
-                .with_no_client_auth()
+            rustls::ClientConfig::builder().with_root_certificates(roots).with_no_client_auth()
         };
 
         let connector = TlsConnector::from(Arc::new(config));
-        let name = rustls::pki_types::ServerName::try_from(server_name.to_string())
-            .context("Invalid TLS server name")?;
+        let name =
+            rustls::pki_types::ServerName::try_from(server_name.to_string()).context("Invalid TLS server name")?;
 
-        let socket = if bind_addr.is_ipv4() {
-            TcpSocket::new_v4()?
-        } else {
-            TcpSocket::new_v6()?
-        };
+        let socket = if bind_addr.is_ipv4() { TcpSocket::new_v4()? } else { TcpSocket::new_v6()? };
         socket.set_reuseaddr(true)?;
         socket.bind(bind_addr).context("Binding TCP socket")?;
-        let tcp = socket
-            .connect(server_addr)
-            .await
-            .context("Connecting TCP")?;
+        let tcp = socket.connect(server_addr).await.context("Connecting TCP")?;
         let local_addr = tcp.local_addr()?;
 
-        let tls_stream = connector
-            .connect(name, tcp)
-            .await
-            .context("TLS handshake")?;
+        let tls_stream = connector.connect(name, tcp).await.context("TLS handshake")?;
         debug!("SIP transport (TLS) connected to {server_addr} (local {local_addr})");
 
-        Ok(Self {
-            server_addr,
-            halves: StreamHalves::new(tls_stream, local_addr),
-        })
+        Ok(Self { server_addr, halves: StreamHalves::new(tls_stream, local_addr) })
     }
 }
 
@@ -245,39 +206,27 @@ struct NoCertVerification {
 
 impl NoCertVerification {
     fn new() -> Self {
-        Self {
-            supported_algs: rustls::crypto::ring::default_provider()
-                .signature_verification_algorithms,
-        }
+        Self { supported_algs: rustls::crypto::ring::default_provider().signature_verification_algorithms }
     }
 }
 
 impl rustls::client::danger::ServerCertVerifier for NoCertVerification {
     fn verify_server_cert(
-        &self,
-        _end_entity: &rustls::pki_types::CertificateDer<'_>,
-        _intermediates: &[rustls::pki_types::CertificateDer<'_>],
-        _server_name: &rustls::pki_types::ServerName<'_>,
-        _ocsp_response: &[u8],
-        _now: rustls::pki_types::UnixTime,
+        &self, _end_entity: &rustls::pki_types::CertificateDer<'_>,
+        _intermediates: &[rustls::pki_types::CertificateDer<'_>], _server_name: &rustls::pki_types::ServerName<'_>,
+        _ocsp_response: &[u8], _now: rustls::pki_types::UnixTime,
     ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
         Ok(rustls::client::danger::ServerCertVerified::assertion())
     }
 
     fn verify_tls12_signature(
-        &self,
-        message: &[u8],
-        cert: &rustls::pki_types::CertificateDer<'_>,
-        dss: &rustls::DigitallySignedStruct,
+        &self, message: &[u8], cert: &rustls::pki_types::CertificateDer<'_>, dss: &rustls::DigitallySignedStruct,
     ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
         rustls::crypto::verify_tls12_signature(message, cert, dss, &self.supported_algs)
     }
 
     fn verify_tls13_signature(
-        &self,
-        message: &[u8],
-        cert: &rustls::pki_types::CertificateDer<'_>,
-        dss: &rustls::DigitallySignedStruct,
+        &self, message: &[u8], cert: &rustls::pki_types::CertificateDer<'_>, dss: &rustls::DigitallySignedStruct,
     ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
         rustls::crypto::verify_tls13_signature(message, cert, dss, &self.supported_algs)
     }

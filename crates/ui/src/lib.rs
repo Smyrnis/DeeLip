@@ -31,36 +31,15 @@ pub fn install_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
 
     let embed = |fonts: &mut egui::FontDefinitions, key: &str, bytes: &'static [u8]| {
-        fonts
-            .font_data
-            .insert(key.into(), egui::FontData::from_static(bytes));
+        fonts.font_data.insert(key.into(), egui::FontData::from_static(bytes));
     };
 
-    embed(
-        &mut fonts,
-        "jbmono-regular",
-        include_bytes!("../../../assets/fonts/JetBrainsMono-Regular.ttf"),
-    );
-    embed(
-        &mut fonts,
-        "jbmono-medium",
-        include_bytes!("../../../assets/fonts/JetBrainsMono-Medium.ttf"),
-    );
+    embed(&mut fonts, "jbmono-regular", include_bytes!("../../../assets/fonts/JetBrainsMono-Regular.ttf"));
+    embed(&mut fonts, "jbmono-medium", include_bytes!("../../../assets/fonts/JetBrainsMono-Medium.ttf"));
 
-    fonts
-        .families
-        .entry(egui::FontFamily::Proportional)
-        .or_default()
-        .insert(0, "jbmono-regular".into());
-    fonts
-        .families
-        .entry(egui::FontFamily::Monospace)
-        .or_default()
-        .insert(0, "jbmono-regular".into());
-    fonts.families.insert(
-        egui::FontFamily::Name("jbmono-medium".into()),
-        vec!["jbmono-medium".into()],
-    );
+    fonts.families.entry(egui::FontFamily::Proportional).or_default().insert(0, "jbmono-regular".into());
+    fonts.families.entry(egui::FontFamily::Monospace).or_default().insert(0, "jbmono-regular".into());
+    fonts.families.insert(egui::FontFamily::Name("jbmono-medium".into()), vec!["jbmono-medium".into()]);
 
     // `egui_phosphor::add_to_fonts` only appends its icon font as a fallback
     // onto the `Proportional` family -- the named `jbmono-medium` family
@@ -68,16 +47,8 @@ pub fn install_fonts(ctx: &egui::Context) {
     // combining an icon with `theme::font_heading`) would otherwise render
     // that glyph as a tofu box. Append it there too.
     egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
-    fonts
-        .families
-        .entry(egui::FontFamily::Name("jbmono-medium".into()))
-        .or_default()
-        .push("phosphor".into());
-    fonts
-        .families
-        .entry(egui::FontFamily::Monospace)
-        .or_default()
-        .push("phosphor".into());
+    fonts.families.entry(egui::FontFamily::Name("jbmono-medium".into())).or_default().push("phosphor".into());
+    fonts.families.entry(egui::FontFamily::Monospace).or_default().push("phosphor".into());
 
     ctx.set_fonts(fonts);
 }

@@ -29,9 +29,8 @@ fn main() -> anyhow::Result<()> {
     // whole process -- its `Drop` flushes the non-blocking writer's queue;
     // dropping it early would silently lose buffered log lines on exit.
     let make_filter = || {
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-            EnvFilter::new("deelip=debug,deelip_sip=debug,deelip_media=debug,deelip_nat=info")
-        })
+        EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| EnvFilter::new("deelip=debug,deelip_sip=debug,deelip_media=debug,deelip_nat=info"))
     };
     let _log_guard = if config.log_to_file {
         match deelip_config::log_file_path() {
@@ -63,12 +62,7 @@ fn main() -> anyhow::Result<()> {
         install_crash_hook();
     }
 
-    let enabled_accounts: Vec<_> = config
-        .accounts
-        .iter()
-        .filter(|a| a.enabled)
-        .cloned()
-        .collect();
+    let enabled_accounts: Vec<_> = config.accounts.iter().filter(|a| a.enabled).cloned().collect();
     let had_enabled_accounts = !enabled_accounts.is_empty();
     if !had_enabled_accounts {
         // No hand-editable config file to point the user at anymore -- the
@@ -80,10 +74,7 @@ fn main() -> anyhow::Result<()> {
     }
 
     // ── Tokio runtime (background) ────────────────────────────────────────────
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .context("Building tokio runtime")?;
+    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().context("Building tokio runtime")?;
 
     // ── STUN: discover external IP (optional) ─────────────────────────────────
     let external_ip: Option<String> = if let Some(stun) = &config.stun_server {
@@ -185,11 +176,7 @@ fn main() -> anyhow::Result<()> {
                 pending: Arc::new(Mutex::new(None)),
                 rt: rt.handle().clone(),
             };
-            deelip_ui::tray::spawn_tray_event_handlers(
-                tray_ids,
-                ctx_slot.clone(),
-                quit_state.clone(),
-            );
+            deelip_ui::tray::spawn_tray_event_handlers(tray_ids, ctx_slot.clone(), quit_state.clone());
             Some((ctx_slot.clone(), quit_state, badge_tx))
         }
         Err(e) => {
@@ -216,9 +203,7 @@ fn main() -> anyhow::Result<()> {
     // -- see `SharedApp`'s doc comment/SAFETY note in `deelip_ui::app` for
     // why wrapping it in Arc<Mutex<_>> here is still sound.
     #[allow(clippy::arc_with_non_send_sync)]
-    let app = SharedApp(Arc::new(Mutex::new(DeelipApp::new(
-        account_handles, rt_handle, config, db, tray, ctx_slot,
-    ))));
+    let app = SharedApp(Arc::new(Mutex::new(DeelipApp::new(account_handles, rt_handle, config, db, tray, ctx_slot))));
 
     let native_opts = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -267,10 +252,7 @@ fn install_crash_hook() {
 
 fn write_crash_report(info: &std::panic::PanicHookInfo) -> anyhow::Result<()> {
     let dir = deelip_config::crashes_dir()?;
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
 
     let location = info
         .location()
@@ -307,13 +289,7 @@ fn write_crash_report(info: &std::panic::PanicHookInfo) -> anyhow::Result<()> {
 /// square image "e.g. 256x256 pixels", which is exactly what's embedded here.
 fn load_window_icon() -> egui::IconData {
     const ICON_BYTES: &[u8] = include_bytes!("../assets/icon.png");
-    let img = image::load_from_memory(ICON_BYTES)
-        .expect("assets/icon.png must be a valid image")
-        .into_rgba8();
+    let img = image::load_from_memory(ICON_BYTES).expect("assets/icon.png must be a valid image").into_rgba8();
     let (width, height) = img.dimensions();
-    egui::IconData {
-        rgba: img.into_raw(),
-        width,
-        height,
-    }
+    egui::IconData { rgba: img.into_raw(), width, height }
 }

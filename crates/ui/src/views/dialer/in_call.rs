@@ -5,8 +5,7 @@ use egui::{Align2, Color32, RichText, Ui};
 
 use crate::app::{DeelipApp, VideoViewCache};
 use crate::helpers::{
-    audio_codec_label, empty_state, format_call_timer, resolve_caller, short_uri, styled_slider,
-    unix_now,
+    audio_codec_label, empty_state, format_call_timer, resolve_caller, short_uri, styled_slider, unix_now,
 };
 use crate::strings::{t, tf};
 use crate::theme::{self, Palette};
@@ -26,9 +25,7 @@ impl DeelipApp {
         // the viewport doesn't scroll or look any different, so this is a
         // no-op for the common case and only kicks in once something
         // actually doesn't fit.
-        egui::ScrollArea::vertical()
-            .auto_shrink([false, false])
-            .show(ui, |ui| self.show_dialer_in_call_content(ui));
+        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| self.show_dialer_in_call_content(ui));
     }
 
     fn show_dialer_in_call_content(&mut self, ui: &mut Ui) {
@@ -88,17 +85,11 @@ impl DeelipApp {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 let accept = format!("{}  {}", egui_phosphor::regular::PHONE, t("common.accept_button"));
-                if ui
-                    .button(RichText::new(accept).color(self.palette.signal))
-                    .clicked()
-                {
+                if ui.button(RichText::new(accept).color(self.palette.signal)).clicked() {
                     self.do_accept();
                 }
                 let reject = format!("{}  {}", egui_phosphor::regular::PHONE_X, t("common.reject_button"));
-                if ui
-                    .button(RichText::new(reject).color(self.palette.danger))
-                    .clicked()
-                {
+                if ui.button(RichText::new(reject).color(self.palette.danger)).clicked() {
                     self.do_reject();
                 }
             });
@@ -137,9 +128,7 @@ impl DeelipApp {
         // surface it as a small line rather than silently showing nothing.
         if let Some(out) = &self.pending_outbound {
             let (name, _) = self.caller_display(&out.remote_uri);
-            ui.label(
-                RichText::new(tf("dialer.calling_name", &[("name", &name)])).color(self.palette.ink_muted),
-            );
+            ui.label(RichText::new(tf("dialer.calling_name", &[("name", &name)])).color(self.palette.ink_muted));
             ui.add_space(6.0);
         }
 
@@ -162,7 +151,11 @@ impl DeelipApp {
                     ui.add_space(8.0);
                     caller_name_label(ui, &self.palette, &name, is_name);
                     ui.add_space(4.0);
-                    let state = if self.in_conference { t("dialer.status_in_conference") } else { t("dialer.status_connected") };
+                    let state = if self.in_conference {
+                        t("dialer.status_in_conference")
+                    } else {
+                        t("dialer.status_connected")
+                    };
                     state_badge(ui, &state, self.palette.signal);
                     ui.add_space(2.0);
                     let elapsed = unix_now().saturating_sub(start_time);
@@ -177,7 +170,11 @@ impl DeelipApp {
                     }
                     if self.is_recording() {
                         ui.add_space(4.0);
-                        ui.label(RichText::new(format!("● {}", t("dialer.rec_indicator"))).color(self.palette.danger).small());
+                        ui.label(
+                            RichText::new(format!("● {}", t("dialer.rec_indicator")))
+                                .color(self.palette.danger)
+                                .small(),
+                        );
                     }
                     if let Some(sas) = self.media.as_ref().and_then(|m| m.zrtp_sas()) {
                         ui.add_space(4.0);
@@ -200,11 +197,7 @@ impl DeelipApp {
                     let row_width = if self.in_conference { 64.0 } else { 64.0 + 10.0 + 56.0 };
                     ui.horizontal(|ui| {
                         ui.add_space(((ui.available_width() - row_width) / 2.0).max(0.0));
-                        if circular_action_button(
-                            ui,
-                            egui_phosphor::regular::PHONE_X,
-                            self.palette.danger,
-                        ) {
+                        if circular_action_button(ui, egui_phosphor::regular::PHONE_X, self.palette.danger) {
                             hangup_idx = Some(idx);
                         }
                         if !self.in_conference {
@@ -234,10 +227,7 @@ impl DeelipApp {
                         }
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             let hang_up = format!("{}  {}", egui_phosphor::regular::PHONE_X, t("dialer.hangup_button"));
-                            if ui
-                                .button(RichText::new(hang_up).color(self.palette.danger))
-                                .clicked()
-                            {
+                            if ui.button(RichText::new(hang_up).color(self.palette.danger)).clicked() {
                                 hangup_idx = Some(idx);
                             }
                             ui.add_space(4.0);
@@ -296,11 +286,7 @@ impl DeelipApp {
             return;
         }
         let remote_frame = self.video.as_ref().and_then(|v| v.engine.latest_decoded_frame());
-        let local_frame = self
-            .video
-            .as_ref()
-            .and_then(|v| v.camera.as_ref())
-            .and_then(|c| c.latest_frame());
+        let local_frame = self.video.as_ref().and_then(|v| v.camera.as_ref()).and_then(|c| c.latest_frame());
 
         let ctx = ui.ctx().clone();
         if let Some(v) = self.video.as_mut() {
@@ -394,28 +380,26 @@ impl DeelipApp {
                 ui.add_space(((ui.available_width() - slider_row_width) / 2.0).max(0.0));
                 ui.label(egui_phosphor::regular::SPEAKER_HIGH);
                 let mut out_gain = self.output_gain();
-                if styled_slider(ui, &self.palette, egui::Slider::new(&mut out_gain, 0.0..=2.0).show_value(false)).changed() {
+                if styled_slider(ui, &self.palette, egui::Slider::new(&mut out_gain, 0.0..=2.0).show_value(false))
+                    .changed()
+                {
                     self.set_output_gain(out_gain);
                 }
                 ui.add_space(8.0);
                 ui.label(egui_phosphor::regular::MICROPHONE);
                 let mut in_gain = self.input_gain();
-                if styled_slider(ui, &self.palette, egui::Slider::new(&mut in_gain, 0.0..=2.0).show_value(false)).changed() {
+                if styled_slider(ui, &self.palette, egui::Slider::new(&mut in_gain, 0.0..=2.0).show_value(false))
+                    .changed()
+                {
                     self.set_input_gain(in_gain);
                 }
             });
             if self.attended_transfer_original.is_some() && self.calls.len() == 2 {
                 ui.add_space(8.0);
-                let complete = format!(
-                    "{}  {}",
-                    egui_phosphor::regular::CHECK_CIRCLE,
-                    t("dialer.complete_transfer_button"),
-                );
+                let complete =
+                    format!("{}  {}", egui_phosphor::regular::CHECK_CIRCLE, t("dialer.complete_transfer_button"),);
                 ui.vertical_centered(|ui| {
-                    if ui
-                        .add(egui::Button::new(RichText::new(complete).color(palette.signal)))
-                        .clicked()
-                    {
+                    if ui.add(egui::Button::new(RichText::new(complete).color(palette.signal))).clicked() {
                         self.do_complete_attended_transfer();
                     }
                 });
@@ -486,8 +470,7 @@ enum RingState {
 fn call_avatar(ui: &mut Ui, palette: &Palette, display_name: &str, state: RingState) {
     let avatar_d = 68.0;
     let pad = 8.0; // room for the status dot to sit outside the avatar's own edge
-    let (rect, _resp) =
-        ui.allocate_exact_size(egui::vec2(avatar_d + pad, avatar_d + pad), egui::Sense::hover());
+    let (rect, _resp) = ui.allocate_exact_size(egui::vec2(avatar_d + pad, avatar_d + pad), egui::Sense::hover());
     let center = rect.center() - egui::vec2(pad / 2.0, pad / 2.0);
     let painter = ui.painter();
     let avatar_r = avatar_d / 2.0;
@@ -535,11 +518,7 @@ fn state_badge(ui: &mut Ui, text: &str, color: egui::Color32) {
         .rounding(egui::Rounding::same(4.0))
         .inner_margin(egui::Margin::symmetric(7.0, 3.0))
         .show(ui, |ui| {
-            ui.label(
-                RichText::new(text)
-                    .font(egui::FontId::new(10.5, egui::FontFamily::Monospace))
-                    .color(color),
-            );
+            ui.label(RichText::new(text).font(egui::FontId::new(10.5, egui::FontFamily::Monospace)).color(color));
         });
 }
 
@@ -552,22 +531,14 @@ fn with_alpha(color: Color32, alpha: u8) -> Color32 {
 /// `call_avatar`'s center glyph. Falls back to a phone glyph-friendly `#`
 /// on the (practically unreachable) empty-string case.
 fn avatar_initial(display_name: &str) -> char {
-    display_name
-        .chars()
-        .find(|c| c.is_alphanumeric())
-        .map(|c| c.to_ascii_uppercase())
-        .unwrap_or('#')
+    display_name.chars().find(|c| c.is_alphanumeric()).map(|c| c.to_ascii_uppercase()).unwrap_or('#')
 }
 
 /// The caller's name in Inter, or a bare address in JetBrains Mono when no
 /// contact resolved it -- the one typographic rule (numbers/addresses are
 /// mono, names are Inter) applied to the in-call screen's hero label.
 fn caller_name_label(ui: &mut Ui, palette: &Palette, name: &str, is_name: bool) {
-    let font = if is_name {
-        theme::font_heading(24.0)
-    } else {
-        egui::FontId::new(20.0, egui::FontFamily::Monospace)
-    };
+    let font = if is_name { theme::font_heading(24.0) } else { egui::FontId::new(20.0, egui::FontFamily::Monospace) };
     ui.label(RichText::new(name).font(font).color(palette.ink));
 }
 
@@ -617,43 +588,24 @@ const ICON_TOGGLE_COL_WIDTH: f32 = 60.0;
 /// to the others. Painting everything at fixed offsets within one
 /// `allocate_exact_size` rect leaves no content-dependent height for any
 /// column to differ by, on any font stack.
-fn icon_toggle_button(
-    ui: &mut Ui,
-    palette: &Palette,
-    icon: &str,
-    caption: &str,
-    active: bool,
-    danger: bool,
-) -> bool {
+fn icon_toggle_button(ui: &mut Ui, palette: &Palette, icon: &str, caption: &str, active: bool, danger: bool) -> bool {
     const BTN: f32 = 48.0;
     let icon_color = if danger { palette.danger } else { palette.ink };
     let fill = if active { palette.surface_hover } else { palette.surface };
 
-    let (col_rect, response) = ui.allocate_exact_size(
-        egui::vec2(ICON_TOGGLE_COL_WIDTH, 64.0),
-        egui::Sense::click(),
-    );
-    let btn_rect = egui::Rect::from_min_size(
-        egui::pos2(col_rect.center().x - BTN / 2.0, col_rect.min.y),
-        egui::vec2(BTN, BTN),
-    );
+    let (col_rect, response) = ui.allocate_exact_size(egui::vec2(ICON_TOGGLE_COL_WIDTH, 64.0), egui::Sense::click());
+    let btn_rect =
+        egui::Rect::from_min_size(egui::pos2(col_rect.center().x - BTN / 2.0, col_rect.min.y), egui::vec2(BTN, BTN));
 
     let painter = ui.painter();
-    painter.rect(
-        btn_rect,
-        egui::Rounding::same(12.0),
-        fill,
-        egui::Stroke::new(1.0, palette.border),
-    );
+    painter.rect(btn_rect, egui::Rounding::same(12.0), fill, egui::Stroke::new(1.0, palette.border));
     // Per-glyph vertical nudge -- the Phosphor `MICROPHONE`/
     // `MICROPHONE_SLASH` glyph's ink sits visibly higher within its own
     // font-metrics line box than `RECORD`/`EXPORT`/`NUMPAD` do (confirmed
     // via a zoomed side-by-side screenshot), unrelated to the box-position
     // bug above -- this only recenters that one glyph's ink within an
     // already-correctly-positioned button.
-    let nudge_y = if icon == egui_phosphor::regular::MICROPHONE
-        || icon == egui_phosphor::regular::MICROPHONE_SLASH
-    {
+    let nudge_y = if icon == egui_phosphor::regular::MICROPHONE || icon == egui_phosphor::regular::MICROPHONE_SLASH {
         3.0
     } else {
         0.0
@@ -679,12 +631,7 @@ fn icon_toggle_button(
 /// uploaded) to RGB and create/update `cache.texture` -- a no-op if `frame`
 /// is `None` or unchanged, so an unchanged decoded/captured frame isn't
 /// reconverted/re-uploaded every repaint.
-fn update_video_view(
-    ctx: &egui::Context,
-    cache: &mut VideoViewCache,
-    frame: Option<Yuv420Frame>,
-    texture_name: &str,
-) {
+fn update_video_view(ctx: &egui::Context, cache: &mut VideoViewCache, frame: Option<Yuv420Frame>, texture_name: &str) {
     let Some(frame) = frame else { return };
     if cache.frame.as_ref() == Some(&frame) {
         return;
@@ -723,13 +670,7 @@ fn show_video_view(ui: &mut Ui, palette: &Palette, cache: &VideoViewCache, label
 
 /// Render one leg's RTP stats as a small label grid inside a "Call
 /// statistics" collapsing section.
-fn show_leg_stats(
-    ui: &mut Ui,
-    label: &str,
-    codec: AudioCodec,
-    stats: &deelip_media::LegStats,
-    muted: egui::Color32,
-) {
+fn show_leg_stats(ui: &mut Ui, label: &str, codec: AudioCodec, stats: &deelip_media::LegStats, muted: egui::Color32) {
     let codec_name = audio_codec_label(codec);
     ui.label(RichText::new(format!("{label} — {codec_name}")).strong());
     ui.label(

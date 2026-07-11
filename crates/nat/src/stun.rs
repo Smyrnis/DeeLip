@@ -17,9 +17,7 @@ const ATTR_XOR_MAPPED: u16 = 0x0020;
 /// Send a STUN Binding Request to `stun_server` (e.g. `"stun.l.google.com:19302"`)
 /// and return the external `SocketAddr` as seen by the STUN server.
 pub async fn discover_external_addr(stun_server: &str) -> anyhow::Result<SocketAddr> {
-    let socket = UdpSocket::bind("0.0.0.0:0")
-        .await
-        .context("Bind STUN socket")?;
+    let socket = UdpSocket::bind("0.0.0.0:0").await.context("Bind STUN socket")?;
 
     let txn_id = random_txn_id();
 
@@ -30,10 +28,7 @@ pub async fn discover_external_addr(stun_server: &str) -> anyhow::Result<SocketA
     req[4..8].copy_from_slice(&MAGIC_COOKIE.to_be_bytes());
     req[8..20].copy_from_slice(&txn_id);
 
-    socket
-        .send_to(&req, stun_server)
-        .await
-        .context("Sending STUN Binding Request")?;
+    socket.send_to(&req, stun_server).await.context("Sending STUN Binding Request")?;
 
     let mut buf = [0u8; 512];
     let (n, _from) = timeout(Duration::from_secs(5), socket.recv_from(&mut buf))
@@ -70,8 +65,7 @@ fn parse_binding_response(data: &[u8]) -> anyhow::Result<SocketAddr> {
         match attr_type {
             ATTR_XOR_MAPPED if attr_len >= 8 && data[offset + 1] == 0x01 => {
                 // XOR port with upper 16 bits of magic cookie
-                let port = u16::from_be_bytes([data[offset + 2], data[offset + 3]])
-                    ^ ((MAGIC_COOKIE >> 16) as u16);
+                let port = u16::from_be_bytes([data[offset + 2], data[offset + 3]]) ^ ((MAGIC_COOKIE >> 16) as u16);
                 let ip = Ipv4Addr::new(
                     data[offset + 4] ^ ((MAGIC_COOKIE >> 24) as u8),
                     data[offset + 5] ^ ((MAGIC_COOKIE >> 16) as u8),
@@ -82,12 +76,7 @@ fn parse_binding_response(data: &[u8]) -> anyhow::Result<SocketAddr> {
             }
             ATTR_MAPPED_ADDR if attr_len >= 8 && data[offset + 1] == 0x01 => {
                 let port = u16::from_be_bytes([data[offset + 2], data[offset + 3]]);
-                let ip = Ipv4Addr::new(
-                    data[offset + 4],
-                    data[offset + 5],
-                    data[offset + 6],
-                    data[offset + 7],
-                );
+                let ip = Ipv4Addr::new(data[offset + 4], data[offset + 5], data[offset + 6], data[offset + 7]);
                 mapped = Some(SocketAddr::new(IpAddr::V4(ip), port));
             }
             _ => {}
@@ -97,17 +86,12 @@ fn parse_binding_response(data: &[u8]) -> anyhow::Result<SocketAddr> {
         offset += (attr_len + 3) & !3;
     }
 
-    xor_mapped
-        .or(mapped)
-        .ok_or_else(|| anyhow::anyhow!("No MAPPED-ADDRESS found in STUN response"))
+    xor_mapped.or(mapped).ok_or_else(|| anyhow::anyhow!("No MAPPED-ADDRESS found in STUN response"))
 }
 
 fn random_txn_id() -> [u8; 12] {
     static CTR: AtomicU64 = AtomicU64::new(0);
-    let t = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos() as u64;
+    let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos() as u64;
     let c = CTR.fetch_add(1, Ordering::Relaxed);
     let mix = t ^ c.wrapping_mul(0x9e37_79b9_7f4a_7c15);
     let mut id = [0u8; 12];

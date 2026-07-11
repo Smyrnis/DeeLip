@@ -36,11 +36,7 @@ pub fn init(language: Language) {
 /// genuine typo is obvious at a glance during Xvfb verification instead of
 /// silently rendering blank.
 pub fn t(key: &str) -> String {
-    STRINGS
-        .get()
-        .and_then(|m| m.get(key))
-        .cloned()
-        .unwrap_or_else(|| key.to_string())
+    STRINGS.get().and_then(|m| m.get(key)).cloned().unwrap_or_else(|| key.to_string())
 }
 
 /// Same as `t`, but substitutes `{name}`-style placeholders from `args`

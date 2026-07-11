@@ -71,11 +71,7 @@ impl SipStack {
         let attempt_ice = attempt_ice && account.wants_ice(network.ice_enabled);
         tokio::spawn(async move {
             let mut relay = None;
-            let ice_gathered = if attempt_ice {
-                media_setup::try_gather_ice(&network, true, true).await
-            } else {
-                None
-            };
+            let ice_gathered = if attempt_ice { media_setup::try_gather_ice(&network, true, true).await } else { None };
             let ice_attrs = ice_gathered.as_ref().map(|g| IceAttrs {
                 ufrag: g.local_ufrag.clone(),
                 pwd: g.local_pwd.clone(),
@@ -90,24 +86,13 @@ impl SipStack {
             // binding an unrelated `local_rtp` on connect would leave the far
             // end sending RTP to a socket nothing is listening on.
             let (rtp_ip, rtp_port) =
-                media_setup::resolve_rtp_endpoint(&network, &advertised_ip, local_rtp, &mut relay)
-                    .await;
+                media_setup::resolve_rtp_endpoint(&network, &advertised_ip, local_rtp, &mut relay).await;
 
             let wants_srtp = account.wants_srtp(resolved_transport);
-            let srtp = if wants_srtp {
-                Some(SrtpParams::generate())
-            } else {
-                None
-            };
+            let srtp = if wants_srtp { Some(SrtpParams::generate()) } else { None };
             let codecs = media_setup::account_codecs(&account);
-            let mut local_sdp = build_offer(
-                &rtp_ip,
-                rtp_port,
-                srtp.as_ref(),
-                &codecs,
-                ice_attrs.as_ref(),
-                account.vad_enabled,
-            );
+            let mut local_sdp =
+                build_offer(&rtp_ip, rtp_port, srtp.as_ref(), &codecs, ice_attrs.as_ref(), account.vad_enabled);
 
             // Video (negotiation only -- see this account field's own doc
             // comment): appended onto the audio offer's own SDP text, never
@@ -126,11 +111,7 @@ impl SipStack {
                 branch,
                 to,
                 local_sdp,
-                pending_offer: PendingOfferMedia {
-                    local_rtp,
-                    local_srtp: srtp,
-                    relay,
-                },
+                pending_offer: PendingOfferMedia { local_rtp, local_srtp: srtp, relay },
                 ice_gathered,
                 video,
             });
@@ -147,11 +128,7 @@ impl SipStack {
     /// unmodified) if the video RTP port can't be allocated -- video is
     /// always additive, never a reason to fail the whole call.
     async fn prepare_video_offer(
-        network: &NetworkConfig,
-        advertised_ip: &str,
-        attempt_ice: bool,
-        wants_srtp: bool,
-        local_sdp: &mut String,
+        network: &NetworkConfig, advertised_ip: &str, attempt_ice: bool, wants_srtp: bool, local_sdp: &mut String,
     ) -> Option<PendingVideoOffer> {
         let local_rtp = match deelip_nat::alloc_rtp_port(network.rtp_port_range) {
             Ok(p) => p,
@@ -161,18 +138,13 @@ impl SipStack {
             }
         };
         let mut relay = None;
-        let ice_gathered = if attempt_ice {
-            media_setup::try_gather_ice(network, true, true).await
-        } else {
-            None
-        };
+        let ice_gathered = if attempt_ice { media_setup::try_gather_ice(network, true, true).await } else { None };
         let ice_attrs = ice_gathered.as_ref().map(|g| IceAttrs {
             ufrag: g.local_ufrag.clone(),
             pwd: g.local_pwd.clone(),
             candidates: g.candidates.clone(),
         });
-        let (rtp_ip, rtp_port) =
-            media_setup::resolve_rtp_endpoint(network, advertised_ip, local_rtp, &mut relay).await;
+        let (rtp_ip, rtp_port) = media_setup::resolve_rtp_endpoint(network, advertised_ip, local_rtp, &mut relay).await;
         let local_srtp = if wants_srtp { Some(SrtpParams::generate()) } else { None };
 
         local_sdp.push_str(&build_video_media_section(
@@ -260,14 +232,7 @@ impl SipStack {
                                          // piece of an INVITE's identity; bundling them
                                          // into a struct wouldn't reduce real complexity here.
     pub(super) fn build_invite(
-        &self,
-        call_id: &str,
-        from_tag: &str,
-        cseq: u32,
-        to: &str,
-        sdp: &str,
-        auth: Option<&str>,
-        branch: &str,
+        &self, call_id: &str, from_tag: &str, cseq: u32, to: &str, sdp: &str, auth: Option<&str>, branch: &str,
         session_expires: u32,
     ) -> String {
         let identity = self.stack_identity();

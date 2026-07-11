@@ -3,8 +3,7 @@ use egui::{RichText, Ui};
 
 use crate::app::{DeelipApp, SharedApp};
 use crate::helpers::{
-    avatar, empty_state, format_timestamp, list_row_divider, resolve_caller, text_edit_scope,
-    unix_now, window_icon,
+    avatar, empty_state, format_timestamp, list_row_divider, resolve_caller, text_edit_scope, unix_now, window_icon,
 };
 use crate::strings::t;
 
@@ -96,8 +95,7 @@ impl DeelipApp {
                     .width_range(160.0..=320.0)
                     .show(child_ctx, |ui| app.show_messages_peer_list(ui, &peers));
 
-                egui::CentralPanel::default()
-                    .show(child_ctx, |ui| app.show_messages_thread_and_compose(ui));
+                egui::CentralPanel::default().show(child_ctx, |ui| app.show_messages_thread_and_compose(ui));
 
                 if child_ctx.input(|i| i.viewport().close_requested()) {
                     app.messages_window_open = false;
@@ -151,11 +149,7 @@ impl DeelipApp {
                 })
                 .inner
                 .response;
-            let bg = if selected || row.hovered() {
-                palette.surface_hover
-            } else {
-                palette.canvas
-            };
+            let bg = if selected || row.hovered() { palette.surface_hover } else { palette.canvas };
             ui.painter().set(bg_idx, egui::Shape::rect_filled(row.rect, 0.0, bg));
             list_row_divider(ui, &palette, row.rect);
             if row.interact(egui::Sense::click()).clicked() {
@@ -188,74 +182,51 @@ impl DeelipApp {
         egui::TopBottomPanel::bottom("messages_compose_panel").show_inside(ui, |ui| {
             ui.add_space(4.0);
             let palette = self.palette;
-            text_edit_scope(ui, &palette, |ui| ui.add(
-                egui::TextEdit::multiline(&mut self.message_body)
-                    .desired_rows(3)
-                    .hint_text(RichText::new(t("messages.compose_hint")).color(palette.ink_muted))
-                    .desired_width(f32::INFINITY),
-            ));
+            text_edit_scope(ui, &palette, |ui| {
+                ui.add(
+                    egui::TextEdit::multiline(&mut self.message_body)
+                        .desired_rows(3)
+                        .hint_text(RichText::new(t("messages.compose_hint")).color(palette.ink_muted))
+                        .desired_width(f32::INFINITY),
+                )
+            });
             ui.add_space(4.0);
-            let can_send = !self.message_body.trim().is_empty()
-                && self.reg_ok
-                && self.selected_account_idx().is_some();
-            if ui
-                .add_enabled(can_send, egui::Button::new(t("common.send_button")))
-                .clicked()
-            {
+            let can_send = !self.message_body.trim().is_empty() && self.reg_ok && self.selected_account_idx().is_some();
+            if ui.add_enabled(can_send, egui::Button::new(t("common.send_button"))).clicked() {
                 self.do_send_message(peer.clone());
             }
             ui.add_space(4.0);
         });
 
-        let thread: Vec<&Message> = self
-            .messages
-            .messages
-            .iter()
-            .filter(|m| m.peer_uri == peer)
-            .rev()
-            .collect();
+        let thread: Vec<&Message> = self.messages.messages.iter().filter(|m| m.peer_uri == peer).rev().collect();
 
         let palette = self.palette;
-        egui::ScrollArea::vertical()
-            .id_source("messages_thread_scroll")
-            .stick_to_bottom(true)
-            .show(ui, |ui| {
-                for m in thread {
-                    let outbound = m.direction == MessageDirection::Outbound;
-                    let fill = if outbound {
-                        palette.signal.gamma_multiply(0.28)
-                    } else {
-                        palette.surface
-                    };
-                    ui.with_layout(
-                        egui::Layout::top_down(if outbound {
-                            egui::Align::Max
-                        } else {
-                            egui::Align::Min
-                        }),
-                        |ui| {
-                            egui::Frame::none()
-                                .fill(fill)
-                                .stroke(egui::Stroke::new(1.0, palette.border))
-                                .rounding(egui::Rounding::same(2.0))
-                                .inner_margin(egui::Margin::symmetric(8.0, 6.0))
-                                .show(ui, |ui| {
-                                    ui.set_max_width(ui.available_width() * 0.7);
-                                    ui.label(RichText::new(&m.body));
-                                    ui.label(
-                                        RichText::new(format_timestamp(m.timestamp))
-                                            .font(egui::FontId::new(
-                                                10.5,
-                                                egui::FontFamily::Monospace,
-                                            ))
-                                            .color(palette.ink_muted),
-                                    );
-                                });
-                        },
-                    );
-                    ui.add_space(4.0);
-                }
-            });
+        egui::ScrollArea::vertical().id_source("messages_thread_scroll").stick_to_bottom(true).show(ui, |ui| {
+            for m in thread {
+                let outbound = m.direction == MessageDirection::Outbound;
+                let fill = if outbound { palette.signal.gamma_multiply(0.28) } else { palette.surface };
+                ui.with_layout(
+                    egui::Layout::top_down(if outbound { egui::Align::Max } else { egui::Align::Min }),
+                    |ui| {
+                        egui::Frame::none()
+                            .fill(fill)
+                            .stroke(egui::Stroke::new(1.0, palette.border))
+                            .rounding(egui::Rounding::same(2.0))
+                            .inner_margin(egui::Margin::symmetric(8.0, 6.0))
+                            .show(ui, |ui| {
+                                ui.set_max_width(ui.available_width() * 0.7);
+                                ui.label(RichText::new(&m.body));
+                                ui.label(
+                                    RichText::new(format_timestamp(m.timestamp))
+                                        .font(egui::FontId::new(10.5, egui::FontFamily::Monospace))
+                                        .color(palette.ink_muted),
+                                );
+                            });
+                    },
+                );
+                ui.add_space(4.0);
+            }
+        });
     }
 
     fn do_send_message(&mut self, to: String) {

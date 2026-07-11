@@ -2,8 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use deelip_config::{
-    AppConfig, CallDirection, CallHistory, CallStatus, Contact, ContactBook, Db, MessageLog,
-    SipAccount,
+    AppConfig, CallDirection, CallHistory, CallStatus, Contact, ContactBook, Db, MessageLog, SipAccount,
 };
 use deelip_media::MediaEngine;
 use deelip_sip::{CallMediaReady, MwiState, PresenceState, SipHandle};
@@ -303,8 +302,7 @@ pub struct DeelipApp {
     // Directory (LDAP) -- see `views::directory`.
     pub(crate) directory_query: String,
     pub(crate) directory_state: crate::views::directory::DirectoryState,
-    pub(crate) directory_rx:
-        Option<std::sync::mpsc::Receiver<crate::views::directory::DirectoryMsg>>,
+    pub(crate) directory_rx: Option<std::sync::mpsc::Receiver<crate::views::directory::DirectoryMsg>>,
 }
 
 /// Wraps `DeelipApp` behind a lock so Settings/Messages can render as real
@@ -452,12 +450,8 @@ pub(crate) struct AccountState {
 
 impl DeelipApp {
     pub fn new(
-        accounts: Vec<(SipAccount, SipHandle)>,
-        rt: Handle,
-        config: AppConfig,
-        db: Db,
-        tray: Option<(CtxSlot, QuitState, tray::BadgeSender)>,
-        ctx_slot: CtxSlot,
+        accounts: Vec<(SipAccount, SipHandle)>, rt: Handle, config: AppConfig, db: Db,
+        tray: Option<(CtxSlot, QuitState, tray::BadgeSender)>, ctx_slot: CtxSlot,
     ) -> Self {
         crate::strings::init(config.language);
 
@@ -486,9 +480,7 @@ impl DeelipApp {
             match Hotkeys::spawn(custom, config.handle_media_buttons, ctx_slot.clone()) {
                 Ok(h) => Some(h),
                 Err(e) => {
-                    tracing::warn!(
-                        "Global hotkeys failed to register ({e}), continuing without them"
-                    );
+                    tracing::warn!("Global hotkeys failed to register ({e}), continuing without them");
                     None
                 }
             }
@@ -573,11 +565,7 @@ impl DeelipApp {
         };
 
         let now = crate::helpers::unix_now();
-        if app
-            .config
-            .update_check_frequency
-            .is_due(app.config.last_update_check, now)
-        {
+        if app.config.update_check_frequency.is_due(app.config.last_update_check, now) {
             app.start_update_check();
         }
         app

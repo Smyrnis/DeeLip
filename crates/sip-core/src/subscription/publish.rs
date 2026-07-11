@@ -90,13 +90,7 @@ impl SipStack {
                                          // `handlers.rs` -- each param is a distinct,
                                          // meaningfully-named piece of the request.
     fn build_publish(
-        &self,
-        entity: &str,
-        call_id: &str,
-        from_tag: &str,
-        cseq: u32,
-        etag: Option<&str>,
-        auth: Option<&str>,
+        &self, entity: &str, call_id: &str, from_tag: &str, cseq: u32, etag: Option<&str>, auth: Option<&str>,
         body: &str,
     ) -> String {
         let branch = new_branch();
@@ -149,10 +143,10 @@ impl SipStack {
                 }
             }
             401 | 407 => {
-                let Some((from_tag, cseq, etag, available, auth_retried)) =
-                    self.presence_publish.as_ref().map(|p| {
-                        (p.local_tag.clone(), p.local_cseq, p.etag.clone(), p.available, p.auth_retried)
-                    })
+                let Some((from_tag, cseq, etag, available, auth_retried)) = self
+                    .presence_publish
+                    .as_ref()
+                    .map(|p| (p.local_tag.clone(), p.local_cseq, p.etag.clone(), p.available, p.auth_retried))
                 else {
                     return;
                 };

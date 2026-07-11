@@ -38,12 +38,12 @@
 //!   handled -- fine for a normal two-party call, since only the SIP
 //!   caller ever sends Commit here.
 
-use crate::zrtp::crypto::{
-    self, compute_hvi, confirm_decrypt, confirm_encrypt, derive_mac_keys, derive_s0,
-    derive_sas, derive_srtp_keys, derive_zrtp_keys, generate_ec25_keypair, generate_hash_chain,
-    kdf_context, message_mac, total_hash, verify_hash_chain_hop, Ec25KeyPair, HashChain, SrtpKeys,
-};
 use crate::zrtp::cache::{CacheEntry, RetainedSecrets, SharedSecretStore};
+use crate::zrtp::crypto::{
+    self, compute_hvi, confirm_decrypt, confirm_encrypt, derive_mac_keys, derive_s0, derive_sas, derive_srtp_keys,
+    derive_zrtp_keys, generate_ec25_keypair, generate_hash_chain, kdf_context, message_mac, total_hash,
+    verify_hash_chain_hop, Ec25KeyPair, HashChain, SrtpKeys,
+};
 use crate::zrtp::wire::{Commit, Confirm, DhPart, Hello, Message};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -164,10 +164,7 @@ impl<S: SharedSecretStore> ZrtpEngine<S> {
         // not a claim that this matches any real ZRTP implementation's
         // exact convention.
         let mac = message_mac(&chain.h2, &Message::Hello(hello_no_mac.clone()).encode());
-        let local_hello = Hello {
-            mac,
-            ..hello_no_mac
-        };
+        let local_hello = Hello { mac, ..hello_no_mac };
         Self {
             role,
             state: HandshakeState::Discovery,
@@ -216,24 +213,12 @@ impl<S: SharedSecretStore> ZrtpEngine<S> {
         let message = Message::decode(raw)?;
         match (&message, self.state, self.role) {
             (Message::Hello(_), HandshakeState::HelloSent, _) => self.on_hello(message, raw),
-            (Message::Commit(_), HandshakeState::HelloReceived, Role::Responder) => {
-                self.on_commit(message, raw)
-            }
-            (Message::DhPart1(_), HandshakeState::CommitSent, Role::Initiator) => {
-                self.on_dhpart1(message, raw)
-            }
-            (Message::DhPart2(_), HandshakeState::DhPart1Sent, Role::Responder) => {
-                self.on_dhpart2(message, raw)
-            }
-            (Message::Confirm1(_), HandshakeState::DhPart2Sent, Role::Initiator) => {
-                self.on_confirm1(message)
-            }
-            (Message::Confirm2(_), HandshakeState::Confirm1Sent, Role::Responder) => {
-                self.on_confirm2(message)
-            }
-            (Message::Conf2Ack, HandshakeState::Confirm2Sent, Role::Initiator) => {
-                self.on_conf2ack()
-            }
+            (Message::Commit(_), HandshakeState::HelloReceived, Role::Responder) => self.on_commit(message, raw),
+            (Message::DhPart1(_), HandshakeState::CommitSent, Role::Initiator) => self.on_dhpart1(message, raw),
+            (Message::DhPart2(_), HandshakeState::DhPart1Sent, Role::Responder) => self.on_dhpart2(message, raw),
+            (Message::Confirm1(_), HandshakeState::DhPart2Sent, Role::Initiator) => self.on_confirm1(message),
+            (Message::Confirm2(_), HandshakeState::Confirm1Sent, Role::Responder) => self.on_confirm2(message),
+            (Message::Conf2Ack, HandshakeState::Confirm2Sent, Role::Initiator) => self.on_conf2ack(),
             // Anything else (duplicate/retransmitted message, or one that
             // arrived out of order) is silently ignored -- the caller's own
             // retransmission timer will keep resending our own last message
@@ -243,9 +228,7 @@ impl<S: SharedSecretStore> ZrtpEngine<S> {
     }
 
     fn on_hello(&mut self, message: Message, raw: &[u8]) -> Result<Vec<EngineEvent>, EngineError> {
-        let Message::Hello(hello) = message else {
-            unreachable!()
-        };
+        let Message::Hello(hello) = message else { unreachable!() };
         if !hello.hashes.contains(&crypto::HASH_ALGO)
             || !hello.ciphers.contains(&crypto::CIPHER_ALGO)
             || !hello.key_agreements.contains(&crypto::KEY_AGREEMENT_ALGO)
@@ -279,16 +262,10 @@ impl<S: SharedSecretStore> ZrtpEngine<S> {
         };
         let dhpart2_bytes_before_mac = Message::DhPart2(dhpart2_no_mac.clone()).encode();
         let mac = message_mac(&self.chain.h0, &dhpart2_bytes_before_mac);
-        let dhpart2 = DhPart {
-            mac,
-            ..dhpart2_no_mac
-        };
+        let dhpart2 = DhPart { mac, ..dhpart2_no_mac };
         let dhpart2_bytes = Message::DhPart2(dhpart2.clone()).encode();
 
-        let responder_hello_bytes = self
-            .remote_hello_bytes
-            .as_ref()
-            .expect("Hello already received");
+        let responder_hello_bytes = self.remote_hello_bytes.as_ref().expect("Hello already received");
         let hvi = compute_hvi(&dhpart2_bytes, responder_hello_bytes);
 
         let commit_no_mac = Commit {
@@ -304,10 +281,7 @@ impl<S: SharedSecretStore> ZrtpEngine<S> {
         };
         let commit_bytes_before_mac = Message::Commit(commit_no_mac.clone()).encode();
         let mac = message_mac(&self.chain.h1, &commit_bytes_before_mac);
-        let commit = Commit {
-            mac,
-            ..commit_no_mac
-        };
+        let commit = Commit { mac, ..commit_no_mac };
         let commit_bytes = Message::Commit(commit.clone()).encode();
 
         self.local_keypair = Some(keypair);
@@ -319,9 +293,7 @@ impl<S: SharedSecretStore> ZrtpEngine<S> {
     }
 
     fn on_commit(&mut self, message: Message, raw: &[u8]) -> Result<Vec<EngineEvent>, EngineError> {
-        let Message::Commit(commit) = message else {
-            unreachable!()
-        };
+        let Message::Commit(commit) = message else { unreachable!() };
         let remote_hello = self.remote_hello.as_ref().expect("Hello already received");
         if !verify_hash_chain_hop(&commit.h2, 1, &remote_hello.h3) {
             self.state = HandshakeState::Failed;
@@ -351,10 +323,7 @@ impl<S: SharedSecretStore> ZrtpEngine<S> {
         };
         let dhpart1_bytes_before_mac = Message::DhPart1(dhpart1_no_mac.clone()).encode();
         let mac = message_mac(&self.chain.h0, &dhpart1_bytes_before_mac);
-        let dhpart1 = DhPart {
-            mac,
-            ..dhpart1_no_mac
-        };
+        let dhpart1 = DhPart { mac, ..dhpart1_no_mac };
         let dhpart1_bytes = Message::DhPart1(dhpart1.clone()).encode();
 
         self.local_keypair = Some(keypair);
@@ -364,9 +333,7 @@ impl<S: SharedSecretStore> ZrtpEngine<S> {
     }
 
     fn on_dhpart1(&mut self, message: Message, raw: &[u8]) -> Result<Vec<EngineEvent>, EngineError> {
-        let Message::DhPart1(dhpart1) = message else {
-            unreachable!()
-        };
+        let Message::DhPart1(dhpart1) = message else { unreachable!() };
         let remote_hello = self.remote_hello.as_ref().expect("Hello already received");
         // Responder's own H2 is never transmitted -- two hops from H1 to H3.
         if !verify_hash_chain_hop(&dhpart1.h1, 2, &remote_hello.h3) {
@@ -377,11 +344,7 @@ impl<S: SharedSecretStore> ZrtpEngine<S> {
         self.dhpart1_bytes = Some(raw.to_vec());
 
         let keypair = self.local_keypair.take().expect("keypair precomputed before Commit");
-        let peer_pv: [u8; 64] = dhpart1
-            .pv
-            .as_slice()
-            .try_into()
-            .map_err(|_| EngineError::UnexpectedMessage)?;
+        let peer_pv: [u8; 64] = dhpart1.pv.as_slice().try_into().map_err(|_| EngineError::UnexpectedMessage)?;
         let dh_result = crypto::ec25_shared_secret(keypair, &peer_pv);
 
         let dhpart2_bytes = self.dhpart2_bytes.clone().expect("DHPart2 precomputed before Commit");
@@ -392,9 +355,7 @@ impl<S: SharedSecretStore> ZrtpEngine<S> {
         self.finish_key_agreement(dh_result, th)?;
 
         self.state = HandshakeState::DhPart2Sent;
-        let Message::DhPart2(dhpart2) = Message::decode(&dhpart2_bytes)? else {
-            unreachable!()
-        };
+        let Message::DhPart2(dhpart2) = Message::decode(&dhpart2_bytes)? else { unreachable!() };
         let mut events = vec![EngineEvent::Send(Message::DhPart2(dhpart2))];
         if let Some((_, sas)) = &self.sas {
             events.push(EngineEvent::SasReady(sas.clone()));
@@ -403,9 +364,7 @@ impl<S: SharedSecretStore> ZrtpEngine<S> {
     }
 
     fn on_dhpart2(&mut self, message: Message, raw: &[u8]) -> Result<Vec<EngineEvent>, EngineError> {
-        let Message::DhPart2(dhpart2) = message else {
-            unreachable!()
-        };
+        let Message::DhPart2(dhpart2) = message else { unreachable!() };
         let commit = self.commit.clone().expect("Commit received");
         if !verify_hash_chain_hop(&dhpart2.h1, 1, &commit.h2) {
             self.state = HandshakeState::Failed;
@@ -420,11 +379,7 @@ impl<S: SharedSecretStore> ZrtpEngine<S> {
         self.dhpart2_h1 = Some(dhpart2.h1);
 
         let keypair = self.local_keypair.take().expect("keypair generated for DHPart1");
-        let peer_pv: [u8; 64] = dhpart2
-            .pv
-            .as_slice()
-            .try_into()
-            .map_err(|_| EngineError::UnexpectedMessage)?;
+        let peer_pv: [u8; 64] = dhpart2.pv.as_slice().try_into().map_err(|_| EngineError::UnexpectedMessage)?;
         let dh_result = crypto::ec25_shared_secret(keypair, &peer_pv);
 
         let commit_bytes = self.commit_bytes.clone().expect("Commit received");
@@ -441,11 +396,7 @@ impl<S: SharedSecretStore> ZrtpEngine<S> {
         let encrypted = confirm_encrypt(&zrtp_key_r, &iv, &plaintext);
         let (_, mackey_r) = self.mac_keys.expect("derived above");
         let confirm_mac = message_mac(&mackey_r, &encrypted);
-        let confirm1 = Confirm {
-            confirm_mac,
-            cfb_iv: iv,
-            encrypted,
-        };
+        let confirm1 = Confirm { confirm_mac, cfb_iv: iv, encrypted };
 
         self.state = HandshakeState::Confirm1Sent;
         let mut events = vec![EngineEvent::Send(Message::Confirm1(confirm1))];
@@ -456,9 +407,7 @@ impl<S: SharedSecretStore> ZrtpEngine<S> {
     }
 
     fn on_confirm1(&mut self, message: Message) -> Result<Vec<EngineEvent>, EngineError> {
-        let Message::Confirm1(confirm1) = message else {
-            unreachable!()
-        };
+        let Message::Confirm1(confirm1) = message else { unreachable!() };
         let (_, zrtp_key_r) = self.zrtp_keys.expect("derived after DHPart1");
         let (_, mackey_r) = self.mac_keys.expect("derived after DHPart1");
         let expected_mac = message_mac(&mackey_r, &confirm1.encrypted);
@@ -486,19 +435,13 @@ impl<S: SharedSecretStore> ZrtpEngine<S> {
         plaintext.extend_from_slice(&CACHE_EXPIRY_SECS.to_be_bytes());
         let encrypted = confirm_encrypt(&zrtp_key_i, &iv, &plaintext);
         let confirm_mac = message_mac(&mackey_i, &encrypted);
-        let confirm2 = Confirm {
-            confirm_mac,
-            cfb_iv: iv,
-            encrypted,
-        };
+        let confirm2 = Confirm { confirm_mac, cfb_iv: iv, encrypted };
         self.state = HandshakeState::Confirm2Sent;
         Ok(vec![EngineEvent::Send(Message::Confirm2(confirm2))])
     }
 
     fn on_confirm2(&mut self, message: Message) -> Result<Vec<EngineEvent>, EngineError> {
-        let Message::Confirm2(confirm2) = message else {
-            unreachable!()
-        };
+        let Message::Confirm2(confirm2) = message else { unreachable!() };
         let (zrtp_key_i, _) = self.zrtp_keys.expect("derived after DHPart2");
         let (mackey_i, _) = self.mac_keys.expect("derived after DHPart2");
         let expected_mac = message_mac(&mackey_i, &confirm2.encrypted);
@@ -571,11 +514,7 @@ impl<S: SharedSecretStore> ZrtpEngine<S> {
         self.store.store(CacheEntry {
             local_zid: self.local_zid,
             remote_zid,
-            secrets: RetainedSecrets {
-                rs1: crypto::sha256(&s0).to_vec(),
-                rs2: Vec::new(),
-                verified: false,
-            },
+            secrets: RetainedSecrets { rs1: crypto::sha256(&s0).to_vec(), rs2: Vec::new(), verified: false },
         });
     }
 }

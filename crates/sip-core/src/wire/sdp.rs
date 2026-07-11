@@ -222,37 +222,21 @@ fn ice_lines(ice: Option<&IceAttrs>) -> String {
 /// alongside the plain `c=`/`m=` address (which stays populated with our
 /// best candidate regardless, so a peer that ignores ICE still works).
 pub fn build_offer(
-    local_ip: &str,
-    rtp_port: u16,
-    srtp: Option<&SrtpParams>,
-    codecs: &[AudioCodec],
-    ice: Option<&IceAttrs>,
+    local_ip: &str, rtp_port: u16, srtp: Option<&SrtpParams>, codecs: &[AudioCodec], ice: Option<&IceAttrs>,
     vad_enabled: bool,
 ) -> String {
     let sid = now_ntp();
-    let codecs: &[AudioCodec] = if codecs.is_empty() {
-        &ALL_CODECS
-    } else {
-        codecs
-    };
+    let codecs: &[AudioCodec] = if codecs.is_empty() { &ALL_CODECS } else { codecs };
     // Only offered if at least one candidate codec shares CN's 8000 Hz
     // clock -- see `CN_PAYLOAD_TYPE`'s doc comment. If the answerer ends up
     // choosing Opus anyway, `MediaEngine` separately re-checks the actually
     // negotiated codec before ever using this.
     let advertise_cn = vad_enabled && codecs.iter().any(|&c| c != AudioCodec::Opus);
-    let pt_list: String = codecs
-        .iter()
-        .map(|c| c.payload_type().to_string())
-        .collect::<Vec<_>>()
-        .join(" ");
+    let pt_list: String = codecs.iter().map(|c| c.payload_type().to_string()).collect::<Vec<_>>().join(" ");
     let codec_lines: String = codecs.iter().map(|&c| rtpmap_and_fmtp_lines(c)).collect();
     let profile = savp_profile(srtp);
     let cn_pt_suffix = if advertise_cn { format!(" {CN_PAYLOAD_TYPE}") } else { String::new() };
-    let cn_line = if advertise_cn {
-        format!("a=rtpmap:{CN_PAYLOAD_TYPE} CN/8000\r\n")
-    } else {
-        String::new()
-    };
+    let cn_line = if advertise_cn { format!("a=rtpmap:{CN_PAYLOAD_TYPE} CN/8000\r\n") } else { String::new() };
     format!(
         "v=0\r\n\
          o=- {sid} {sid} IN IP4 {local_ip}\r\n\
@@ -276,11 +260,7 @@ pub fn build_offer(
 /// Build an SDP answer, selecting the negotiated voice `codec`.
 /// telephone-event is included if the offer contained it.
 pub fn build_answer(
-    local_ip: &str,
-    rtp_port: u16,
-    codec: AudioCodec,
-    srtp: Option<&SrtpParams>,
-    ice: Option<&IceAttrs>,
+    local_ip: &str, rtp_port: u16, codec: AudioCodec, srtp: Option<&SrtpParams>, ice: Option<&IceAttrs>,
     vad_enabled: bool,
 ) -> String {
     let sid = now_ntp();
@@ -289,11 +269,7 @@ pub fn build_answer(
     // See `CN_PAYLOAD_TYPE`'s doc comment for why this excludes Opus.
     let advertise_cn = vad_enabled && codec != AudioCodec::Opus;
     let pt_suffix = if advertise_cn { format!(" {CN_PAYLOAD_TYPE}") } else { String::new() };
-    let cn_line = if advertise_cn {
-        format!("a=rtpmap:{CN_PAYLOAD_TYPE} CN/8000\r\n")
-    } else {
-        String::new()
-    };
+    let cn_line = if advertise_cn { format!("a=rtpmap:{CN_PAYLOAD_TYPE} CN/8000\r\n") } else { String::new() };
     format!(
         "v=0\r\n\
          o=- {sid} {sid} IN IP4 {local_ip}\r\n\
@@ -316,12 +292,7 @@ pub fn build_answer(
 }
 
 /// Build a hold SDP (a=sendonly) for re-INVITE.
-pub fn build_hold_offer(
-    local_ip: &str,
-    rtp_port: u16,
-    codec: AudioCodec,
-    srtp: Option<&SrtpParams>,
-) -> String {
+pub fn build_hold_offer(local_ip: &str, rtp_port: u16, codec: AudioCodec, srtp: Option<&SrtpParams>) -> String {
     let sid = now_ntp();
     let pt = codec.payload_type();
     let profile = savp_profile(srtp);
@@ -344,12 +315,7 @@ pub fn build_hold_offer(
 }
 
 /// Build a resume SDP (a=sendrecv) for re-INVITE.
-pub fn build_resume_offer(
-    local_ip: &str,
-    rtp_port: u16,
-    codec: AudioCodec,
-    srtp: Option<&SrtpParams>,
-) -> String {
+pub fn build_resume_offer(local_ip: &str, rtp_port: u16, codec: AudioCodec, srtp: Option<&SrtpParams>) -> String {
     let sid = now_ntp();
     let pt = codec.payload_type();
     let profile = savp_profile(srtp);
@@ -414,11 +380,7 @@ pub fn parse_sdp(sdp: &str, allowed: &[AudioCodec]) -> Option<ParsedSdp> {
 /// Incoming" (`SipAccount::force_incoming_codec`). Falls back to ordinary
 /// preference-order selection if `force` is `None`, isn't in `allowed`, or
 /// the remote simply didn't offer it.
-pub fn parse_sdp_forcing(
-    sdp: &str,
-    allowed: &[AudioCodec],
-    force: Option<AudioCodec>,
-) -> Option<ParsedSdp> {
+pub fn parse_sdp_forcing(sdp: &str, allowed: &[AudioCodec], force: Option<AudioCodec>) -> Option<ParsedSdp> {
     let mut connection_ip: Option<String> = None;
     let mut rtp_port: Option<u16> = None;
     let mut pt_list: Vec<u8> = Vec::new();
@@ -516,17 +478,9 @@ pub fn parse_sdp_forcing(
     // first payload type in the m= line's order that we recognize AND allow.
     let (codec, payload_type) = force
         .and_then(|forced| {
-            pt_list.iter().find_map(|&pt| {
-                resolve(pt)
-                    .filter(|&c| c == forced && allowed.contains(&c))
-                    .map(|c| (c, pt))
-            })
+            pt_list.iter().find_map(|&pt| resolve(pt).filter(|&c| c == forced && allowed.contains(&c)).map(|c| (c, pt)))
         })
-        .or_else(|| {
-            pt_list.iter().find_map(|&pt| {
-                resolve(pt).filter(|c| allowed.contains(c)).map(|c| (c, pt))
-            })
-        })?;
+        .or_else(|| pt_list.iter().find_map(|&pt| resolve(pt).filter(|c| allowed.contains(c)).map(|c| (c, pt))))?;
 
     Some(ParsedSdp {
         rtp_addr,
@@ -627,11 +581,7 @@ pub struct ParsedVideoMedia {
 /// cleanly onto `build_offer`'s/`build_answer`'s existing output once
 /// Phase 2 wires video in.
 pub fn build_video_media_section(
-    local_ip: &str,
-    rtp_port: u16,
-    codec: VideoCodec,
-    srtp: Option<&SrtpParams>,
-    ice: Option<&IceAttrs>,
+    local_ip: &str, rtp_port: u16, codec: VideoCodec, srtp: Option<&SrtpParams>, ice: Option<&IceAttrs>,
 ) -> String {
     let profile = savp_profile(srtp);
     let pt = codec.payload_type();
@@ -685,11 +635,7 @@ pub fn split_media_sections(sdp: &str) -> Vec<(&str, Vec<&str>)> {
 /// section's own following lines. Same first-match-wins-against-`allowed`
 /// codec resolution as `parse_sdp_forcing`, scoped to a PT list already
 /// known to belong to this section.
-pub fn parse_video_section(
-    m_line: &str,
-    attr_lines: &[&str],
-    allowed: &[VideoCodec],
-) -> Option<ParsedVideoMedia> {
+pub fn parse_video_section(m_line: &str, attr_lines: &[&str], allowed: &[VideoCodec]) -> Option<ParsedVideoMedia> {
     let rest = m_line.strip_prefix("m=video ")?;
     let mut parts = rest.split_whitespace();
     let rtp_port: u16 = parts.next()?.parse().ok()?;
@@ -739,29 +685,16 @@ pub fn parse_video_section(
             None
         }
     };
-    let (codec, payload_type) = pt_list
-        .iter()
-        .find_map(|&pt| resolve(pt).filter(|c| allowed.contains(c)).map(|c| (c, pt)))?;
+    let (codec, payload_type) =
+        pt_list.iter().find_map(|&pt| resolve(pt).filter(|c| allowed.contains(c)).map(|c| (c, pt)))?;
 
-    Some(ParsedVideoMedia {
-        rtp_addr,
-        codec,
-        payload_type,
-        is_sendonly,
-        srtp,
-        ice_ufrag,
-        ice_pwd,
-        ice_candidates,
-    })
+    Some(ParsedVideoMedia { rtp_addr, codec, payload_type, is_sendonly, srtp, ice_ufrag, ice_pwd, ice_candidates })
 }
 
 fn now_ntp() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-        + 2_208_988_800 // seconds from NTP epoch (1900) to Unix epoch (1970)
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() + 2_208_988_800
+    // seconds from NTP epoch (1900) to Unix epoch (1970)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

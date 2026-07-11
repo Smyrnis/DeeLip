@@ -19,14 +19,8 @@ fn friendly_uri_handles_bare_no_host() {
 #[test]
 fn friendly_uri_anonymous_caller() {
     crate::strings::init(deelip_config::Language::En);
-    assert_eq!(
-        friendly_uri("sip:anonymous@anonymous.invalid"),
-        "Unknown caller"
-    );
-    assert_eq!(
-        friendly_uri("sip:Anonymous@Anonymous.Invalid"),
-        "Unknown caller"
-    );
+    assert_eq!(friendly_uri("sip:anonymous@anonymous.invalid"), "Unknown caller");
+    assert_eq!(friendly_uri("sip:Anonymous@Anonymous.Invalid"), "Unknown caller");
 }
 
 #[test]
@@ -44,17 +38,11 @@ fn resolve_caller_prefers_contact_name() {
             presence_account: None,
         }],
     };
-    assert_eq!(
-        resolve_caller(&book, "sip:600@127.0.0.1"),
-        ("Bob Marley".to_string(), true)
-    );
+    assert_eq!(resolve_caller(&book, "sip:600@127.0.0.1"), ("Bob Marley".to_string(), true));
 }
 
 #[test]
 fn resolve_caller_falls_back_to_friendly_uri() {
     let book = ContactBook::default();
-    assert_eq!(
-        resolve_caller(&book, "sip:700@127.0.0.1"),
-        ("700".to_string(), false)
-    );
+    assert_eq!(resolve_caller(&book, "sip:700@127.0.0.1"), ("700".to_string(), false));
 }

@@ -110,9 +110,7 @@ impl DeelipApp {
     /// feed into it).
     fn show_settings(&mut self, ui: &mut Ui) {
         if self.config.accounts.is_empty() {
-            self.config
-                .accounts
-                .push(deelip_config::SipAccount::default());
+            self.config.accounts.push(deelip_config::SipAccount::default());
         }
         self.edit_account_idx = self.edit_account_idx.min(self.config.accounts.len() - 1);
         let palette = self.palette;
@@ -155,9 +153,7 @@ impl DeelipApp {
                 }
             }
             if self.settings_saved_notice {
-                ui.label(
-                    RichText::new(t("settings.saved_restart_notice")).color(palette.signal),
-                );
+                ui.label(RichText::new(t("settings.saved_restart_notice")).color(palette.signal));
             }
             ui.add_space(4.0);
         });
@@ -180,11 +176,9 @@ impl DeelipApp {
             // otherwise do.
             SettingsTab::Account => {
                 let mut edited = false;
-                egui::ScrollArea::vertical()
-                    .id_source("account_tab_scroll")
-                    .show(ui, |ui| {
-                        edited = self.show_account_section(ui, &palette);
-                    });
+                egui::ScrollArea::vertical().id_source("account_tab_scroll").show(ui, |ui| {
+                    edited = self.show_account_section(ui, &palette);
+                });
                 edited
             }
             SettingsTab::Audio => self.show_audio_section(ui, &palette),
@@ -199,17 +193,15 @@ impl DeelipApp {
             // overflow past the window's bottom, taking the Save button
             // with them.
             SettingsTab::Advanced => {
-                egui::ScrollArea::vertical()
-                    .id_source("advanced_tab_scroll")
-                    .show(ui, |ui| {
-                        self.show_updates_section(ui, &palette);
-                        ui.add_space(14.0);
-                        self.show_blocklist_section(ui, &palette);
-                        ui.add_space(14.0);
-                        self.show_history_export_section(ui, &palette);
-                        ui.add_space(14.0);
-                        self.show_contacts_data_section(ui, &palette);
-                    });
+                egui::ScrollArea::vertical().id_source("advanced_tab_scroll").show(ui, |ui| {
+                    self.show_updates_section(ui, &palette);
+                    ui.add_space(14.0);
+                    self.show_blocklist_section(ui, &palette);
+                    ui.add_space(14.0);
+                    self.show_history_export_section(ui, &palette);
+                    ui.add_space(14.0);
+                    self.show_contacts_data_section(ui, &palette);
+                });
                 false
             }
         };
@@ -230,11 +222,7 @@ pub(super) fn optional_text_field(ui: &mut Ui, palette: &Palette, value: &mut Op
 /// always filling the rest of the row -- for a row that needs to fit
 /// something else (a trailing label/control) after the field.
 pub(super) fn optional_text_field_sized(
-    ui: &mut Ui,
-    palette: &Palette,
-    value: &mut Option<String>,
-    hint: &str,
-    width: f32,
+    ui: &mut Ui, palette: &Palette, value: &mut Option<String>, hint: &str, width: f32,
 ) -> bool {
     let mut text = value.clone().unwrap_or_default();
     let changed = text_edit_scope(ui, palette, |ui| {
@@ -256,12 +244,7 @@ pub(super) fn optional_text_field_sized(
 pub(super) fn optional_password_field(ui: &mut Ui, palette: &Palette, value: &mut Option<String>) -> bool {
     let mut text = value.clone().unwrap_or_default();
     let changed = text_edit_scope(ui, palette, |ui| {
-        ui.add(
-            egui::TextEdit::singleline(&mut text)
-                .password(true)
-                .desired_width(f32::INFINITY),
-        )
-        .changed()
+        ui.add(egui::TextEdit::singleline(&mut text).password(true).desired_width(f32::INFINITY)).changed()
     });
     if changed {
         *value = if text.is_empty() { None } else { Some(text) };

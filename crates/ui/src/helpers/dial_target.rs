@@ -15,10 +15,7 @@ pub(crate) fn normalize_target(raw: &str, domain: &str) -> String {
 /// an outside line) is just the simple auto-prepend fallback used when no
 /// rule matches (or the list is empty).
 pub(crate) fn normalize_target_with_prefix(
-    raw: &str,
-    domain: &str,
-    prefix: &str,
-    dial_plan: &[DialPlanRule],
+    raw: &str, domain: &str, prefix: &str, dial_plan: &[DialPlanRule],
 ) -> String {
     let raw = raw.trim();
     let lower = raw.to_ascii_lowercase();
@@ -46,10 +43,7 @@ pub(crate) fn normalize_target_with_prefix(
 /// be typed as either a plain number or a full SIP URI.
 pub(crate) fn extract_user_part(uri: &str) -> String {
     let lower = uri.trim().to_ascii_lowercase();
-    let stripped = lower
-        .strip_prefix("sip:")
-        .or_else(|| lower.strip_prefix("sips:"))
-        .unwrap_or(&lower);
+    let stripped = lower.strip_prefix("sip:").or_else(|| lower.strip_prefix("sips:")).unwrap_or(&lower);
     let before_at = stripped.split('@').next().unwrap_or(stripped);
     before_at.split(';').next().unwrap_or(before_at).to_string()
 }

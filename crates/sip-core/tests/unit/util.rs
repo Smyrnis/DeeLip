@@ -26,14 +26,8 @@ fn parse_via_received_missing_params_returns_none() {
 
 #[test]
 fn parse_session_expires_with_refresher() {
-    assert_eq!(
-        parse_session_expires("1800;refresher=uac"),
-        Some((1800, Some("uac".to_string())))
-    );
-    assert_eq!(
-        parse_session_expires("90;refresher=UAS"),
-        Some((90, Some("uas".to_string())))
-    );
+    assert_eq!(parse_session_expires("1800;refresher=uac"), Some((1800, Some("uac".to_string()))));
+    assert_eq!(parse_session_expires("90;refresher=UAS"), Some((90, Some("uas".to_string()))));
 }
 
 #[test]
@@ -80,42 +74,27 @@ fn parse_call_info_answer_after_missing_returns_none() {
 
 #[test]
 fn uri_host_port_bare_ip_defaults_port() {
-    assert_eq!(
-        uri_host_port("192.168.1.50"),
-        Some(("192.168.1.50".to_string(), 5060))
-    );
+    assert_eq!(uri_host_port("192.168.1.50"), Some(("192.168.1.50".to_string(), 5060)));
 }
 
 #[test]
 fn uri_host_port_sip_scheme_with_port() {
-    assert_eq!(
-        uri_host_port("sip:192.168.1.50:5061"),
-        Some(("192.168.1.50".to_string(), 5061))
-    );
+    assert_eq!(uri_host_port("sip:192.168.1.50:5061"), Some(("192.168.1.50".to_string(), 5061)));
 }
 
 #[test]
 fn uri_host_port_strips_user_part() {
-    assert_eq!(
-        uri_host_port("sip:bob@192.168.1.50:5060"),
-        Some(("192.168.1.50".to_string(), 5060))
-    );
+    assert_eq!(uri_host_port("sip:bob@192.168.1.50:5060"), Some(("192.168.1.50".to_string(), 5060)));
 }
 
 #[test]
 fn uri_host_port_strips_uri_params() {
-    assert_eq!(
-        uri_host_port("sip:bob@192.168.1.50:5060;transport=udp"),
-        Some(("192.168.1.50".to_string(), 5060))
-    );
+    assert_eq!(uri_host_port("sip:bob@192.168.1.50:5060;transport=udp"), Some(("192.168.1.50".to_string(), 5060)));
 }
 
 #[test]
 fn uri_host_port_ipv6_literal() {
-    assert_eq!(
-        uri_host_port("sip:[::1]:5060"),
-        Some(("::1".to_string(), 5060))
-    );
+    assert_eq!(uri_host_port("sip:[::1]:5060"), Some(("::1".to_string(), 5060)));
     assert_eq!(uri_host_port("sip:[::1]"), Some(("::1".to_string(), 5060)));
 }
 
@@ -126,18 +105,12 @@ fn uri_host_port_empty_returns_none() {
 
 #[test]
 fn parse_uri_prefers_angle_bracket_form() {
-    assert_eq!(
-        parse_uri("\"Alice\" <sip:alice@example.com>;tag=abc"),
-        Some("sip:alice@example.com".to_string())
-    );
+    assert_eq!(parse_uri("\"Alice\" <sip:alice@example.com>;tag=abc"), Some("sip:alice@example.com".to_string()));
 }
 
 #[test]
 fn parse_uri_bare_form_well_formed() {
-    assert_eq!(
-        parse_uri("sip:bob@example.com;tag=xyz"),
-        Some("sip:bob@example.com".to_string())
-    );
+    assert_eq!(parse_uri("sip:bob@example.com;tag=xyz"), Some("sip:bob@example.com".to_string()));
 }
 
 #[test]
@@ -145,10 +118,7 @@ fn parse_uri_bare_form_with_glued_leading_token() {
     // Some UAs send a malformed bare header with a display-name-like token
     // glued directly onto the URI, no quotes/brackets -- must not store the
     // leading "600:" token as part of the URI.
-    assert_eq!(
-        parse_uri("600:sip:scco@10.0.0.5;tag=abc"),
-        Some("sip:scco@10.0.0.5".to_string())
-    );
+    assert_eq!(parse_uri("600:sip:scco@10.0.0.5;tag=abc"), Some("sip:scco@10.0.0.5".to_string()));
 }
 
 #[test]

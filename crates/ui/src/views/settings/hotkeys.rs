@@ -12,9 +12,9 @@ impl DeelipApp {
         ui.label(RichText::new(t("settings.tab_hotkeys")).font(theme::font_heading(13.5)));
         theme::full_width_card(ui, *palette, |ui| {
             ui.horizontal(|ui| {
-                edited |= ui.checkbox(&mut self.config.global_hotkeys_enabled,
-                    t("settings.hotkeys.enable_global_checkbox")
-                ).changed();
+                edited |= ui
+                    .checkbox(&mut self.config.global_hotkeys_enabled, t("settings.hotkeys.enable_global_checkbox"))
+                    .changed();
                 info_hint(ui, palette, &t("settings.hotkeys.format_hint"));
             });
             if self.config.global_hotkeys_enabled {
@@ -32,9 +32,9 @@ impl DeelipApp {
             }
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                edited |= ui.checkbox(&mut self.config.handle_media_buttons,
-                    t("settings.hotkeys.media_buttons_checkbox")
-                ).changed();
+                edited |= ui
+                    .checkbox(&mut self.config.handle_media_buttons, t("settings.hotkeys.media_buttons_checkbox"))
+                    .changed();
                 info_hint(ui, palette, &t("settings.hotkeys.media_buttons_hint"));
             });
         });

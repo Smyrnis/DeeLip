@@ -43,11 +43,7 @@ fn sample_dhpart() -> DhPart {
 }
 
 fn sample_confirm() -> Confirm {
-    Confirm {
-        confirm_mac: [0x99; 8],
-        cfb_iv: [0xaa; 16],
-        encrypted: vec![0xbb; 36],
-    }
+    Confirm { confirm_mac: [0x99; 8], cfb_iv: [0xaa; 16], encrypted: vec![0xbb; 36] }
 }
 
 #[test]
@@ -116,19 +112,12 @@ fn unknown_message_type_is_rejected() {
     let crc_at = bytes.len() - 4;
     let crc = CRC32.checksum(&bytes[..crc_at]);
     bytes[crc_at..].copy_from_slice(&crc.to_be_bytes());
-    assert!(matches!(
-        Message::decode(&bytes),
-        Err(WireError::UnknownMessageType(_))
-    ));
+    assert!(matches!(Message::decode(&bytes), Err(WireError::UnknownMessageType(_))));
 }
 
 #[test]
 fn packet_roundtrip() {
-    let packet = Packet {
-        sequence: 42,
-        ssrc: 0xdead_beef,
-        message: Message::Hello(sample_hello()),
-    };
+    let packet = Packet { sequence: 42, ssrc: 0xdead_beef, message: Message::Hello(sample_hello()) };
     let bytes = packet.encode();
     assert!(is_zrtp_packet(&bytes));
     assert_eq!(Packet::decode(&bytes).unwrap(), packet);
@@ -136,12 +125,7 @@ fn packet_roundtrip() {
 
 #[test]
 fn packet_rejects_bad_magic_cookie() {
-    let mut bytes = Packet {
-        sequence: 1,
-        ssrc: 2,
-        message: Message::Conf2Ack,
-    }
-    .encode();
+    let mut bytes = Packet { sequence: 1, ssrc: 2, message: Message::Conf2Ack }.encode();
     bytes[4] = 0;
     assert!(!is_zrtp_packet(&bytes));
     assert!(matches!(Packet::decode(&bytes), Err(WireError::BadMagicCookie)));

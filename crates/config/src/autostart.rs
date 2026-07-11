@@ -6,8 +6,7 @@ use anyhow::Context;
 /// autostart path, honored by GNOME/KDE/XFCE alike without needing a
 /// systemd unit.
 fn autostart_desktop_path() -> anyhow::Result<PathBuf> {
-    let base = dirs::config_dir()
-        .ok_or_else(|| anyhow::anyhow!("Cannot determine user config directory"))?;
+    let base = dirs::config_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine user config directory"))?;
     Ok(base.join("autostart").join("deelip.desktop"))
 }
 
@@ -28,8 +27,7 @@ pub fn set_autostart(enabled: bool) -> anyhow::Result<()> {
 
     let exe = std::env::current_exe().context("Resolving current executable path")?;
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("Creating {}", parent.display()))?;
+        std::fs::create_dir_all(parent).with_context(|| format!("Creating {}", parent.display()))?;
     }
     let contents = format!(
         "[Desktop Entry]\nType=Application\nName=DeeLip\nExec={}\nX-GNOME-Autostart-enabled=true\n",

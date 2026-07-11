@@ -9,14 +9,13 @@ const ULAW_CLIP: i32 = 32_635;
 
 // Maps (pcm + bias) >> 7 (0-255) to exponent (0-7)
 static ULAW_EXP: [i32; 256] = [
-    0, 0, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
-    5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
-    6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6,
-    6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6,
-    7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
-    7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
-    7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
-    7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
+    0, 0, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 5, 5,
+    5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6,
+    6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6,
+    6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
+    7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
+    7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
+    7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
 ];
 
 pub fn pcm_to_ulaw(pcm: i16) -> u8 {
@@ -201,10 +200,7 @@ impl Default for G722Encoder {
 
 impl G722Encoder {
     pub fn new() -> Self {
-        Self {
-            codec: RawG722Encoder::new(),
-            resampler: Resampler::new(G722_NARROWBAND_HZ, G722_WIDEBAND_HZ),
-        }
+        Self { codec: RawG722Encoder::new(), resampler: Resampler::new(G722_NARROWBAND_HZ, G722_WIDEBAND_HZ) }
     }
 
     pub fn encode(&mut self, pcm: &[i16]) -> Vec<u8> {
@@ -226,10 +222,7 @@ impl Default for G722Decoder {
 
 impl G722Decoder {
     pub fn new() -> Self {
-        Self {
-            codec: RawG722Decoder::new(),
-            resampler: Resampler::new(G722_WIDEBAND_HZ, G722_NARROWBAND_HZ),
-        }
+        Self { codec: RawG722Decoder::new(), resampler: Resampler::new(G722_WIDEBAND_HZ, G722_NARROWBAND_HZ) }
     }
 
     pub fn decode(&mut self, payload: &[u8]) -> Vec<i16> {
@@ -360,18 +353,14 @@ impl GsmDecoder {
 
     pub fn decode(&mut self, payload: &[u8]) -> Vec<i16> {
         if payload.len() != 33 {
-            tracing::error!(
-                "GSM decode: expected a 33-byte frame, got {}",
-                payload.len()
-            );
+            tracing::error!("GSM decode: expected a 33-byte frame, got {}", payload.len());
             return Vec::new();
         }
         let mut out = [0i16; crate::audio::FRAME_SAMPLES];
         // Safety: `gsm_decode` reads exactly 33 bytes from `arg2` (checked
         // above) and writes exactly 160 `GsmSignal` samples to `arg3`,
         // which `out` is sized to hold.
-        let rc =
-            unsafe { gsm_sys::gsm_decode(self.0, payload.as_ptr() as *mut _, out.as_mut_ptr()) };
+        let rc = unsafe { gsm_sys::gsm_decode(self.0, payload.as_ptr() as *mut _, out.as_mut_ptr()) };
         if rc != 0 {
             tracing::error!("GSM decode failed (rc={rc})");
             return Vec::new();
@@ -413,11 +402,7 @@ fn pcm_to_audio_frame(pcm: &[i16]) -> Frame {
     for &s in pcm {
         bytes.extend_from_slice(&s.to_le_bytes());
     }
-    Frame::Audio(AudioFrame {
-        samples: pcm.len() as u32,
-        pts: Some(0),
-        data: vec![bytes],
-    })
+    Frame::Audio(AudioFrame { samples: pcm.len() as u32, pts: Some(0), data: vec![bytes] })
 }
 
 pub struct IlbcEncoder(Box<dyn OxEncoder>);
@@ -438,10 +423,7 @@ impl IlbcEncoder {
         // accumulated into a full frame yet -- can't happen when called
         // with exactly one 160-sample frame at a time, as `engine.rs` does,
         // but treated as "nothing to send yet" rather than a hard error.
-        self.0
-            .receive_packet()
-            .map(|pkt| pkt.data)
-            .unwrap_or_default()
+        self.0.receive_packet().map(|pkt| pkt.data).unwrap_or_default()
     }
 }
 
@@ -455,11 +437,7 @@ impl IlbcDecoder {
     }
 
     pub fn decode(&mut self, payload: &[u8]) -> Vec<i16> {
-        let pkt = Packet::new(
-            0,
-            TimeBase::new(1, crate::audio::SAMPLE_RATE as i64),
-            payload.to_vec(),
-        );
+        let pkt = Packet::new(0, TimeBase::new(1, crate::audio::SAMPLE_RATE as i64), payload.to_vec());
         if let Err(e) = self.0.send_packet(&pkt) {
             tracing::error!("iLBC decode (send_packet) failed: {e}");
             return Vec::new();
@@ -468,12 +446,7 @@ impl IlbcDecoder {
             Ok(Frame::Audio(af)) => af
                 .data
                 .first()
-                .map(|bytes| {
-                    bytes
-                        .chunks_exact(2)
-                        .map(|c| i16::from_le_bytes([c[0], c[1]]))
-                        .collect()
-                })
+                .map(|bytes| bytes.chunks_exact(2).map(|c| i16::from_le_bytes([c[0], c[1]])).collect())
                 .unwrap_or_default(),
             Ok(_) => Vec::new(),
             Err(e) => {

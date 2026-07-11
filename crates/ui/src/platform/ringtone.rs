@@ -41,10 +41,7 @@ impl Ringtone {
     /// applied via `Sink::set_volume`, uniformly across both the custom-WAV
     /// and synthesized-tone paths -- `1.0` is unchanged/full volume.
     pub fn start(
-        kind: RingKind,
-        device_name: Option<&str>,
-        ringtone_file: Option<&str>,
-        volume: f32,
+        kind: RingKind, device_name: Option<&str>, ringtone_file: Option<&str>, volume: f32,
     ) -> anyhow::Result<Self> {
         let (stream, handle) = open_stream(device_name)?;
 
@@ -56,23 +53,15 @@ impl Ringtone {
                     Ok(source) => {
                         sink.append(source);
                         sink.play();
-                        return Ok(Self {
-                            _stream: stream,
-                            sink,
-                        });
+                        return Ok(Self { _stream: stream, sink });
                     }
-                    Err(e) => tracing::warn!(
-                        "Custom ringtone {path} failed to load ({e}), using built-in tone"
-                    ),
+                    Err(e) => tracing::warn!("Custom ringtone {path} failed to load ({e}), using built-in tone"),
                 }
             }
         }
         sink.append(RingSource::new(kind));
         sink.play();
-        Ok(Self {
-            _stream: stream,
-            sink,
-        })
+        Ok(Self { _stream: stream, sink })
     }
 }
 
@@ -142,8 +131,7 @@ impl Iterator for RingSource {
         let sample = if pos < self.on_samples {
             let t = self.phase as f32 / self.sample_rate as f32;
             let (f1, f2) = self.freqs;
-            0.12 * ((2.0 * std::f32::consts::PI * f1 * t).sin()
-                + (2.0 * std::f32::consts::PI * f2 * t).sin())
+            0.12 * ((2.0 * std::f32::consts::PI * f1 * t).sin() + (2.0 * std::f32::consts::PI * f2 * t).sin())
         } else {
             0.0
         };

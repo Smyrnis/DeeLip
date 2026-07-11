@@ -13,20 +13,14 @@ fn encode_decode_round_trip_dimensions_match() {
     for _ in 0..3 {
         let frame = Yuv420Frame::solid_color(640, 480, 128, 128, 128);
         let bitstream = encoder.encode(&frame).unwrap();
-        assert!(
-            !bitstream.is_empty(),
-            "encoder must produce a non-empty NAL bitstream"
-        );
+        assert!(!bitstream.is_empty(), "encoder must produce a non-empty NAL bitstream");
         if let Some(decoded) = decoder.decode(&bitstream).unwrap() {
             assert_eq!(decoded.width, 640);
             assert_eq!(decoded.height, 480);
             got_frame = true;
         }
     }
-    assert!(
-        got_frame,
-        "decoder should emit at least one frame across a short sequence"
-    );
+    assert!(got_frame, "decoder should emit at least one frame across a short sequence");
 }
 
 #[test]
@@ -46,8 +40,5 @@ fn decoder_keeps_working_across_multiple_frames() {
             decoded_count += 1;
         }
     }
-    assert!(
-        decoded_count > 0,
-        "decoder should emit frames across a 10-frame sequence"
-    );
+    assert!(decoded_count > 0, "decoder should emit frames across a 10-frame sequence");
 }

@@ -33,24 +33,14 @@ fn jitter_tracker_reports_zero_jitter_for_perfectly_paced_packets() {
         let pkt = RtpPacket::new(0, seq, ts, 1, vec![]);
         tracker.observe(&mut stats, &pkt, 8000.0);
     }
-    assert!(
-        stats.jitter_ms < 5.0,
-        "jitter should stay small for evenly-paced packets, got {}",
-        stats.jitter_ms
-    );
+    assert!(stats.jitter_ms < 5.0, "jitter should stay small for evenly-paced packets, got {}", stats.jitter_ms);
 }
 
 #[test]
 fn srtp_roundtrip_preserves_rtp_payload() {
     let params = SrtpParams::generate();
-    let mut enc_ctx = SrtpContext::new(
-        &params.key,
-        &params.salt,
-        ProtectionProfile::Aes128CmHmacSha1_80,
-        None,
-        None,
-    )
-    .unwrap();
+    let mut enc_ctx =
+        SrtpContext::new(&params.key, &params.salt, ProtectionProfile::Aes128CmHmacSha1_80, None, None).unwrap();
     let mut dec_ctx = SrtpContext::new(
         &params.key,
         &params.salt,
@@ -76,14 +66,8 @@ fn srtp_roundtrip_preserves_rtp_payload() {
 fn srtp_decrypt_rejects_wrong_key() {
     let params_a = SrtpParams::generate();
     let params_b = SrtpParams::generate();
-    let mut enc_ctx = SrtpContext::new(
-        &params_a.key,
-        &params_a.salt,
-        ProtectionProfile::Aes128CmHmacSha1_80,
-        None,
-        None,
-    )
-    .unwrap();
+    let mut enc_ctx =
+        SrtpContext::new(&params_a.key, &params_a.salt, ProtectionProfile::Aes128CmHmacSha1_80, None, None).unwrap();
     let mut dec_ctx = SrtpContext::new(
         &params_b.key,
         &params_b.salt,

@@ -60,17 +60,32 @@ impl DeelipApp {
                 }
             });
 
-            egui::Grid::new("settings_audio_grid")
-                .num_columns(2)
-                .spacing([8.0, 4.0])
-                .show(ui, |ui| {
-                    edited |= device_picker(ui, "settings_input_device", &t("settings.audio.input_device_label"), &mut self.config.audio.input_device, &input_names);
-                    ui.end_row();
-                    edited |= device_picker(ui, "settings_output_device", &t("settings.audio.output_device_label"), &mut self.config.audio.output_device, &output_names);
-                    ui.end_row();
-                    edited |= device_picker(ui, "settings_ringtone_device", &t("settings.audio.ringing_device_label"), &mut self.config.audio.ringtone_device, &output_names);
-                    ui.end_row();
-                });
+            egui::Grid::new("settings_audio_grid").num_columns(2).spacing([8.0, 4.0]).show(ui, |ui| {
+                edited |= device_picker(
+                    ui,
+                    "settings_input_device",
+                    &t("settings.audio.input_device_label"),
+                    &mut self.config.audio.input_device,
+                    &input_names,
+                );
+                ui.end_row();
+                edited |= device_picker(
+                    ui,
+                    "settings_output_device",
+                    &t("settings.audio.output_device_label"),
+                    &mut self.config.audio.output_device,
+                    &output_names,
+                );
+                ui.end_row();
+                edited |= device_picker(
+                    ui,
+                    "settings_ringtone_device",
+                    &t("settings.audio.ringing_device_label"),
+                    &mut self.config.audio.ringtone_device,
+                    &output_names,
+                );
+                ui.end_row();
+            });
             ui.horizontal(|ui| {
                 ui.label(RichText::new(t("settings.audio.ringing_device_caption")).color(palette.ink_muted).small());
                 info_hint(ui, palette, &t("settings.audio.ringing_device_hint"));
@@ -79,7 +94,11 @@ impl DeelipApp {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 field_label(ui, palette, &t("settings.audio.custom_ringtone_label"));
-                let name = self.config.audio.ringtone_file.as_deref()
+                let name = self
+                    .config
+                    .audio
+                    .ringtone_file
+                    .as_deref()
                     .and_then(|p| std::path::Path::new(p).file_name())
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_else(|| t("settings.audio.built_in_tone"));
@@ -99,12 +118,18 @@ impl DeelipApp {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 field_label(ui, palette, &t("settings.audio.ringtone_volume_label"));
-                edited |= styled_slider(ui, palette, egui::Slider::new(&mut self.config.audio.ringtone_volume, 0.0..=2.0)
-                    .fixed_decimals(2)).changed();
+                edited |= styled_slider(
+                    ui,
+                    palette,
+                    egui::Slider::new(&mut self.config.audio.ringtone_volume, 0.0..=2.0).fixed_decimals(2),
+                )
+                .changed();
             });
 
             ui.add_space(6.0);
-            edited |= ui.checkbox(&mut self.config.audio.echo_cancellation, t("settings.audio.echo_cancellation_checkbox")).changed();
+            edited |= ui
+                .checkbox(&mut self.config.audio.echo_cancellation, t("settings.audio.echo_cancellation_checkbox"))
+                .changed();
             ui.horizontal(|ui| {
                 edited |= ui.checkbox(&mut self.config.audio.agc_enabled, t("settings.audio.agc_checkbox")).changed();
                 info_hint(ui, palette, &t("settings.audio.agc_hint"));
@@ -112,7 +137,9 @@ impl DeelipApp {
 
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                edited |= ui.checkbox(&mut self.config.recording_enabled, t("settings.audio.record_calls_checkbox")).changed();
+                edited |= ui
+                    .checkbox(&mut self.config.recording_enabled, t("settings.audio.record_calls_checkbox"))
+                    .changed();
                 info_hint(ui, palette, &t("settings.audio.record_calls_hint"));
             });
             if self.config.recording_enabled {
@@ -124,15 +151,26 @@ impl DeelipApp {
                             RecordingFormat::Mp3 => t("settings.audio.format_mp3"),
                         })
                         .show_ui(ui, |ui| {
-                            edited |= ui.selectable_value(&mut self.config.recording_format, RecordingFormat::Wav, t("settings.audio.format_wav")).changed();
-                            edited |= ui.selectable_value(&mut self.config.recording_format, RecordingFormat::Mp3, t("settings.audio.format_mp3")).changed();
+                            edited |= ui
+                                .selectable_value(
+                                    &mut self.config.recording_format,
+                                    RecordingFormat::Wav,
+                                    t("settings.audio.format_wav"),
+                                )
+                                .changed();
+                            edited |= ui
+                                .selectable_value(
+                                    &mut self.config.recording_format,
+                                    RecordingFormat::Mp3,
+                                    t("settings.audio.format_mp3"),
+                                )
+                                .changed();
                         });
                 });
                 ui.horizontal(|ui| {
                     field_label(ui, palette, &t("settings.audio.save_to_label"));
                     let default_shown = t("settings.audio.save_to_default");
-                    let shown = self.config.recordings_dir_override.as_deref()
-                        .unwrap_or(default_shown.as_str());
+                    let shown = self.config.recordings_dir_override.as_deref().unwrap_or(default_shown.as_str());
                     ui.label(RichText::new(shown).color(palette.ink_muted));
                     if ui.small_button(t("settings.choose_button")).clicked() {
                         if let Some(dir) = rfd::FileDialog::new().pick_folder() {
@@ -140,7 +178,9 @@ impl DeelipApp {
                             edited = true;
                         }
                     }
-                    if self.config.recordings_dir_override.is_some() && ui.small_button(t("settings.reset_button")).clicked() {
+                    if self.config.recordings_dir_override.is_some()
+                        && ui.small_button(t("settings.reset_button")).clicked()
+                    {
                         self.config.recordings_dir_override = None;
                         edited = true;
                     }
@@ -157,16 +197,9 @@ impl DeelipApp {
 fn list_device_names(input: bool) -> Vec<String> {
     use cpal::traits::{DeviceTrait, HostTrait};
     let host = cpal::default_host();
-    let devices = if input {
-        host.input_devices()
-    } else {
-        host.output_devices()
-    };
+    let devices = if input { host.input_devices() } else { host.output_devices() };
     match devices {
-        Ok(devices) => devices
-            .filter_map(|d| d.name().ok())
-            .filter(|name| !is_irrelevant_alsa_device(name))
-            .collect(),
+        Ok(devices) => devices.filter_map(|d| d.name().ok()).filter(|name| !is_irrelevant_alsa_device(name)).collect(),
         Err(_) => Vec::new(),
     }
 }

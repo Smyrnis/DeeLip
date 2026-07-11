@@ -59,11 +59,9 @@ impl DeelipApp {
         for msg in messages {
             match msg {
                 UpdateMsg::Checked(Ok(Some(release))) => {
-                    if self.config.update_skip_version.as_deref() == Some(release.version.as_str())
-                    {
+                    if self.config.update_skip_version.as_deref() == Some(release.version.as_str()) {
                         self.update_state = UpdateState::Idle;
-                    } else if self.config.auto_update_enabled && deelip_updater::can_self_replace()
-                    {
+                    } else if self.config.auto_update_enabled && deelip_updater::can_self_replace() {
                         self.start_update_download(release);
                     } else {
                         self.update_state = UpdateState::Available(release);
@@ -74,9 +72,7 @@ impl DeelipApp {
                     tracing::debug!("Update check failed (ignoring): {e:#}");
                     self.update_state = UpdateState::Idle;
                 }
-                UpdateMsg::Installed(Ok(()), version) => {
-                    self.update_state = UpdateState::Updated(version)
-                }
+                UpdateMsg::Installed(Ok(()), version) => self.update_state = UpdateState::Updated(version),
                 UpdateMsg::Installed(Err(e), _) => {
                     tracing::warn!("Auto-update failed: {e:#}");
                     self.update_state = UpdateState::Failed(e.to_string());
@@ -109,8 +105,7 @@ impl DeelipApp {
     /// the button that calls this is disabled in that case (see
     /// `show_update_popup`) so this is a last-resort guard, not the primary one.
     fn do_restart_to_update(&mut self) {
-        if !self.calls.is_empty() || self.pending_call.is_some() || self.pending_outbound.is_some()
-        {
+        if !self.calls.is_empty() || self.pending_call.is_some() || self.pending_outbound.is_some() {
             return;
         }
         let Ok(exe) = std::env::current_exe() else {
@@ -124,9 +119,7 @@ impl DeelipApp {
     /// Small popup shown on top of whatever tab is active -- called once
     /// per frame from `update()`. No-op while `update_state` is `Idle`/`Checking`.
     pub(crate) fn show_update_popup(&mut self, ctx: &egui::Context) {
-        let call_active = !self.calls.is_empty()
-            || self.pending_call.is_some()
-            || self.pending_outbound.is_some();
+        let call_active = !self.calls.is_empty() || self.pending_call.is_some() || self.pending_outbound.is_some();
 
         match &self.update_state {
             UpdateState::Idle | UpdateState::Checking => {}
@@ -147,9 +140,7 @@ impl DeelipApp {
                             &[("version", &version), ("current", env!("CARGO_PKG_VERSION"))],
                         ));
                         if !can_self_replace {
-                            ui.label(RichText::new(
-                                t("update.cant_auto_update")
-                            ).small());
+                            ui.label(RichText::new(t("update.cant_auto_update")).small());
                         }
                         ui.add_space(6.0);
                         ui.horizontal(|ui| {
@@ -157,9 +148,7 @@ impl DeelipApp {
                                 update_clicked = true;
                             }
                             if ui.button(t("update.view_release_button")).clicked() {
-                                let _ = std::process::Command::new("xdg-open")
-                                    .arg(&html_url)
-                                    .spawn();
+                                let _ = std::process::Command::new("xdg-open").arg(&html_url).spawn();
                             }
                             if ui.button(t("update.skip_version_button")).clicked() {
                                 skip_clicked = true;
@@ -206,9 +195,7 @@ impl DeelipApp {
                         }
                         ui.add_space(6.0);
                         ui.horizontal(|ui| {
-                            if ui
-                                .add_enabled(!call_active, egui::Button::new(t("update.restart_now_button")))
-                                .clicked()
+                            if ui.add_enabled(!call_active, egui::Button::new(t("update.restart_now_button"))).clicked()
                             {
                                 restart_clicked = true;
                             }

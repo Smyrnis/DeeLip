@@ -1,6 +1,6 @@
 use super::*;
 use crate::rtp::RtpSender;
-use deelip_sip::sdp::{H264_PAYLOAD_TYPE, SrtpParams};
+use deelip_sip::sdp::{SrtpParams, H264_PAYLOAD_TYPE};
 use deelip_sip::SrtpSession;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -28,10 +28,7 @@ fn zero_ts_increment_sender_shares_timestamp_within_a_frame() {
 }
 
 async fn run_pair(
-    alice_port: u16,
-    bob_port: u16,
-    alice_srtp: Option<SrtpSession>,
-    bob_srtp: Option<SrtpSession>,
+    alice_port: u16, bob_port: u16, alice_srtp: Option<SrtpSession>, bob_srtp: Option<SrtpSession>,
 ) -> (Arc<Mutex<Option<Yuv420Frame>>>, VideoEngine, VideoEngine) {
     let alice_source: Arc<Mutex<Option<Yuv420Frame>>> = Arc::new(Mutex::new(None));
     let bob_source: Arc<Mutex<Option<Yuv420Frame>>> = Arc::new(Mutex::new(None));
@@ -123,8 +120,7 @@ async fn encrypted_video_round_trips_over_real_udp() {
     let alice_srtp = SrtpSession { local: alice_key.clone(), remote: bob_key.clone() };
     let bob_srtp = SrtpSession { local: bob_key, remote: alice_key };
 
-    let (_alice_source, alice, bob) =
-        run_pair(41110, 41112, Some(alice_srtp), Some(bob_srtp)).await;
+    let (_alice_source, alice, bob) = run_pair(41110, 41112, Some(alice_srtp), Some(bob_srtp)).await;
 
     let mut got_bob_side = false;
     for _ in 0..40 {

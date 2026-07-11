@@ -113,10 +113,7 @@ impl DeelipApp {
                 }
             }
         });
-        let frame_source = camera
-            .as_ref()
-            .map(CaptureHandle::frame_slot)
-            .unwrap_or_else(|| Arc::new(Mutex::new(None)));
+        let frame_source = camera.as_ref().map(CaptureHandle::frame_slot).unwrap_or_else(|| Arc::new(Mutex::new(None)));
 
         let engine = self.rt.block_on(VideoEngine::start(
             video.local_rtp,
@@ -129,12 +126,8 @@ impl DeelipApp {
         ));
         match engine {
             Ok(engine) => {
-                self.video = Some(VideoCallState {
-                    engine,
-                    camera,
-                    remote: Default::default(),
-                    local: Default::default(),
-                });
+                self.video =
+                    Some(VideoCallState { engine, camera, remote: Default::default(), local: Default::default() });
             }
             Err(e) => tracing::error!("VideoEngine failed: {e:#}"),
         }
@@ -176,8 +169,7 @@ impl DeelipApp {
             // precedent as `hangup_before_exit`'s post-BYE grace sleep).
             // (See `hangup_before_exit` for why this must be an async block,
             // not a bare `tokio::time::sleep(...)` argument.)
-            self.rt
-                .block_on(async { tokio::time::sleep(Duration::from_millis(300)).await });
+            self.rt.block_on(async { tokio::time::sleep(Duration::from_millis(300)).await });
         }
 
         if let Some(engine) = self.media.take() {

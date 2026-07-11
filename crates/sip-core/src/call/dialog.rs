@@ -197,12 +197,7 @@ impl Dialog {
     }
 
     pub fn new_incoming(
-        call_id: String,
-        local_tag: String,
-        from_uri: String,
-        from_tag: String,
-        remote_cseq: u32,
-        remote_sdp: String,
+        call_id: String, local_tag: String, from_uri: String, from_tag: String, remote_cseq: u32, remote_sdp: String,
         remote_via: String,
     ) -> Self {
         Self {

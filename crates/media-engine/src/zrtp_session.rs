@@ -13,9 +13,7 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use deelip_sip::zrtp::{
-    CacheEntry, EngineEvent, RetainedSecrets, Role, SharedSecretStore, ZrtpEngine,
-};
+use deelip_sip::zrtp::{CacheEntry, EngineEvent, RetainedSecrets, Role, SharedSecretStore, ZrtpEngine};
 
 const RESEND_INTERVAL: Duration = Duration::from_millis(300);
 const MAX_ATTEMPTS: u32 = 15;
@@ -53,11 +51,7 @@ impl SharedSecretStore for SqliteSecretStore {
                     Ok(CacheEntry {
                         local_zid,
                         remote_zid,
-                        secrets: RetainedSecrets {
-                            rs1,
-                            rs2,
-                            verified: verified != 0,
-                        },
+                        secrets: RetainedSecrets { rs1, rs2, verified: verified != 0 },
                     })
                 },
             )
@@ -91,13 +85,7 @@ impl SharedSecretStore for SqliteSecretStore {
 pub enum ZrtpOutcome {
     SendBytes(Vec<u8>),
     Sas(String),
-    Secure {
-        srtp_key_i: [u8; 16],
-        srtp_salt_i: [u8; 14],
-        srtp_key_r: [u8; 16],
-        srtp_salt_r: [u8; 14],
-        role: Role,
-    },
+    Secure { srtp_key_i: [u8; 16], srtp_salt_i: [u8; 14], srtp_key_r: [u8; 16], srtp_salt_r: [u8; 14], role: Role },
     Failed(String),
 }
 
@@ -109,19 +97,12 @@ pub struct ZrtpRuntime {
 
 impl ZrtpRuntime {
     pub fn new(
-        role: Role,
-        local_zid: [u8; 12],
-        client_id: [u8; 16],
-        db_path: &Path,
+        role: Role, local_zid: [u8; 12], client_id: [u8; 16], db_path: &Path,
     ) -> anyhow::Result<(Self, Vec<ZrtpOutcome>)> {
         let store = SqliteSecretStore::open(db_path)?;
         let mut engine = ZrtpEngine::new(role, local_zid, client_id, store);
         let events = engine.start();
-        let mut runtime = Self {
-            engine,
-            pending_resend: None,
-            next_resend_at: Instant::now() + RESEND_INTERVAL,
-        };
+        let mut runtime = Self { engine, pending_resend: None, next_resend_at: Instant::now() + RESEND_INTERVAL };
         let outcomes = runtime.translate(events);
         Ok((runtime, outcomes))
     }

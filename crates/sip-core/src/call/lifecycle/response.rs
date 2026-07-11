@@ -38,10 +38,7 @@ impl SipStack {
             let ev = if status < 300 {
                 SipEvent::TransferAccepted { call_id }
             } else {
-                SipEvent::TransferFailed {
-                    call_id,
-                    reason: format!("{status}"),
-                }
+                SipEvent::TransferFailed { call_id, reason: format!("{status}") }
             };
             let _ = self.event_tx.send(ev);
             return;
@@ -53,8 +50,7 @@ impl SipStack {
         // / `self.mwi_subscriptions`, whichever map this call-id belongs to.
         if matches!(msg.cseq(), Some((_, SipMethod::Subscribe))) {
             if self.subscriptions.contains_key(&call_id) {
-                self.on_presence_subscribe_response(msg, status, call_id)
-                    .await;
+                self.on_presence_subscribe_response(msg, status, call_id).await;
             } else if self.mwi_subscriptions.contains_key(&call_id) {
                 self.on_mwi_subscribe_response(msg, status, call_id).await;
             }
@@ -148,9 +144,7 @@ impl SipStack {
         // scope) rather than threaded into the handler methods below --
         // `Act::Connected`/`Act::SessionRefreshAck` carry the parsed result
         // forward instead of the message itself.
-        let session_expires_hdr = msg
-            .header("Session-Expires")
-            .and_then(crate::wire::util::parse_session_expires);
+        let session_expires_hdr = msg.header("Session-Expires").and_then(crate::wire::util::parse_session_expires);
 
         let act = 'blk: {
             let Some(dialog) = self.dialogs.get_mut(&call_id) else {
@@ -173,8 +167,7 @@ impl SipStack {
                                     // Initial call connected
                                     dialog.state = DialogState::Confirmed;
                                     dialog.remote_tag = crate::wire::util::parse_tag(msg.header("To").unwrap_or(""));
-                                    dialog.remote_sdp =
-                                        Some(String::from_utf8_lossy(&msg.body).into_owned());
+                                    dialog.remote_sdp = Some(String::from_utf8_lossy(&msg.body).into_owned());
                                     Act::Connected {
                                         call_id: dialog.call_id.clone(),
                                         remote_sdp: dialog.remote_sdp.clone().unwrap_or_default(),
@@ -239,11 +232,7 @@ impl SipStack {
                             reason: "Unauthorized".into(),
                         };
                     };
-                    let hdr_name = if status == 407 {
-                        "Proxy-Authenticate"
-                    } else {
-                        "WWW-Authenticate"
-                    };
+                    let hdr_name = if status == 407 { "Proxy-Authenticate" } else { "WWW-Authenticate" };
                     let Some(challenge_raw) = msg.header(hdr_name).map(str::to_string) else {
                         break 'blk Act::Failed {
                             call_id: call_id.clone(),
@@ -272,10 +261,7 @@ impl SipStack {
                             reason: "Session Interval Too Small".into(),
                         };
                     };
-                    let Some(min_se) = msg
-                        .header("Min-SE")
-                        .and_then(|v| v.trim().parse::<u32>().ok())
-                    else {
+                    let Some(min_se) = msg.header("Min-SE").and_then(|v| v.trim().parse::<u32>().ok()) else {
                         break 'blk Act::Failed {
                             call_id: call_id.clone(),
                             code: status,
@@ -334,19 +320,8 @@ impl SipStack {
                 )
                 .await;
             }
-            Act::ReInviteAck {
-                call_id,
-                hold,
-                ack_cid,
-                ack_from_tag,
-                ack_to_uri,
-                ack_to_tag,
-                ack_cseq,
-            } => {
-                self.handle_reinvite_ack(
-                    call_id, hold, ack_cid, ack_from_tag, ack_to_uri, ack_to_tag, ack_cseq,
-                )
-                .await;
+            Act::ReInviteAck { call_id, hold, ack_cid, ack_from_tag, ack_to_uri, ack_to_tag, ack_cseq } => {
+                self.handle_reinvite_ack(call_id, hold, ack_cid, ack_from_tag, ack_to_uri, ack_to_tag, ack_cseq).await;
             }
             Act::SessionRefreshAck {
                 call_id,
@@ -372,17 +347,9 @@ impl SipStack {
                 self.dialogs.remove(&id);
                 let _ = self.event_tx.send(SipEvent::CallEnded { call_id: id });
             }
-            Act::Failed {
-                call_id,
-                code,
-                reason,
-            } => {
+            Act::Failed { call_id, code, reason } => {
                 self.dialogs.remove(&call_id);
-                let _ = self.event_tx.send(SipEvent::CallFailed {
-                    call_id,
-                    code,
-                    reason,
-                });
+                let _ = self.event_tx.send(SipEvent::CallFailed { call_id, code, reason });
             }
             Act::InviteChallenged {
                 call_id,
@@ -420,8 +387,15 @@ impl SipStack {
                 ack_cseq,
             } => {
                 self.handle_session_interval_too_small(
-                    call_id, to_uri, local_sdp, min_se, ack_cid, ack_from_tag, ack_to_uri,
-                    ack_to_tag, ack_cseq,
+                    call_id,
+                    to_uri,
+                    local_sdp,
+                    min_se,
+                    ack_cid,
+                    ack_from_tag,
+                    ack_to_uri,
+                    ack_to_tag,
+                    ack_cseq,
                 )
                 .await;
             }
@@ -432,28 +406,13 @@ impl SipStack {
                                          // field set one-for-one; a struct wrapper would
                                          // just rename this same list, not shrink it.
     async fn handle_connected(
-        &mut self,
-        call_id: String,
-        remote_sdp: String,
-        pending_offer: Option<PendingOfferMedia>,
-        ice_gathered: Option<deelip_nat::IceGathered>,
-        ack_cid: String,
-        ack_from_tag: String,
-        ack_to_uri: String,
-        ack_to_tag: Option<String>,
-        ack_cseq: u32,
-        session_expires_hdr: Option<(u32, Option<String>)>,
+        &mut self, call_id: String, remote_sdp: String, pending_offer: Option<PendingOfferMedia>,
+        ice_gathered: Option<deelip_nat::IceGathered>, ack_cid: String, ack_from_tag: String, ack_to_uri: String,
+        ack_to_tag: Option<String>, ack_cseq: u32, session_expires_hdr: Option<(u32, Option<String>)>,
     ) {
         // A 2xx ACK is a new transaction in its own right (RFC 3261
         // §13.2.2.4) -- unlike a non-2xx ACK, it gets a fresh branch.
-        let ack = self.build_ack(
-            &ack_cid,
-            &ack_from_tag,
-            &ack_to_uri,
-            ack_to_tag.as_deref(),
-            ack_cseq,
-            &new_branch(),
-        );
+        let ack = self.build_ack(&ack_cid, &ack_from_tag, &ack_to_uri, ack_to_tag.as_deref(), ack_cseq, &new_branch());
         let _ = self.transport.send(ack.as_bytes(), self.server_addr).await;
 
         // RFC 4028 Session Timers: fold the response's negotiated
@@ -467,8 +426,7 @@ impl SipStack {
                 dialog.we_are_refresher = refresher.as_deref() != Some("uas");
                 if dialog.we_are_refresher {
                     dialog.session_refresh_at = Some(
-                        tokio::time::Instant::now()
-                            + tokio::time::Duration::from_secs((interval / 2).max(1) as u64),
+                        tokio::time::Instant::now() + tokio::time::Duration::from_secs((interval / 2).max(1) as u64),
                     );
                 }
             }
@@ -492,12 +450,7 @@ impl SipStack {
             });
             return;
         };
-        let Some(PendingOfferMedia {
-            local_rtp,
-            local_srtp,
-            relay,
-        }) = pending_offer
-        else {
+        let Some(PendingOfferMedia { local_rtp, local_srtp, relay }) = pending_offer else {
             debug!(call_id, "Connected with no pending offer media -- dropping");
             return;
         };
@@ -506,8 +459,7 @@ impl SipStack {
         // parse the answer's own video section (a separate,
         // independent parse of `remote_sdp` -- never folded into
         // `parsed`/`ParsedSdp`, same as `accept_call`'s treatment).
-        let pending_offer_video =
-            self.dialogs.get_mut(&call_id).and_then(|d| d.pending_offer_video.take());
+        let pending_offer_video = self.dialogs.get_mut(&call_id).and_then(|d| d.pending_offer_video.take());
         let parsed_video = pending_offer_video.as_ref().and_then(|_| {
             split_media_sections(&remote_sdp)
                 .into_iter()
@@ -569,51 +521,21 @@ impl SipStack {
 
     #[allow(clippy::too_many_arguments)] // mirrors the `Act::ReInviteAck` variant's field set
     async fn handle_reinvite_ack(
-        &mut self,
-        call_id: String,
-        hold: bool,
-        ack_cid: String,
-        ack_from_tag: String,
-        ack_to_uri: String,
-        ack_to_tag: Option<String>,
-        ack_cseq: u32,
+        &mut self, call_id: String, hold: bool, ack_cid: String, ack_from_tag: String, ack_to_uri: String,
+        ack_to_tag: Option<String>, ack_cseq: u32,
     ) {
-        let ack = self.build_ack(
-            &ack_cid,
-            &ack_from_tag,
-            &ack_to_uri,
-            ack_to_tag.as_deref(),
-            ack_cseq,
-            &new_branch(),
-        );
+        let ack = self.build_ack(&ack_cid, &ack_from_tag, &ack_to_uri, ack_to_tag.as_deref(), ack_cseq, &new_branch());
         let _ = self.transport.send(ack.as_bytes(), self.server_addr).await;
-        let ev = if hold {
-            SipEvent::CallHeld { call_id }
-        } else {
-            SipEvent::CallResumed { call_id }
-        };
+        let ev = if hold { SipEvent::CallHeld { call_id } } else { SipEvent::CallResumed { call_id } };
         let _ = self.event_tx.send(ev);
     }
 
     #[allow(clippy::too_many_arguments)] // mirrors the `Act::SessionRefreshAck` variant's field set
     async fn handle_session_refresh_ack(
-        &mut self,
-        call_id: String,
-        ack_cid: String,
-        ack_from_tag: String,
-        ack_to_uri: String,
-        ack_to_tag: Option<String>,
-        ack_cseq: u32,
-        session_expires_hdr: Option<(u32, Option<String>)>,
+        &mut self, call_id: String, ack_cid: String, ack_from_tag: String, ack_to_uri: String,
+        ack_to_tag: Option<String>, ack_cseq: u32, session_expires_hdr: Option<(u32, Option<String>)>,
     ) {
-        let ack = self.build_ack(
-            &ack_cid,
-            &ack_from_tag,
-            &ack_to_uri,
-            ack_to_tag.as_deref(),
-            ack_cseq,
-            &new_branch(),
-        );
+        let ack = self.build_ack(&ack_cid, &ack_from_tag, &ack_to_uri, ack_to_tag.as_deref(), ack_cseq, &new_branch());
         let _ = self.transport.send(ack.as_bytes(), self.server_addr).await;
         // Reschedule from this response's (possibly renegotiated)
         // Session-Expires -- same parsing as the initial INVITE's
@@ -624,8 +546,7 @@ impl SipStack {
                 dialog.we_are_refresher = refresher.as_deref() != Some("uas");
                 if dialog.we_are_refresher {
                     dialog.session_refresh_at = Some(
-                        tokio::time::Instant::now()
-                            + tokio::time::Duration::from_secs((interval / 2).max(1) as u64),
+                        tokio::time::Instant::now() + tokio::time::Duration::from_secs((interval / 2).max(1) as u64),
                     );
                 }
             }
@@ -634,32 +555,16 @@ impl SipStack {
 
     #[allow(clippy::too_many_arguments)] // mirrors the `Act::InviteChallenged` variant's field set
     async fn handle_invite_challenged(
-        &mut self,
-        call_id: String,
-        to_uri: String,
-        local_sdp: String,
-        challenge_raw: String,
-        ack_cid: String,
-        ack_from_tag: String,
-        ack_to_uri: String,
-        ack_to_tag: Option<String>,
-        ack_cseq: u32,
+        &mut self, call_id: String, to_uri: String, local_sdp: String, challenge_raw: String, ack_cid: String,
+        ack_from_tag: String, ack_to_uri: String, ack_to_tag: Option<String>, ack_cseq: u32,
     ) {
         // ACK to a non-2xx response must reuse the *original*
         // INVITE's branch (RFC 3261 §17.1.1.3), unlike a 2xx ACK
         // which is a new transaction with its own fresh branch.
-        let Some(invite_branch) = self.dialogs.get(&call_id).map(|d| d.invite_branch.clone())
-        else {
+        let Some(invite_branch) = self.dialogs.get(&call_id).map(|d| d.invite_branch.clone()) else {
             return;
         };
-        let ack = self.build_ack(
-            &ack_cid,
-            &ack_from_tag,
-            &ack_to_uri,
-            ack_to_tag.as_deref(),
-            ack_cseq,
-            &invite_branch,
-        );
+        let ack = self.build_ack(&ack_cid, &ack_from_tag, &ack_to_uri, ack_to_tag.as_deref(), ack_cseq, &invite_branch);
         let _ = self.transport.send(ack.as_bytes(), self.server_addr).await;
 
         let Some(auth) = build_challenge_response(
@@ -670,11 +575,8 @@ impl SipStack {
             &challenge_raw,
         ) else {
             self.dialogs.remove(&call_id);
-            let _ = self.event_tx.send(SipEvent::CallFailed {
-                call_id,
-                code: 401,
-                reason: "Bad auth challenge".into(),
-            });
+            let _ =
+                self.event_tx.send(SipEvent::CallFailed { call_id, code: 401, reason: "Bad auth challenge".into() });
             return;
         };
 
@@ -702,29 +604,13 @@ impl SipStack {
 
     #[allow(clippy::too_many_arguments)] // mirrors the `Act::SessionIntervalTooSmall` variant's field set
     async fn handle_session_interval_too_small(
-        &mut self,
-        call_id: String,
-        to_uri: String,
-        local_sdp: String,
-        min_se: u32,
-        ack_cid: String,
-        ack_from_tag: String,
-        ack_to_uri: String,
-        ack_to_tag: Option<String>,
-        ack_cseq: u32,
+        &mut self, call_id: String, to_uri: String, local_sdp: String, min_se: u32, ack_cid: String,
+        ack_from_tag: String, ack_to_uri: String, ack_to_tag: Option<String>, ack_cseq: u32,
     ) {
-        let Some(invite_branch) = self.dialogs.get(&call_id).map(|d| d.invite_branch.clone())
-        else {
+        let Some(invite_branch) = self.dialogs.get(&call_id).map(|d| d.invite_branch.clone()) else {
             return;
         };
-        let ack = self.build_ack(
-            &ack_cid,
-            &ack_from_tag,
-            &ack_to_uri,
-            ack_to_tag.as_deref(),
-            ack_cseq,
-            &invite_branch,
-        );
+        let ack = self.build_ack(&ack_cid, &ack_from_tag, &ack_to_uri, ack_to_tag.as_deref(), ack_cseq, &invite_branch);
         let _ = self.transport.send(ack.as_bytes(), self.server_addr).await;
 
         let Some(dialog) = self.dialogs.get_mut(&call_id) else {
@@ -806,9 +692,6 @@ impl SipStack {
             ready.video = Some(video_ready);
         }
         self.dialogs.get_mut(&call_id).expect("checked above").media = Some(media);
-        let _ = self.event_tx.send(SipEvent::CallConnected {
-            call_id,
-            media: ready,
-        });
+        let _ = self.event_tx.send(SipEvent::CallConnected { call_id, media: ready });
     }
 }

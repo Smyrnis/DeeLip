@@ -1,11 +1,7 @@
 use super::*;
 
 fn rule(pattern: &str, replacement: &str) -> DialPlanRule {
-    DialPlanRule {
-        pattern: pattern.to_string(),
-        replacement: replacement.to_string(),
-        enabled: true,
-    }
+    DialPlanRule { pattern: pattern.to_string(), replacement: replacement.to_string(), enabled: true }
 }
 
 #[test]

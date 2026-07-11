@@ -58,9 +58,7 @@ impl MessageLog {
     }
 
     pub fn save(&self, db: &Db) -> anyhow::Result<()> {
-        db.conn
-            .execute("DELETE FROM messages", [])
-            .context("Clearing messages table")?;
+        db.conn.execute("DELETE FROM messages", []).context("Clearing messages table")?;
         // `messages` is newest-first (see `push`); capped at 200 there too,
         // so no separate truncation needed here.
         for m in &self.messages {
@@ -68,12 +66,7 @@ impl MessageLog {
                 .execute(
                     "INSERT INTO messages (peer_uri, direction, body, timestamp) \
                  VALUES (?1, ?2, ?3, ?4)",
-                    rusqlite::params![
-                        m.peer_uri,
-                        direction_to_str(&m.direction),
-                        m.body,
-                        m.timestamp
-                    ],
+                    rusqlite::params![m.peer_uri, direction_to_str(&m.direction), m.body, m.timestamp],
                 )
                 .context("Inserting message")?;
         }
