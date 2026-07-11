@@ -17,6 +17,18 @@ impl DeelipApp {
     /// becomes `true` is `message_from_list` (a right-click "Message"
     /// action on a History/Contacts/Directory row). No-op when closed.
     /// Called every frame, same lifecycle as Settings.
+    ///
+    /// Deliberately **not** built on the shared `helpers::show_pop_out_window`
+    /// that Settings/Transfer Call/Keypad/Contact-dialog use: this window's
+    /// content is a `SidePanel` (peer list) *and* a `CentralPanel`
+    /// (thread+compose) side by side, not one panel. That helper's content
+    /// closure is `Ui`-shaped so it can run inside both the `embed_viewports()`
+    /// fallback's `egui::Window` and the real deferred branch's
+    /// `CentralPanel` -- but a `SidePanel` attaches to a viewport's
+    /// `Context`, not to an arbitrary parent `Ui`/`Area`, so it can't be
+    /// built from inside that shared closure. Forcing this one into that
+    /// shape would need a second, `Context`-shaped content parameter used by
+    /// nobody else -- not worth it for the one exception.
     pub(crate) fn show_messages_window(&mut self, ctx: &egui::Context, self_app: SharedApp) {
         if !self.messages_window_open {
             return;

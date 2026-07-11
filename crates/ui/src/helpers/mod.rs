@@ -6,8 +6,10 @@
 
 mod dial_target;
 mod format;
+mod pop_out_window;
 mod widgets;
 
 pub(crate) use dial_target::*;
 pub(crate) use format::*;
+pub(crate) use pop_out_window::*;
 pub(crate) use widgets::*;

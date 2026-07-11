@@ -5,7 +5,7 @@ use egui::{RichText, Ui};
 use crate::app::{DeelipApp, SharedApp};
 use crate::helpers::{
     account_status_label, avatar, double_clickable_label, empty_state, list_row_menu,
-    save_text_file, text_edit_scope, window_icon,
+    save_text_file, show_pop_out_window, text_edit_scope,
 };
 
 impl DeelipApp {
@@ -184,68 +184,35 @@ impl DeelipApp {
     /// "Edit" / History's right-click "Add to Contacts" (edit/prefilled
     /// mode). Rendered from `frame.rs::update()`, not from inside
     /// `show_contacts`, since History needs to trigger it while the
-    /// History tab -- not Contacts -- is the active one.
-    /// Add/Edit Contact as a real separate OS window, same `Deferred`-
-    /// viewport pattern as `show_messages_window`/`show_transfer_window`
-    /// (see `show_messages_window`'s doc comment for why the
-    /// `embed_viewports()` fallback has to run inline rather than through
-    /// the deferred closure, and why `self_app.lock()` must be called as a
-    /// method rather than reaching through `self_app.0.lock()` directly).
-    /// Previously an in-canvas `egui::Window` nested in the main viewport's
-    /// own tick -- promoted to a genuine second window so it behaves like
-    /// every other modal in this app (Settings, Messages, Transfer), not
-    /// as a one-off exception.
+    /// History tab -- not Contacts -- is the active one. Real separate OS
+    /// window via the shared `show_pop_out_window` scaffolding (see its own
+    /// doc comment) -- previously an in-canvas `egui::Window` nested in the
+    /// main viewport's own tick, promoted so it behaves like every other
+    /// modal in this app (Settings, Messages, Transfer).
+    ///
+    /// The window's own Close decoration and its Save/Cancel buttons are
+    /// two different closure params here (`on_close` vs. `content`) rather
+    /// than one shared local like the pre-extraction code used -- `content`
+    /// already calls `finish_contact_dialog` itself for the Save/Cancel
+    /// case, and `on_close` calls it again for the "cancel" case; calling
+    /// it with `(false, false)` (neither button clicked) is already a
+    /// harmless no-op today, so splitting this across two call paths
+    /// changes nothing observable.
     pub(crate) fn show_contact_dialog(&mut self, ctx: &egui::Context, self_app: SharedApp) {
-        if !self.contact_dialog_open {
-            return;
-        }
-
-        if ctx.embed_viewports() {
-            let title = self.contact_dialog_title();
-            let mut open = true;
-            let (mut save_clicked, mut cancel_clicked) = (false, false);
-            egui::Window::new(title)
-                .id(egui::Id::new("contact_dialog_fallback"))
-                .collapsible(false)
-                .resizable(false)
-                .open(&mut open)
-                .show(ctx, |ui| {
-                    (save_clicked, cancel_clicked) = self.show_contact_dialog_content(ui);
-                });
-            self.finish_contact_dialog(save_clicked, cancel_clicked || !open);
-            return;
-        }
-
-        let viewport_id = egui::ViewportId::from_hash_of("deelip_contact_dialog");
-        ctx.show_viewport_deferred(
-            viewport_id,
-            egui::ViewportBuilder::default()
-                .with_title("DeeLip Contact")
-                .with_inner_size([320.0, 300.0])
-                .with_min_inner_size([280.0, 260.0])
-                .with_resizable(false)
-                .with_icon(window_icon()),
-            move |child_ctx, _class| {
-                let mut app = self_app.lock();
-                if !app.contact_dialog_open {
-                    return;
-                }
-                let title = app.contact_dialog_title();
-                let (mut save_clicked, mut cancel_clicked) = (false, false);
-
-                egui::TopBottomPanel::top("contact_dialog_titlebar").show(child_ctx, |ui| {
-                    ui.add_space(4.0);
-                    ui.label(RichText::new(title).font(crate::theme::font_heading(16.0)));
-                    ui.add_space(4.0);
-                });
-
-                egui::CentralPanel::default().show(child_ctx, |ui| {
-                    (save_clicked, cancel_clicked) = app.show_contact_dialog_content(ui);
-                });
-
-                if child_ctx.input(|i| i.viewport().close_requested()) {
-                    cancel_clicked = true;
-                }
+        show_pop_out_window(
+            self,
+            ctx,
+            self_app,
+            "deelip_contact_dialog",
+            "DeeLip Contact",
+            [320.0, 300.0],
+            [280.0, 260.0],
+            false,
+            |app| app.contact_dialog_open,
+            |app| app.finish_contact_dialog(false, true),
+            |app| app.contact_dialog_title().to_string(),
+            |app, ui| {
+                let (save_clicked, cancel_clicked) = app.show_contact_dialog_content(ui);
                 app.finish_contact_dialog(save_clicked, cancel_clicked);
             },
         );

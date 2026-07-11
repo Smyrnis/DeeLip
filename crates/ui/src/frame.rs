@@ -259,17 +259,6 @@ impl DeelipApp {
         // instant they have something, rather than the UI having to poll.
         *self.ctx_slot.lock().unwrap() = Some(ctx.clone());
 
-        // TEMP diagnostic -- see `diag_last_frame`'s doc comment.
-        if self.settings_open {
-            let now = std::time::Instant::now();
-            if let Some(last) = self.diag_last_frame {
-                tracing::info!("__diag update() gap while Settings open: {:?}", now.duration_since(last));
-            }
-            self.diag_last_frame = Some(now);
-        } else {
-            self.diag_last_frame = None;
-        }
-
         if std::mem::take(&mut self.first_frame) && self.config.start_minimized {
             // Must run on the first frame, not before -- eframe force-shows
             // the window right after this frame renders regardless of any

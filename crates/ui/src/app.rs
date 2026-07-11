@@ -176,18 +176,6 @@ pub struct DeelipApp {
     /// here froze the whole app for that long right as the user switched
     /// tabs. Runs once, not every frame -- see `audio_device_cache`.
     pub(crate) audio_device_rx: Option<std::sync::mpsc::Receiver<(Vec<String>, Vec<String>)>>,
-    /// TEMP diagnostic -- timestamp of the last `update()` call while
-    /// Settings was open, to log real inter-frame wall-clock gaps (content
-    /// build + tessellation + present + any compositor stall) instead of
-    /// just the content-build portion. Remove once the Settings lag is
-    /// root-caused.
-    pub(crate) diag_last_frame: Option<std::time::Instant>,
-    /// TEMP diagnostic -- same idea as `diag_last_frame`, but measures the
-    /// Settings viewport's *own* successive-redraw gap now that it's a
-    /// `Deferred` viewport with its own independent redraw path, instead of
-    /// being nested inside the main window's tick. Remove once confirmed
-    /// this no longer tracks the main window's throttled cadence.
-    pub(crate) diag_settings_viewport_last_frame: Option<std::time::Instant>,
     /// Same idiom as `audio_device_cache`, for the Settings tab's camera
     /// picker -- `nokhwa` enumeration is likewise too expensive to run
     /// every frame.
@@ -541,8 +529,6 @@ impl DeelipApp {
             show_account_password: false,
             audio_device_cache: None,
             audio_device_rx: None,
-            diag_last_frame: None,
-            diag_settings_viewport_last_frame: None,
             camera_device_cache: None,
             camera_device_rx: None,
             autostart_enabled: deelip_config::is_autostart_enabled(),

@@ -6,7 +6,8 @@ use egui::{Align2, Color32, RichText, Ui};
 use crate::app::{DeelipApp, SharedApp, VideoViewCache};
 use crate::helpers::{
     account_status_label, audio_codec_label, ctx_key_enter, empty_state, format_call_timer,
-    phone_keypad, resolve_caller, short_uri, styled_slider, text_edit_scope, unix_now, window_icon,
+    phone_keypad, resolve_caller, short_uri, show_pop_out_window, styled_slider, text_edit_scope,
+    unix_now,
 };
 use crate::theme::{self, Palette};
 
@@ -611,53 +612,22 @@ impl DeelipApp {
     /// condition -- so firing either one closes this window as a side
     /// effect, no separate "close" bookkeeping needed for the happy path.
     pub(crate) fn show_transfer_window(&mut self, ctx: &egui::Context, self_app: SharedApp) {
-        if !(self.showing_transfer || self.showing_attended) {
-            return;
-        }
-
-        if ctx.embed_viewports() {
-            let mut open = true;
-            egui::Window::new("Transfer Call")
-                .id(egui::Id::new("transfer_window_fallback"))
-                .open(&mut open)
-                .collapsible(false)
-                .resizable(false)
-                .show(ctx, |ui| self.show_transfer_window_content(ui));
-            if !open {
-                self.showing_transfer = false;
-                self.showing_attended = false;
-            }
-            return;
-        }
-
-        let viewport_id = egui::ViewportId::from_hash_of("deelip_transfer_window");
-        ctx.show_viewport_deferred(
-            viewport_id,
-            egui::ViewportBuilder::default()
-                .with_title("DeeLip Transfer Call")
-                .with_inner_size([320.0, 540.0])
-                .with_min_inner_size([280.0, 420.0])
-                .with_icon(window_icon()),
-            move |child_ctx, _class| {
-                let mut app = self_app.lock();
-                if !(app.showing_transfer || app.showing_attended) {
-                    return;
-                }
-
-                egui::TopBottomPanel::top("transfer_window_titlebar").show(child_ctx, |ui| {
-                    ui.add_space(4.0);
-                    ui.label(RichText::new("Transfer Call").font(theme::font_heading(16.0)));
-                    ui.add_space(4.0);
-                });
-
-                egui::CentralPanel::default()
-                    .show(child_ctx, |ui| app.show_transfer_window_content(ui));
-
-                if child_ctx.input(|i| i.viewport().close_requested()) {
-                    app.showing_transfer = false;
-                    app.showing_attended = false;
-                }
+        show_pop_out_window(
+            self,
+            ctx,
+            self_app,
+            "deelip_transfer_window",
+            "DeeLip Transfer Call",
+            [320.0, 540.0],
+            [280.0, 420.0],
+            false,
+            |app| app.showing_transfer || app.showing_attended,
+            |app| {
+                app.showing_transfer = false;
+                app.showing_attended = false;
             },
+            |_app| "Transfer Call".to_string(),
+            |app, ui| app.show_transfer_window_content(ui),
         );
     }
 
@@ -722,55 +692,21 @@ impl DeelipApp {
     /// a card in the main window, inconsistent with Transfer/Contacts once
     /// those were promoted to real windows.
     pub(crate) fn show_dtmf_window(&mut self, ctx: &egui::Context, self_app: SharedApp) {
-        if !self.showing_dtmf {
-            return;
-        }
-
-        if ctx.embed_viewports() {
-            let mut open = true;
-            egui::Window::new("Keypad")
-                .id(egui::Id::new("dtmf_window_fallback"))
-                .open(&mut open)
-                .collapsible(false)
-                .resizable(false)
-                .show(ctx, |ui| {
-                    let palette = self.palette;
-                    phone_keypad(ui, palette, |digit| self.do_dtmf(digit));
-                });
-            if !open {
-                self.showing_dtmf = false;
-            }
-            return;
-        }
-
-        let viewport_id = egui::ViewportId::from_hash_of("deelip_dtmf_window");
-        ctx.show_viewport_deferred(
-            viewport_id,
-            egui::ViewportBuilder::default()
-                .with_title("DeeLip Keypad")
-                .with_inner_size([260.0, 360.0])
-                .with_min_inner_size([240.0, 340.0])
-                .with_icon(window_icon()),
-            move |child_ctx, _class| {
-                let mut app = self_app.lock();
-                if !app.showing_dtmf {
-                    return;
-                }
-
-                egui::TopBottomPanel::top("dtmf_window_titlebar").show(child_ctx, |ui| {
-                    ui.add_space(4.0);
-                    ui.label(RichText::new("Keypad").font(theme::font_heading(16.0)));
-                    ui.add_space(4.0);
-                });
-
-                egui::CentralPanel::default().show(child_ctx, |ui| {
-                    let palette = app.palette;
-                    phone_keypad(ui, palette, |digit| app.do_dtmf(digit));
-                });
-
-                if child_ctx.input(|i| i.viewport().close_requested()) {
-                    app.showing_dtmf = false;
-                }
+        show_pop_out_window(
+            self,
+            ctx,
+            self_app,
+            "deelip_dtmf_window",
+            "DeeLip Keypad",
+            [260.0, 360.0],
+            [240.0, 340.0],
+            false,
+            |app| app.showing_dtmf,
+            |app| app.showing_dtmf = false,
+            |_app| "Keypad".to_string(),
+            |app, ui| {
+                let palette = app.palette;
+                phone_keypad(ui, palette, |digit| app.do_dtmf(digit));
             },
         );
     }

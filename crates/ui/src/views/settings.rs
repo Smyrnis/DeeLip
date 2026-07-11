@@ -7,7 +7,7 @@ use egui::{RichText, Ui};
 use crate::app::{DeelipApp, SettingsTab, SharedApp};
 use crate::helpers::{
     account_label, account_status_label, codec_label, device_picker, empty_state, field_label,
-    info_hint, settings_section, styled_slider, text_edit_scope, window_icon,
+    info_hint, settings_section, show_pop_out_window, styled_slider, text_edit_scope,
 };
 use crate::theme::{self, Palette};
 
@@ -59,95 +59,32 @@ impl DeelipApp {
     /// `settings_open` is true, same lifecycle as before (egui's viewport
     /// model is still declarative, not create-once-and-forget).
     pub(crate) fn show_settings_modal(&mut self, ctx: &egui::Context, self_app: SharedApp) {
-        if !self.settings_open {
-            return;
-        }
-
-        // Some backends (or a compositor without multi-window support)
-        // can't actually open a second native window -- `embed_viewports()`
-        // reports that, in which case both `show_viewport_immediate` and
-        // `show_viewport_deferred` fall back to running their callback
-        // *synchronously*, right here, against the main window's own
-        // context. Deciding this up front (rather than branching on
-        // `ViewportClass::Embedded` from inside the deferred closure, as
-        // this used to) matters now: if we called `show_viewport_deferred`
-        // below on a backend that embeds, its closure would run inline in
-        // this same call, and locking `self_arc` there would deadlock
-        // against the lock this method's own caller already holds. Render
-        // the fallback directly against `self` instead -- no lock needed.
-        if ctx.embed_viewports() {
-            let mut open = true;
-            egui::Window::new("Settings")
-                .id(egui::Id::new("settings_window_fallback"))
-                .open(&mut open)
-                .collapsible(false)
-                .resizable(true)
-                .default_size([500.0, 640.0])
-                .min_width(380.0)
-                .show(ctx, |ui| self.show_settings(ui));
-            if !open {
-                self.settings_open = false;
-            }
-            return;
-        }
-
-        let viewport_id = egui::ViewportId::from_hash_of(SETTINGS_VIEWPORT_NAME);
-        ctx.show_viewport_deferred(
-            viewport_id,
-            egui::ViewportBuilder::default()
-                .with_title("DeeLip Settings")
-                // Sized so every tab except Account (which scrolls
-                // internally -- see its own `SettingsTab::Account` match
-                // arm's comment) fits without scrolling at all -- confirmed
-                // live via Xvfb across all 8 tabs, not guessed. Bumped
-                // taller (700 -> 740) alongside the v3.1 spacing/margin
-                // loosening in `theme.rs`/`frame.rs` -- needs the same
-                // live re-check as before once that's verified.
-                .with_inner_size([950.0, 740.0])
-                .with_min_inner_size([580.0, 520.0])
-                .with_icon(window_icon()),
-            move |child_ctx, _class| {
-                let mut app = self_app.lock();
-                if !app.settings_open {
-                    return;
-                }
-
-                // TEMP diagnostic -- see `diag_settings_viewport_last_frame`'s
-                // doc comment. Measures the gap between *this* viewport's own
-                // successive redraws, independent of the main window's --
-                // the thing the `Immediate` -> `Deferred` switch is meant to
-                // fix. Remove alongside that field once confirmed live.
-                let __diag_now = std::time::Instant::now();
-                if let Some(last) = app.diag_settings_viewport_last_frame {
-                    tracing::info!("__diag settings viewport update() gap: {:?}", __diag_now.duration_since(last));
-                }
-                app.diag_settings_viewport_last_frame = Some(__diag_now);
-
-                // Explicit margin, not `CentralPanel::default()`'s bare
-                // default -- confirmed live (Xvfb, at this viewport's real
-                // 950px default width) that content rendered flush against
-                // the literal right edge with zero breathing room. Same
-                // value/reasoning as the main window's own central panel
-                // (`frame.rs`).
-                let central_frame = egui::Frame::central_panel(&child_ctx.style()).inner_margin(14.0);
-                egui::CentralPanel::default().frame(central_frame).show(child_ctx, |ui| {
-                    // No in-app Close button -- removed per explicit request
-                    // (the user's real desktop always has working title-bar
-                    // decorations, so it was redundant); relies solely on
-                    // `close_requested()` below now. A window-manager-less
-                    // environment with no decorations at all (e.g. this
-                    // project's own Xvfb live-verification sandbox) has no
-                    // *visible* way to close this window short of that same
-                    // OS-level close-request path -- still reachable there
-                    // via a synthetic request (e.g. `xdotool windowclose`),
-                    // just not from a click.
-                    ui.label(RichText::new("Settings").font(theme::font_heading(16.0)));
-                    ui.separator();
-                    app.show_settings(ui);
-                });
-                if child_ctx.input(|i| i.viewport().close_requested()) {
-                    app.settings_open = false;
-                }
+        // Shared "real separate OS window" scaffolding -- see
+        // `show_pop_out_window`'s own doc comment for the full rationale
+        // (the `embed_viewports()` deadlock hazard, why the titlebar/
+        // content/close-handling shape is common to every pop-out window
+        // in this app). `SETTINGS_VIEWPORT_NAME` is passed as the `key` so
+        // its hash matches what the background device-scan spawns
+        // elsewhere in this file already wake via `request_repaint_of`.
+        show_pop_out_window(
+            self,
+            ctx,
+            self_app,
+            SETTINGS_VIEWPORT_NAME,
+            "DeeLip Settings",
+            // Sized so every tab except Account (which scrolls internally
+            // -- see its own `SettingsTab::Account` match arm's comment)
+            // fits without scrolling at all -- confirmed live via Xvfb
+            // across all 8 tabs, not guessed.
+            [950.0, 740.0],
+            [580.0, 520.0],
+            true,
+            |app| app.settings_open,
+            |app| app.settings_open = false,
+            |_app| "Settings".to_string(),
+            |app, ui| {
+                ui.separator();
+                app.show_settings(ui);
             },
         );
     }
@@ -211,7 +148,6 @@ impl DeelipApp {
             ui.add_space(4.0);
         });
 
-        let __diag_content_start = std::time::Instant::now();
         let edited = match self.settings_tab {
             SettingsTab::General => {
                 self.show_notifications_section(ui, &palette);
@@ -263,7 +199,6 @@ impl DeelipApp {
                 false
             }
         };
-        tracing::info!("__diag settings tab {:?} content: {:?}", self.settings_tab, __diag_content_start.elapsed());
 
         if edited {
             self.settings_saved_notice = false;
