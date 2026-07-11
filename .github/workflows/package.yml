@@ -74,7 +74,10 @@ jobs:
           cp target/release/deelip "$stage/usr/bin/"
           cp packaging/deelip.desktop "$stage/usr/share/applications/"
           cp assets/icon.png "$stage/usr/share/icons/hicolor/256x256/apps/deelip.png"
-          cp install.sh "$stage/"
+          # install/uninstall/health-check live directly under scripts/ --
+          # bundle it so a standalone tar.gz download is self-contained, not
+          # just a git checkout.
+          cp -r scripts "$stage/"
           tar czf "$stage.tar.gz" "$stage"
 
       - name: Build AppImage
