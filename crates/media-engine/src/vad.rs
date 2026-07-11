@@ -1,20 +1,7 @@
 //! Energy-threshold voice activity detection driving RFC 3389 comfort-noise
-//! generation -- during a detected silence, the send task stops encoding
-//! and sending continuous audio and instead sends an occasional Comfort
-//! Noise/SID packet carrying a noise-level byte, exactly like the AGC/AEC
-//! stages this sits alongside in `MediaEngine`'s send task (see their own
-//! module docs for why this non-realtime placement is fine).
-//!
-//! Simplification worth being explicit about: this only sends a fresh SID
-//! packet at silence onset and then periodically (`CN_REPEAT_FRAMES`) while
-//! silence continues -- it does not attempt to synthesize *continuous*
-//! comfort noise on the receive side spanning the gaps between SID packets
-//! (see `generate_comfort_noise` in this module and its call site in
-//! `engine.rs`), which would need a background filler tied to the jitter
-//! buffer's own playout clock rather than packet arrival. Between SID
-//! updates the receive side falls back to plain silence (the jitter
-//! buffer's existing zero-pad-on-underrun behavior), not a continuous
-//! background hiss.
+//! generation. Full design (why this non-realtime placement is fine, the
+//! disclosed "no continuous receive-side synthesis" simplification):
+//! `docs/media-pipeline.md`.
 
 /// ~ -32 dBFS RMS -- quieter than this is treated as silence. Well below
 /// the AGC's ~ -14 dBFS target level, so the two don't fight (AGC only

@@ -201,7 +201,7 @@ pub(crate) fn info_hint(ui: &mut Ui, palette: &Palette, text: &str) {
 }
 
 /// One Settings section: a bold title (with an optional `info_hint` beside
-/// it) followed by a `full_width_card`. Every section in `views/settings.rs`
+/// it) followed by a `full_width_card`. Every section in `views/settings/`
 /// repeated this same header+card scaffolding by hand; factored out so the
 /// header treatment can't drift between sections (some previously had a
 /// hint, some didn't, with no reason for the difference).
@@ -386,3 +386,7 @@ fn digit_letters(digit: char) -> &'static str {
 pub(crate) fn ctx_key_enter(ui: &Ui) -> bool {
     ui.input(|i| i.key_pressed(egui::Key::Enter))
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/widgets.rs"]
+mod tests;

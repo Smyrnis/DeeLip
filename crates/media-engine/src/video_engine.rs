@@ -1,25 +1,8 @@
 //! Standalone video RTP engine: capture-frame → H.264 encode → RTP send,
 //! and RTP recv → H.264 decode → latest-decoded-frame -- its own
-//! independent construct, deliberately *not* part of `MediaEngine`.
-//!
-//! Why standalone: `MediaEngine`'s `ConferenceLeg` (a second RTP leg for
-//! 3-way audio conferencing) looked like an obvious template at first, but
-//! its send/recv tasks are wired into audio-only jitter-buffer/mixing
-//! machinery ("mix leg 1 and leg 2 into the same speaker") that a video
-//! leg has no equivalent of -- there's no "mix two videos into one
-//! display." Only `ConferenceLeg`'s socket/SRTP-context *setup* shape is
-//! reusable, which this module does borrow (see `RtpSocket`, shared with
-//! `engine.rs`). Not yet wired into any live call (`MediaEngine`/`ui`) --
-//! that's a future phase, once this piece is proven correct in isolation
-//! (see this module's own tests: a real two-instance UDP round trip using
-//! synthetic frames, since this development sandbox has no camera
-//! hardware to test real capture with).
-//!
-//! **Disclosed simplification**: the recv side does no RTP
-//! reordering/jitter-buffering -- fragments are reassembled in arrival
-//! order only. Real out-of-order delivery would corrupt a frame until the
-//! next keyframe. Acceptable for proving the pipeline works; worth
-//! revisiting before this is real-world-facing (Phase 6+).
+//! independent construct, deliberately *not* part of `MediaEngine`. Why
+//! standalone, what it borrows from `ConferenceLeg`, and the disclosed
+//! no-jitter-buffering simplification: `docs/media-pipeline.md`.
 
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};

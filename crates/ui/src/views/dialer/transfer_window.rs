@@ -6,14 +6,11 @@ use crate::strings::t;
 use crate::theme::{self, Palette};
 
 impl DeelipApp {
-    /// Transfer/Attended as a real separate OS window, same `Deferred`-
-    /// viewport pattern as `show_messages_window` (see its doc comment for
-    /// why the `embed_viewports()` fallback branch has to run inline
-    /// rather than through the deferred closure, and why `self_app.lock()`
-    /// must be called as a method, not `self_app.0.lock()`, to keep the
-    /// `unsafe impl Send` sound). One shared window covers both blind and
-    /// attended transfer via a mode switch, rather than two near-identical
-    /// windows -- they're one workflow, not two unrelated features.
+    /// Transfer/Attended as a real separate OS window, built on the shared
+    /// `show_pop_out_window` (see `docs/windowing.md` for the general
+    /// pattern). One shared window covers both blind and attended transfer
+    /// via a mode switch, rather than two near-identical windows -- they're
+    /// one workflow, not two unrelated features.
     /// `do_transfer`/`do_attended_transfer_dial` already flip
     /// `showing_transfer`/`showing_attended` back to `false` on success
     /// (see their own doc comments), which is this window's open

@@ -154,3 +154,7 @@ impl Source for RingSource {
         None
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/ringtone.rs"]
+mod tests;

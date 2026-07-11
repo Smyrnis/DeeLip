@@ -1,15 +1,7 @@
 //! Camera capture + RGB→I420 conversion, feeding `video_codec::Yuv420Frame`
 //! (which `H264Encoder` already consumes -- see that module). Not wired
-//! into any live call path yet -- see this crate's module doc.
-//!
-//! **Not live-verified against real camera hardware**: this development
-//! sandbox has no camera device at all (no `/dev/video*`, no `uvcvideo`
-//! kernel module), so while `nokhwa`'s device-enumeration/open/capture
-//! calls are real and structurally complete, only the pixel-format
-//! conversion (`rgb8_to_yuv420`) could be verified end-to-end here, using
-//! synthetic RGB buffers instead of real sensor output. Treat the capture
-//! loop itself as unverified until run somewhere with actual camera
-//! hardware.
+//! into any live call path yet. Hardware-verification status and the
+//! capture-thread design: `docs/media-pipeline.md`.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};

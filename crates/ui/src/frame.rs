@@ -398,7 +398,7 @@ impl DeelipApp {
 
         // The ~20fps cadence only actually matters while there's a call to
         // animate/tick (the ringing dot's pulse, the connected-call duration
-        // counter) -- see `RingState`'s doc comment in `dialer.rs`. Those are
+        // counter) -- see `docs/dialer-ui.md`. Those are
         // the only things left with no waker of their own: SIP/hotkey/tray/
         // notification/update-check/directory-search/device-scan events all
         // now push their own `request_repaint()` via `ctx_slot` the instant

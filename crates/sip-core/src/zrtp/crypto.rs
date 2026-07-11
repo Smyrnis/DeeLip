@@ -1,22 +1,7 @@
 //! ZRTP crypto: hash chain, KDF, DH/EC key agreement, SRTP/SAS/MAC key
-//! derivation, and Confirm-message encryption.
-//!
-//! Uses `ring` (already an existing transitive dependency of this
-//! workspace via `rustls`'s own crypto backend -- the same crate this
-//! app's TLS transport already trusts) for SHA-256/HMAC-SHA256/P-256 ECDH,
-//! and the RustCrypto `aes`/`cfb-mode` crates for the Confirm payload's
-//! AES-128-CFB encryption.
-//!
-//! **Formulas below (KDF, s0, SRTP/MAC/SAS key derivation) are quoted
-//! directly from RFC 6189 sections 4.5.1-4.5.3, fetched and verified this
-//! session.** The one exception is the "ZRTP key" (Confirm-payload
-//! encryption key) label string, which was *not* independently confirmed --
-//! see `derive_zrtp_keys`'s doc comment. Only one algorithm per category is
-//! implemented (SHA-256 / AES-128 / EC25 (P-256 ECDH) / a base32 SAS
-//! rendering of our own devising, not RFC 6189 Appendix A's actual word
-//! list, which wasn't obtainable either) -- see `wire.rs`'s module doc for
-//! why (the auth-tag/cipher types only describe the SRTP suite this app
-//! already uses, so they don't need to be independently negotiated).
+//! derivation, and Confirm-message encryption. Which formulas are quoted
+//! directly from RFC 6189 vs. reconstructed, and the crypto backends used:
+//! `docs/zrtp.md`.
 
 use ring::{agreement, digest, hmac, rand::SecureRandom};
 

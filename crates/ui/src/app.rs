@@ -208,12 +208,8 @@ pub struct DeelipApp {
     /// audio/camera device scans) uses to call `request_repaint()` the
     /// instant it has something, instead of DeeLip's idle repaint tick
     /// having to poll for it. Refreshed every frame in `update()`, same as
-    /// `tray`'s copy was before this existed -- see `frame.rs`'s repaint-
-    /// interval comment for why this matters: without it, the only way to
-    /// notice a new event while idle was a periodic forced repaint of the
-    /// *whole* window (including, while Settings is open, its own viewport),
-    /// which is what caused the Settings-window slowdown this was added to
-    /// fix.
+    /// `tray`'s copy was before this existed -- see `docs/windowing.md` for
+    /// why this matters (the Settings-window slowdown it was added to fix).
     pub(crate) ctx_slot: CtxSlot,
     /// Missed calls not yet acknowledged by opening the History tab —
     /// mirrored to the tray icon's badge (see `sync_tray_badge`) whenever
@@ -305,36 +301,20 @@ pub struct DeelipApp {
     pub(crate) directory_rx: Option<std::sync::mpsc::Receiver<crate::views::directory::DirectoryMsg>>,
 }
 
-/// Wraps `DeelipApp` behind a lock so Settings/Messages can render as real
-/// independent (`Deferred`-class) viewports instead of ones nested inside
-/// the main window's own per-tick callback (`Immediate`-class) -- see
-/// `show_settings_modal`'s doc comment for why that nesting was the actual
-/// cause of Settings feeling slow/laggy whenever the main window was
-/// unfocused (GNOME/Mutter throttles frame delivery for whichever window
-/// isn't focused, and an `Immediate` child viewport can only redraw when
-/// its parent's own tick runs). `eframe::App` can't be implemented directly
-/// on `Arc<Mutex<DeelipApp>>` (neither side is local to this crate), hence
-/// this thin newtype -- `update`/`on_exit` just lock and delegate to
-/// `DeelipApp::update_inner`/`on_exit_inner`.
-///
-/// Locking here is a borrow-checker/orphan-rule necessity, not a real
-/// concurrency mechanism -- eframe's winit event loop is single-threaded,
-/// and a `Deferred` viewport's callback is only ever invoked as a separate,
-/// sequential event on that same thread (confirmed against `eframe`'s own
-/// source), never nested inside another locked call to this `update`, so
-/// there's no reentrant-locking/deadlock risk in practice.
+/// Wraps `DeelipApp` behind a lock so Settings/Messages/etc. can render as
+/// real independent (`Deferred`-class) viewports instead of ones nested
+/// inside the main window's own per-tick callback (`Immediate`-class).
+/// `eframe::App` can't be implemented directly on `Arc<Mutex<DeelipApp>>`
+/// (neither side is local to this crate), hence this thin newtype --
+/// `update`/`on_exit` just lock and delegate to
+/// `DeelipApp::update_inner`/`on_exit_inner`. Full rationale for the
+/// `Deferred` migration and why locking here is sound despite `DeelipApp`
+/// being `!Send`: `docs/windowing.md`.
 #[derive(Clone)]
 pub struct SharedApp(pub Arc<Mutex<DeelipApp>>);
 
-// SAFETY: see the doc comment above -- the Mutex is a borrow-checker/
-// orphan-rule necessity here, not a real cross-thread concurrency
-// mechanism. eframe's Deferred-viewport callbacks and the root
-// update()/on_exit() are all invoked from the same single winit event-
-// loop thread, sequentially, never reentrantly -- confirmed against
-// eframe 0.28.1's native/{glow,wgpu}_integration.rs. DeelipApp itself
-// is !Send only because it transitively holds a cpal::Stream, which
-// cpal marks !Send defensively for genuine cross-thread use it never
-// sees here.
+// SAFETY: see docs/windowing.md -- the Mutex is a borrow-checker/orphan-rule
+// necessity here, not a real cross-thread concurrency mechanism.
 unsafe impl Send for SharedApp {}
 unsafe impl Sync for SharedApp {}
 
@@ -417,8 +397,8 @@ pub(crate) struct CallSlot {
 /// the engine, an optional camera capture handle (`None` if no camera was
 /// available -- video still receives/displays the remote side in that
 /// case, see `media.rs::start_video`), and per-side cached-frame+texture
-/// state so `dialer.rs`'s per-repaint render doesn't reconvert/re-upload a
-/// YUV420 frame that hasn't changed since the last one.
+/// state so `views/dialer/in_call.rs`'s per-repaint render doesn't
+/// reconvert/re-upload a YUV420 frame that hasn't changed since the last one.
 pub(crate) struct VideoCallState {
     pub(crate) engine: deelip_media::video_engine::VideoEngine,
     pub(crate) camera: Option<deelip_media::video_capture::CaptureHandle>,

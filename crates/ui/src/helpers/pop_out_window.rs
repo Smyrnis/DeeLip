@@ -5,36 +5,9 @@ use crate::helpers::window_icon;
 
 /// Shared scaffolding for this app's "real separate OS window" pattern --
 /// used by Settings, Transfer Call, the DTMF Keypad, and the Contact
-/// dialog (Messages is the one exception: see its own doc comment on
-/// `show_messages_window` for why its side-by-side `SidePanel`+
-/// `CentralPanel` layout can't share this).
-///
-/// Every one of these windows needs the same ~35-line skeleton: check
-/// `ctx.embed_viewports()` up front and render a fallback in-canvas
-/// `egui::Window` directly against `app` if the backend can't open a real
-/// second native window (deciding this up front matters: if
-/// `show_viewport_deferred` were called unconditionally, its closure would
-/// run *synchronously* on an embedding backend, and locking `self_app`
-/// there would deadlock against the lock this call's own caller already
-/// holds), otherwise open a genuine `Deferred` viewport with a titlebar
-/// (a plain heading-styled label -- no in-app Close button, removed
-/// earlier since real window decorations already provide one) and wire up
-/// `close_requested()` to whatever this window's own close action is.
-///
-/// `is_open`/`on_close`/`title` are plain `fn` pointers rather than general
-/// closures -- every real call site's version is already a non-capturing
-/// closure (e.g. `|app| app.settings_open`, or Transfer Call's two-field
-/// `|app| app.showing_transfer || app.showing_attended`), which Rust
-/// coerces to `fn` for free, so there's no need for `Clone + Send + Sync`
-/// bounds just to store one. `content` stays a real closure since it's the
-/// one genuinely different piece of code per window -- bound as `Fn`, not
-/// `FnMut`: `show_viewport_deferred` itself requires the outer closure to
-/// be `Fn + Send + Sync` (it may be invoked repeatedly through a shared
-/// reference), so a `content` that needed its *own* captured state to
-/// mutate across calls wouldn't fit without interior mutability -- none of
-/// this app's actual pop-out windows need that (`content` always just
-/// forwards to a method on the `app`/`ui` it's handed, no captured state of
-/// its own), so plain `Fn` is both sufficient and simpler.
+/// dialog (Messages is the one exception). Full rationale (the
+/// `embed_viewports()` deadlock hazard, the `fn`-pointer-vs-closure design,
+/// why Messages can't share this) is in `docs/windowing.md`.
 #[allow(clippy::too_many_arguments)] // each param is a distinct, meaningfully-named
                                      // piece of this window's identity; bundling them
                                      // into a struct wouldn't reduce real complexity.

@@ -130,3 +130,7 @@ impl RtpSender {
         self.timestamp = self.timestamp.wrapping_add(self.ts_increment);
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/rtp.rs"]
+mod tests;

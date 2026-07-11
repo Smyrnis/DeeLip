@@ -49,5 +49,5 @@ pub(crate) fn extract_user_part(uri: &str) -> String {
 }
 
 #[cfg(test)]
-#[path = "../../tests/unit/helpers.rs"]
+#[path = "../../tests/unit/dial_target.rs"]
 mod tests;

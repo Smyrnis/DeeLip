@@ -235,3 +235,7 @@ fn build_output_f32(
         .context("Building F32 output stream")?;
     Ok(stream)
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/audio.rs"]
+mod tests;

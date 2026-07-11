@@ -454,3 +454,7 @@ fn parse_vcard(content: &str) -> Vec<Contact> {
     }
     contacts
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/contacts.rs"]
+mod tests;

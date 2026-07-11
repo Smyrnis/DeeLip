@@ -1,29 +1,7 @@
 //! ZRTP (RFC 6189) packet/message wire format -- hand-rolled, matching this
-//! crate's existing style for `wire/sdp.rs`/`wire/message.rs`.
-//!
-//! **Provenance note**: RFC 6189's own packet-format figures (the exact
-//! header byte layout, the message preamble value, the CRC algorithm) were
-//! not obtainable through this session's tooling (the fetcher used
-//! truncated the document before reaching those figures, and no secondary
-//! source had byte-exact detail either). The framing constants below
-//! (`ZRTP_MAGIC_COOKIE`, `MSG_PREAMBLE`, the CRC-32 variant) are implemented
-//! from general knowledge of the protocol rather than a freshly-verified
-//! spec quote. Since there is no real ZRTP peer available to test against
-//! in this environment either way, only *self*-consistency (two instances
-//! of this exact code interoperating with each other) has actually been
-//! verified -- real-world interop with another ZRTP implementation
-//! (Zfone/Linphone/PJSIP/etc.) is unverified and should be checked against
-//! a real peer before this is trusted for that.
-//!
-//! Deliberately scoped down from the full RFC: only the messages needed for
-//! a plain two-party DH/EC key exchange are implemented (Hello, Commit,
-//! DHPart1/2, Confirm1/2, Conf2ACK). GoClear/ClearACK, Ping/PingACK,
-//! SASrelay, Error/ErrorACK, the signature extension, PBX/multistream/
-//! preshared modes are all out of scope. Only one algorithm per category is
-//! ever offered/accepted (SHA-256 / AES-128 / EC25 (P-256) / SAS-base32) --
-//! see `crypto.rs`'s doc comment for why (the auth-tag/cipher types don't
-//! actually need to be negotiable since they only describe the existing
-//! SRTP suite this app already uses for SDES).
+//! crate's existing style for `wire/sdp.rs`/`wire/message.rs`. Provenance of
+//! the framing constants below, verification status, and the scope cuts
+//! from the full RFC: `docs/zrtp.md`.
 
 use crc::{Crc, CRC_32_ISO_HDLC};
 

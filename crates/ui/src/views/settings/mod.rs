@@ -35,50 +35,19 @@ const SETTINGS_VIEWPORT_NAME: &str = "deelip_settings_window";
 impl DeelipApp {
     /// Settings as a separate, genuinely movable native OS window rather
     /// than a tab (MicroSIP-style "phone window + separate settings window"
-    /// split -- see `app.rs`'s `settings_open` doc comment). No-op when
-    /// closed.
-    ///
-    /// This used to be an `egui::Window` (a floating panel drawn *inside*
-    /// the main app's own OS window canvas) plus a hand-rolled dimming
-    /// backdrop faking modality -- it looked like a separate window but was
-    /// mechanically trapped inside the main window's bounds, unable to be
-    /// dragged out to a different part of the screen (a real user-reported
-    /// bug: "the settings window is inside the initial deelip window, and i
-    /// can not move it"). `Context::show_viewport_deferred` creates an
-    /// actual second native window (its own OS-level title bar, move,
-    /// resize, and close -- not an egui-drawn imitation of one), which is
-    /// what a "separate window" needs to mean here.
-    ///
-    /// `Deferred`, not `Immediate` -- this used to be `Immediate`, which
-    /// renders synchronously nested inside the *main* window's own per-tick
-    /// callback (confirmed against `eframe`'s own source: an `Immediate`
-    /// child viewport has no redraw path of its own, it only ever repaints
-    /// when its parent's tick runs). That's what made Settings feel slow
-    /// whenever the main window was unfocused (which it always is while
-    /// Settings itself has focus): GNOME/Mutter throttles frame delivery for
-    /// whichever of the two windows isn't focused down to roughly 1Hz
-    /// (confirmed live, independent of whether the windows visually
-    /// overlap), and since Settings was nested inside the main window's own
-    /// callback, every click/keystroke inside Settings was gated by that
-    /// same ~1s throttle on the *main* window's redraw. `Deferred` viewports
-    /// get their own independent redraw path (`eframe` invokes their stored
-    /// callback directly whenever *their* window needs a repaint, not the
-    /// main window's), so Settings now responds to its own input normally
-    /// regardless of the main window's focus/throttle state. This is why
-    /// `DeelipApp` is wrapped in `SharedApp` (`Arc<Mutex<_>>`) -- a
-    /// `Deferred` callback must be `Fn + Send + Sync + 'static`, so it can't
-    /// directly borrow `&mut self` the way the old `Immediate` closure did;
-    /// it locks the shared app instead. Called every frame while
-    /// `settings_open` is true, same lifecycle as before (egui's viewport
-    /// model is still declarative, not create-once-and-forget).
+    /// split). No-op when closed. Called every frame while `settings_open`
+    /// is true, same lifecycle as every other pop-out window in this app.
+    /// Full history (why this used to be a fake in-canvas modal, why
+    /// `Deferred` instead of `Immediate`, the GNOME/Mutter throttle bug it
+    /// fixed): `docs/windowing.md`.
     pub(crate) fn show_settings_modal(&mut self, ctx: &egui::Context, self_app: SharedApp) {
         // Shared "real separate OS window" scaffolding -- see
-        // `show_pop_out_window`'s own doc comment for the full rationale
-        // (the `embed_viewports()` deadlock hazard, why the titlebar/
-        // content/close-handling shape is common to every pop-out window
-        // in this app). `SETTINGS_VIEWPORT_NAME` is passed as the `key` so
-        // its hash matches what the background device-scan spawns
-        // elsewhere in this module already wake via `request_repaint_of`.
+        // docs/windowing.md for the full rationale (the `embed_viewports()`
+        // deadlock hazard, why the titlebar/content/close-handling shape is
+        // common to every pop-out window in this app). `SETTINGS_VIEWPORT_NAME`
+        // is passed as the `key` so its hash matches what the background
+        // device-scan spawns elsewhere in this module already wake via
+        // `request_repaint_of`.
         show_pop_out_window(
             self,
             ctx,

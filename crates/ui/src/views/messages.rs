@@ -9,36 +9,24 @@ use crate::strings::t;
 
 impl DeelipApp {
     /// Messages as a separate native OS window, same `Deferred`-viewport
-    /// pattern as `show_settings_modal` (see its own doc comment for why a
-    /// real, independently-redrawing second window rather than an in-canvas
-    /// one, and why that requires locking a shared `Arc<Mutex<DeelipApp>>`
-    /// instead of directly capturing `&mut self`) -- except there's no
-    /// tab-bar entry point at all: the only way `messages_window_open`
-    /// becomes `true` is `message_from_list` (a right-click "Message"
-    /// action on a History/Contacts/Directory row). No-op when closed.
-    /// Called every frame, same lifecycle as Settings.
-    ///
-    /// Deliberately **not** built on the shared `helpers::show_pop_out_window`
-    /// that Settings/Transfer Call/Keypad/Contact-dialog use: this window's
-    /// content is a `SidePanel` (peer list) *and* a `CentralPanel`
-    /// (thread+compose) side by side, not one panel. That helper's content
-    /// closure is `Ui`-shaped so it can run inside both the `embed_viewports()`
-    /// fallback's `egui::Window` and the real deferred branch's
-    /// `CentralPanel` -- but a `SidePanel` attaches to a viewport's
-    /// `Context`, not to an arbitrary parent `Ui`/`Area`, so it can't be
-    /// built from inside that shared closure. Forcing this one into that
-    /// shape would need a second, `Context`-shaped content parameter used by
-    /// nobody else -- not worth it for the one exception.
+    /// pattern as Settings -- except there's no tab-bar entry point at all:
+    /// the only way `messages_window_open` becomes `true` is
+    /// `message_from_list` (a right-click "Message" action on a
+    /// History/Contacts/Directory row). No-op when closed, called every
+    /// frame otherwise. Deliberately **not** built on the shared
+    /// `helpers::show_pop_out_window` the other four pop-out windows use --
+    /// see `docs/windowing.md` for why its side-by-side `SidePanel`+
+    /// `CentralPanel` layout can't share that helper.
     pub(crate) fn show_messages_window(&mut self, ctx: &egui::Context, self_app: SharedApp) {
         if !self.messages_window_open {
             return;
         }
 
-        // See `show_settings_modal`'s doc comment for why this has to be
-        // checked up front rather than branched on from inside the deferred
+        // Checked up front rather than branched on from inside the deferred
         // closure: on a backend that embeds, the closure runs synchronously
         // right here, and locking `self_arc` there would deadlock against
-        // the lock this method's own caller already holds.
+        // the lock this method's own caller already holds. See
+        // docs/windowing.md.
         if ctx.embed_viewports() {
             let peers = self.message_peers();
             let mut open = true;

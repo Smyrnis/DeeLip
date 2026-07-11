@@ -1,42 +1,7 @@
 //! ZRTP handshake state machine -- drives Hello/Commit/DHPart1/DHPart2/
 //! Confirm1/Confirm2/Conf2ACK to completion for one call, then hands back
-//! the derived SRTP keys.
-//!
-//! ## Hash-chain reveal sequence (why `HandshakeState` looks the way it does)
-//!
-//! Both sides generate a hash chain H0 (random) -> H1=hash(H0) ->
-//! H2=hash(H1) -> H3=hash(H2) and reveal it progressively across their own
-//! messages so each message is transitively bound to the one before it
-//! (RFC 6189 section 9) without exposing a pre-image before it's needed:
-//!
-//! - **Initiator** (sent the original INVITE, maps to the SIP caller):
-//!   Hello(H3) -> Commit(H2) -> DHPart2(H1) -> Confirm2(H0). Every step is
-//!   a direct one-hop chain link (`hash(H2) == H3`, etc.).
-//! - **Responder** (SIP callee): Hello(H3) -> DHPart1(H1) -> Confirm1(H0).
-//!   The responder never sends a Commit (only the initiator does), so its
-//!   own H2 is never transmitted at all -- the verifier just applies
-//!   SHA-256 *twice* when checking DHPart1's H1 against Hello's H3
-//!   (`hash(hash(H1)) == H3`) instead of validating an intermediate H2.
-//!
-//! This reveal sequence, the exact `hops` argument to
-//! `crypto::verify_hash_chain_hop` at each transition, and which message
-//! carries which side's chain value, were not found verbatim in RFC 6189's
-//! text (only the KDF/s0/SRTP-key formulas were confirmed against fetched
-//! spec text -- see `crypto.rs`'s doc comment) -- this is this
-//! implementation's own reconstruction of how the mechanism must fit
-//! together, verified only via this module's own two-instance handshake
-//! test, not against the spec or a real peer.
-//!
-//! ## Scope cuts (beyond what `wire.rs` already lists)
-//! - No retained-secret ID matching (`rs1IDi`/`rs1IDr`/etc. wire fields are
-//!   always zeroed and never checked) -- `s0` is always derived as if this
-//!   were a first-ever call with this peer. The retained-secrets cache
-//!   (`cache.rs`) is still populated after each successful call and can be
-//!   surfaced as an informational "seen this peer securely before" hint,
-//!   but it does not feed back into key derivation or auto-verification.
-//! - Commit contention (both sides sending Commit simultaneously) isn't
-//!   handled -- fine for a normal two-party call, since only the SIP
-//!   caller ever sends Commit here.
+//! the derived SRTP keys. Hash-chain reveal sequence, provenance/
+//! verification status, and scope cuts: `docs/zrtp.md`.
 
 use crate::zrtp::cache::{CacheEntry, RetainedSecrets, SharedSecretStore};
 use crate::zrtp::crypto::{

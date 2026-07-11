@@ -7,7 +7,7 @@ use std::io::{BufWriter, Write};
 use std::path::Path;
 
 use anyhow::Context;
-use mp3lame_encoder::{Bitrate, Builder, Encoder, FlushNoGap, InterleavedPcm, Quality};
+use mp3lame_encoder::{max_required_buffer_size, Bitrate, Builder, Encoder, FlushNoGap, InterleavedPcm, Quality};
 
 use deelip_config::RecordingFormat;
 
@@ -127,6 +127,11 @@ impl Mp3Writer {
             self.interleave_buf.push(far_sample);
         }
         self.encode_buf.clear();
+        // `encode_to_vec` writes into the vec's *spare* capacity directly (see
+        // its own doc example) -- an unreserved `Vec` has none, and LAME will
+        // write past it regardless, corrupting the heap. Reserving here is a
+        // no-op on every call after the first, since `clear()` keeps capacity.
+        self.encode_buf.reserve(max_required_buffer_size(near.len()));
         self.encoder
             .encode_to_vec(InterleavedPcm(&self.interleave_buf), &mut self.encode_buf)
             .map_err(|e| anyhow::anyhow!("MP3 encode: {e}"))?;
@@ -134,9 +139,16 @@ impl Mp3Writer {
     }
 
     fn finalize(mut self) -> anyhow::Result<()> {
-        let mut tail = Vec::new();
+        // Same reservation requirement as `write_frame`'s `encode_to_vec` --
+        // `max_required_buffer_size(0)` still accounts for the fixed 7200-byte
+        // frame headroom the flush needs.
+        let mut tail = Vec::with_capacity(max_required_buffer_size(0));
         self.encoder.flush_to_vec::<FlushNoGap>(&mut tail).map_err(|e| anyhow::anyhow!("MP3 flush: {e}"))?;
         self.file.write_all(&tail).context("Writing final MP3 frame")?;
         self.file.flush().context("Flushing MP3 file")
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/recording.rs"]
+mod tests;

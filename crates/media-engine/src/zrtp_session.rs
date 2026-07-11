@@ -3,12 +3,7 @@
 //! message on packet loss, persisting retained secrets in the same SQLite
 //! database as the rest of DeeLip's config, and translating engine events
 //! into what `engine.rs`'s RTP loop needs to act on (send bytes, swap in
-//! SRTP keys, surface the SAS).
-//!
-//! Retransmission here is a flat retry (`RESEND_INTERVAL` apart, up to
-//! `MAX_ATTEMPTS`) rather than RFC 6189's own exponential-backoff schedule
-//! -- simpler, and this implementation's own tests are the only thing that
-//! have ever exercised it (see `deelip_sip::zrtp`'s module docs for why).
+//! SRTP keys, surface the SAS). Full picture: `docs/zrtp.md`.
 
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -184,3 +179,7 @@ pub fn client_id() -> [u8; 16] {
     id[..name.len()].copy_from_slice(name);
     id
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/zrtp_session.rs"]
+mod tests;
