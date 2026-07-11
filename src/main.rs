@@ -1,3 +1,5 @@
+use std::sync::{Arc, Mutex};
+
 use anyhow::Context;
 use tracing::warn;
 use tracing_subscriber::fmt::writer::MakeWriterExt;
@@ -5,7 +7,7 @@ use tracing_subscriber::EnvFilter;
 
 use deelip_config::{AppConfig, Db};
 use deelip_sip::SipStack;
-use deelip_ui::DeelipApp;
+use deelip_ui::{DeelipApp, SharedApp};
 
 fn main() -> anyhow::Result<()> {
     // ── Config ────────────────────────────────────────────────────────────────
@@ -100,6 +102,29 @@ fn main() -> anyhow::Result<()> {
         None
     };
 
+    // Shared by every background producer that isn't already covered by the
+    // tray's own copy (SIP events here, global hotkeys/notifications/update-
+    // checker/directory-search/device-scan threads set up later in
+    // `DeelipApp::new`/`frame.rs`) to wake the UI thread the instant it has
+    // something, instead of the UI's idle repaint tick having to poll for
+    // it -- see `ctx_slot`'s doc comment on `DeelipApp` for why that matters.
+    // Created here (before anything that needs it) rather than alongside the
+    // tray below: SIP stacks spawn first and need a working `waker` from the
+    // very first frame, and `eframe::run_native`'s `CreationContext` (the
+    // only other source of a real `egui::Context`) doesn't exist yet at any
+    // point in `main()` -- this `Arc<Mutex<Option<Context>>>` is filled in
+    // lazily by `DeelipApp::update()` every frame instead, same pattern the
+    // tray already used for exactly this ordering problem.
+    let ctx_slot: deelip_ui::tray::CtxSlot = Arc::new(Mutex::new(None));
+    let repaint_waker: Arc<dyn Fn() + Send + Sync> = {
+        let ctx_slot = ctx_slot.clone();
+        Arc::new(move || {
+            if let Some(ctx) = ctx_slot.lock().unwrap().as_ref() {
+                ctx.request_repaint_of(egui::ViewportId::ROOT);
+            }
+        })
+    };
+
     // ── SIP stacks ────────────────────────────────────────────────────────────
     // Network settings (STUN/TURN/ICE) are process-wide, not per-account --
     // every stack shares this one `NetworkConfig` (SDP construction and
@@ -131,6 +156,7 @@ fn main() -> anyhow::Result<()> {
             network.clone(),
             local_port,
             external_ip.clone(),
+            repaint_waker.clone(),
         )) {
             Ok(handle) => account_handles.push((account, handle)),
             Err(e) => warn!("Account {username} failed to start ({e}), skipping"),
@@ -154,11 +180,9 @@ fn main() -> anyhow::Result<()> {
     // ── eframe (main thread) ──────────────────────────────────────────────────
     let tray = match deelip_ui::tray::spawn_tray_icon() {
         Ok((tray_ids, badge_tx)) => {
-            let ctx_slot: deelip_ui::tray::CtxSlot =
-                std::sync::Arc::new(std::sync::Mutex::new(None));
             let quit_state = deelip_ui::tray::QuitState {
-                calls: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
-                pending: std::sync::Arc::new(std::sync::Mutex::new(None)),
+                calls: Arc::new(Mutex::new(Vec::new())),
+                pending: Arc::new(Mutex::new(None)),
                 rt: rt.handle().clone(),
             };
             deelip_ui::tray::spawn_tray_event_handlers(
@@ -166,7 +190,7 @@ fn main() -> anyhow::Result<()> {
                 ctx_slot.clone(),
                 quit_state.clone(),
             );
-            Some((ctx_slot, quit_state, badge_tx))
+            Some((ctx_slot.clone(), quit_state, badge_tx))
         }
         Err(e) => {
             warn!("Tray icon failed to start ({e}), continuing without it");
@@ -188,12 +212,18 @@ fn main() -> anyhow::Result<()> {
     std::env::remove_var("WAYLAND_DISPLAY");
 
     let rt_handle = rt.handle().clone();
-    let app = DeelipApp::new(account_handles, rt_handle, config, db, tray);
+    // `DeelipApp` is deliberately !Send (transitively holds a cpal::Stream)
+    // -- see `SharedApp`'s doc comment/SAFETY note in `deelip_ui::app` for
+    // why wrapping it in Arc<Mutex<_>> here is still sound.
+    #[allow(clippy::arc_with_non_send_sync)]
+    let app = SharedApp(Arc::new(Mutex::new(DeelipApp::new(
+        account_handles, rt_handle, config, db, tray, ctx_slot,
+    ))));
 
     let native_opts = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("DeeLip")
-            .with_inner_size([580.0, 500.0])
+            .with_inner_size([540.0, 580.0])
             .with_resizable(true)
             .with_icon(load_window_icon()),
         // NOTE: start-minimized is NOT implemented via `.with_visible()` here --

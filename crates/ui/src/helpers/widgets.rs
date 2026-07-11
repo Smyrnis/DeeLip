@@ -115,7 +115,16 @@ pub(crate) fn list_row(
 ) {
     let bg_idx = ui.painter().add(egui::Shape::Noop);
     let row = ui
-        .push_id(id_source, |ui| ui.horizontal(add_contents))
+        .push_id(id_source, |ui| {
+            ui.horizontal(|ui| {
+                // Full tab width, not just this row's own content width --
+                // otherwise the hover-highlight/divider below (and any
+                // trailing `right_to_left` layout inside `add_contents`)
+                // only spans/aligns against this row's narrow content.
+                ui.set_width(ui.available_width());
+                add_contents(ui)
+            })
+        })
         .inner
         .response;
     if row.hovered() {
@@ -150,7 +159,13 @@ pub(crate) fn list_row_menu(
 ) {
     let bg_idx = ui.painter().add(egui::Shape::Noop);
     let row = ui
-        .push_id(id_source, |ui| ui.horizontal(add_contents))
+        .push_id(id_source, |ui| {
+            ui.horizontal(|ui| {
+                // Same full-width reasoning as `list_row` above.
+                ui.set_width(ui.available_width());
+                add_contents(ui)
+            })
+        })
         .inner
         .response;
     if row.hovered() {
@@ -265,6 +280,41 @@ pub(crate) fn empty_state(ui: &mut Ui, palette: &Palette, text: &str) {
     ui.label(RichText::new(text).color(palette.ink_muted).small());
 }
 
+/// Scopes `visuals.selection.bg_fill` to `palette.link` (blue) for whatever
+/// `add_contents` adds -- `egui::TextEdit`'s own selected-text-range
+/// highlight reads this same field the tab-bar/list "selected" chrome does
+/// (`theme::apply_style` sets it to `palette.surface_hover`, grey, per the
+/// v3.1 "grey chrome" decision), so this is scoped to just the text field
+/// rather than changed globally -- `ui.scope` automatically restores
+/// whatever the style was before once `add_contents` returns, so there's no
+/// separate "reset" value to keep in sync with `apply_style`'s own.
+pub(crate) fn text_edit_scope<R>(
+    ui: &mut Ui,
+    palette: &Palette,
+    add_contents: impl FnOnce(&mut Ui) -> R,
+) -> R {
+    ui.scope(|ui| {
+        ui.visuals_mut().selection.bg_fill = palette.link;
+        add_contents(ui)
+    })
+    .inner
+}
+
+/// `egui::Slider` draws its rail using `visuals.widgets.inactive.bg_fill` --
+/// this theme sets that to `palette.surface` (plain white) so ordinary
+/// buttons/comboboxes read as flat chrome, but that leaves every slider's
+/// rail invisible against a `surface`-colored card (just a bare circle
+/// handle, no track). Scoped to just the slider so it doesn't touch any
+/// other widget sharing the same `ui`. Shared by the Dialer's in/out gain
+/// sliders and Settings' ringtone-volume slider.
+pub(crate) fn styled_slider(ui: &mut Ui, palette: &Palette, slider: egui::Slider<'_>) -> egui::Response {
+    ui.scope(|ui| {
+        ui.visuals_mut().widgets.inactive.bg_fill = palette.border;
+        ui.add(slider)
+    })
+    .inner
+}
+
 /// Prompt for a save location (via `rfd`) and write `content` to it,
 /// logging (not surfacing to the UI -- matches this codebase's existing
 /// export-failure handling) on error. Shared by History's CSV export and
@@ -340,8 +390,12 @@ pub(crate) fn phone_keypad(ui: &mut Ui, palette: Palette, mut on_press: impl FnM
     ];
     // v2: a rounded-square calculator-style key, not a circle -- one of
     // the concrete "less playful" changes -- and smaller, for the denser
-    // v2 layout.
-    const BUTTON: f32 = 48.0;
+    // v2 layout. Bumped back up in v4 (2026-07-11) -- user feedback that
+    // the keys read too small to comfortably tap. Bumped again same day --
+    // "make the dialer bigger" -- shared by the idle dial pad, the in-call
+    // DTMF window, and the Transfer window's keypad, so all three grow
+    // together.
+    const BUTTON: f32 = 64.0;
     // `ui.vertical_centered` only centers single fixed-size children -- a
     // nested `ui.horizontal` row reports its own min_rect starting flush at
     // the container's left edge, so relying on it left every row jammed
@@ -373,7 +427,7 @@ fn keypad_button_text(digit: char, palette: Palette) -> egui::text::LayoutJob {
         &digit.to_string(),
         0.0,
         egui::TextFormat {
-            font_id: theme::font_mono_medium(17.0),
+            font_id: theme::font_mono_medium(24.0),
             color: palette.ink,
             ..Default::default()
         },
@@ -384,7 +438,7 @@ fn keypad_button_text(digit: char, palette: Palette) -> egui::text::LayoutJob {
             &format!("\n{letters}"),
             0.0,
             egui::TextFormat {
-                font_id: egui::FontId::new(7.5, egui::FontFamily::Proportional),
+                font_id: egui::FontId::new(10.0, egui::FontFamily::Proportional),
                 color: palette.ink_muted,
                 ..Default::default()
             },

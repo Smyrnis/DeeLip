@@ -12,6 +12,8 @@
 use global_hotkey::hotkey::{Code, HotKey};
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 
+use crate::platform::tray::CtxSlot;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HotkeyAction {
     Answer,
@@ -36,6 +38,16 @@ pub struct Hotkeys {
     /// without the other.
     custom_ids: Option<(u32, u32, u32)>,
     media_hook_id: Option<u32>,
+    /// Fed by a forwarding thread (spawned in `spawn`) that blocks on
+    /// `GlobalHotKeyEvent::receiver()` -- that receiver is process-wide and
+    /// owned by the `global-hotkey` crate itself, so we can't hook a repaint
+    /// request into its send side directly. Forwarding through our own
+    /// channel lets that thread call `ctx.request_repaint()` right after
+    /// each event, the same "wake the UI thread instead of making it poll"
+    /// idiom `platform::tray`'s event threads already use, instead of
+    /// `poll` only ever noticing a press whenever the idle repaint timer
+    /// next happens to fire.
+    event_rx: std::sync::mpsc::Receiver<GlobalHotKeyEvent>,
 }
 
 impl Hotkeys {
@@ -56,6 +68,7 @@ impl Hotkeys {
     pub fn spawn(
         custom: Option<(&str, &str, &str)>,
         media_buttons: bool,
+        ctx_slot: CtxSlot,
     ) -> anyhow::Result<Self> {
         let manager = GlobalHotKeyManager::new()?;
 
@@ -86,10 +99,23 @@ impl Hotkeys {
             None
         };
 
+        let (tx, event_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            while let Ok(event) = GlobalHotKeyEvent::receiver().recv() {
+                if tx.send(event).is_err() {
+                    break;
+                }
+                if let Some(ctx) = ctx_slot.lock().unwrap().as_ref() {
+                    ctx.request_repaint_of(egui::ViewportId::ROOT);
+                }
+            }
+        });
+
         Ok(Self {
             _manager: manager,
             custom_ids,
             media_hook_id,
+            event_rx,
         })
     }
 
@@ -98,7 +124,7 @@ impl Hotkeys {
     /// press should trigger the action, exactly once per press.
     pub fn poll(&self) -> Vec<HotkeyAction> {
         let mut actions = Vec::new();
-        while let Ok(event) = GlobalHotKeyEvent::receiver().try_recv() {
+        while let Ok(event) = self.event_rx.try_recv() {
             if event.state != HotKeyState::Pressed {
                 continue;
             }

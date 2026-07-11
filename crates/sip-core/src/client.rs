@@ -124,6 +124,42 @@ pub(crate) struct OutgoingVideoConnected {
     pub remote_srtp: Option<SrtpParams>,
 }
 
+/// Wraps the raw event channel so every `event_tx.send(...)` call site in
+/// this crate (there are ~30, across `call/lifecycle/*.rs`,
+/// `subscription/handlers.rs`, `message_method.rs`) also wakes up whichever
+/// UI is consuming `SipEvent`s, without needing to touch any of those call
+/// sites individually -- `.send()`'s signature matches
+/// `mpsc::UnboundedSender::send` exactly, so this is a drop-in replacement
+/// for the field's type alone. `waker` is caller-supplied precisely so this
+/// crate doesn't need to depend on `egui`/`eframe` to know how to request a
+/// repaint -- the `ui` crate hands in a closure that does that.
+#[derive(Clone)]
+pub struct EventSender {
+    inner: mpsc::UnboundedSender<SipEvent>,
+    waker: Arc<dyn Fn() + Send + Sync>,
+}
+
+impl EventSender {
+    fn new(inner: mpsc::UnboundedSender<SipEvent>, waker: Arc<dyn Fn() + Send + Sync>) -> Self {
+        Self { inner, waker }
+    }
+
+    // Deliberately mirrors `UnboundedSender::send`'s exact signature (see
+    // this struct's doc comment) rather than boxing the error, so none of
+    // the ~30 call sites need to change -- the `SendError<SipEvent>` payload
+    // was already this size when callers held the raw `UnboundedSender`
+    // directly; wrapping it here doesn't make anything larger, it just puts
+    // a name on a function clippy now has a definition to measure.
+    #[allow(clippy::result_large_err)]
+    pub fn send(&self, event: SipEvent) -> Result<(), mpsc::error::SendError<SipEvent>> {
+        let result = self.inner.send(event);
+        if result.is_ok() {
+            (self.waker)();
+        }
+        result
+    }
+}
+
 // ── SIP Stack ─────────────────────────────────────────────────────────────────
 
 pub struct SipStack {
@@ -164,7 +200,7 @@ pub struct SipStack {
     /// Call-ID -- MESSAGE (RFC 3428) is a standalone transaction, not part
     /// of any `Dialog`, so it can't be resolved via `dialogs`.
     pub(crate) pending_messages: HashMap<String, crate::message_method::PendingMessage>,
-    pub(crate) event_tx: mpsc::UnboundedSender<SipEvent>,
+    pub(crate) event_tx: EventSender,
     pub(crate) cmd_rx:   mpsc::UnboundedReceiver<SipCommand>,
 
     /// See `StackEvent`'s doc comment -- `internal_tx` is cloned into each
@@ -187,7 +223,7 @@ impl SipStack {
         network:      NetworkConfig,
         local_port:   u16,
         external_ip:  Option<String>,
-        event_tx:     mpsc::UnboundedSender<SipEvent>,
+        event_tx:     EventSender,
         cmd_rx:       CmdRx,
     ) -> Result<Self, (anyhow::Error, CmdRx)> {
         let (transport, local_ip, advertised_ip, server_addr, resolved_transport) =
@@ -418,8 +454,10 @@ impl SipStack {
         network:     NetworkConfig,
         local_port:  u16,
         external_ip: Option<String>,
+        waker:       Arc<dyn Fn() + Send + Sync>,
     ) -> anyhow::Result<SipHandle> {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
+        let event_tx = EventSender::new(event_tx, waker);
         let (cmd_tx,   cmd_rx)   = mpsc::unbounded_channel();
         let stack = SipStack::new(account.clone(), network.clone(), local_port, external_ip.clone(), event_tx.clone(), cmd_rx)
             .await

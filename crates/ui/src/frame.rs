@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use rand::Rng;
 
-use crate::app::DeelipApp;
+use crate::app::{DeelipApp, SharedApp};
 use crate::platform::hotkeys::HotkeyAction;
 use crate::platform::notify;
 use crate::platform::ringtone::{RingKind, Ringtone};
@@ -97,7 +97,7 @@ impl DeelipApp {
         match &self.pending_call {
             Some(p) if self.last_notified_call.as_deref() != Some(p.call_id.as_str()) => {
                 self.last_notified_call = Some(p.call_id.clone());
-                notify::notify_incoming_call(&p.call_id, &p.from);
+                notify::notify_incoming_call(&p.call_id, &p.from, self.ctx_slot.clone());
             }
             None => self.last_notified_call = None,
             _ => {}
@@ -122,11 +122,9 @@ impl DeelipApp {
     /// `update()`, and (b) keeps the background threads' shared state fresh
     /// for whenever they do run.
     pub(crate) fn process_tray_events(&mut self, ctx: &egui::Context) {
-        let Some((ctx_slot, quit_state, _)) = &self.tray else {
+        let Some((_, quit_state, _)) = &self.tray else {
             return;
         };
-
-        *ctx_slot.lock().unwrap() = Some(ctx.clone());
 
         // Only rebuild (clone Senders/call-ids, take the lock) when the set
         // of live/pending calls actually changed since last frame -- this
@@ -239,8 +237,39 @@ impl DeelipApp {
     }
 }
 
-impl eframe::App for DeelipApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+impl eframe::App for SharedApp {
+    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        let self_arc = self.clone();
+        self.0.lock().unwrap().update_inner(ctx, frame, &self_arc);
+    }
+
+    /// Hang up any in-progress call before the process exits, so the remote
+    /// side and server don't keep a dangling channel around.
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.0.lock().unwrap().hangup_before_exit();
+    }
+}
+
+impl DeelipApp {
+    fn update_inner(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame, self_arc: &SharedApp) {
+        // Refreshed unconditionally, every frame, regardless of tray/call
+        // state -- see `ctx_slot`'s doc comment on `DeelipApp`. Background
+        // producers (SIP, hotkeys, notifications, update-check, directory
+        // search, device scans) read this to call `request_repaint()` the
+        // instant they have something, rather than the UI having to poll.
+        *self.ctx_slot.lock().unwrap() = Some(ctx.clone());
+
+        // TEMP diagnostic -- see `diag_last_frame`'s doc comment.
+        if self.settings_open {
+            let now = std::time::Instant::now();
+            if let Some(last) = self.diag_last_frame {
+                tracing::info!("__diag update() gap while Settings open: {:?}", now.duration_since(last));
+            }
+            self.diag_last_frame = Some(now);
+        } else {
+            self.diag_last_frame = None;
+        }
+
         if std::mem::take(&mut self.first_frame) && self.config.start_minimized {
             // Must run on the first frame, not before -- eframe force-shows
             // the window right after this frame renders regardless of any
@@ -261,7 +290,7 @@ impl eframe::App for DeelipApp {
         self.process_update_events();
         self.process_directory_events();
 
-        let mut visuals = egui::Visuals::dark();
+        let mut visuals = egui::Visuals::light();
         theme::apply_style(ctx, &mut visuals, &self.palette);
         ctx.set_visuals(visuals);
 
@@ -412,18 +441,39 @@ impl eframe::App for DeelipApp {
             crate::app::Tab::Directory => self.show_directory(ui, ctx),
         });
 
-        self.show_settings_modal(ctx);
-        self.show_messages_window(ctx);
+        self.show_settings_modal(ctx, self_arc.clone());
+        self.show_messages_window(ctx, self_arc.clone());
+        self.show_transfer_window(ctx, self_arc.clone());
+        self.show_dtmf_window(ctx, self_arc.clone());
         self.show_update_popup(ctx);
-        self.show_contact_dialog(ctx);
+        self.show_contact_dialog(ctx, self_arc.clone());
 
-        ctx.request_repaint_after(Duration::from_millis(50));
-    }
-
-    /// Hang up any in-progress call before the process exits, so the remote
-    /// side and server don't keep a dangling channel around.
-    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        self.hangup_before_exit();
+        // The ~20fps cadence only actually matters while there's a call to
+        // animate/tick (the ringing dot's pulse, the connected-call duration
+        // counter) -- see `RingState`'s doc comment in `dialer.rs`. Those are
+        // the only things left with no waker of their own: SIP/hotkey/tray/
+        // notification/update-check/directory-search/device-scan events all
+        // now push their own `request_repaint()` via `ctx_slot` the instant
+        // they have something (see that field's doc comment), instead of
+        // relying on this tick to notice them. So the idle branch below is
+        // now just a rare safety net, not the primary way anything gets
+        // noticed -- kept long on purpose: every tick also fully rebuilds
+        // whatever's in the Settings viewport (`show_settings_modal` above),
+        // and forcing that (plus the main window's own redraw) on a short
+        // fixed schedule while idle is what caused real lag: GNOME/Mutter
+        // throttles frame delivery for whichever of DeeLip's two windows
+        // *isn't* focused (confirmed live -- unrelated to whether it's
+        // visually occluded), and since both windows share one render
+        // thread, a throttled main-window redraw directly delayed Settings'
+        // own next frame whenever Settings had focus and the idle tick fired.
+        let has_live_call =
+            self.pending_call.is_some() || self.pending_outbound.is_some() || !self.calls.is_empty();
+        let repaint_interval = if has_live_call {
+            Duration::from_millis(50)
+        } else {
+            Duration::from_secs(2)
+        };
+        ctx.request_repaint_after(repaint_interval);
     }
 }
 

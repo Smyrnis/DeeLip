@@ -2,10 +2,10 @@ use deelip_config::Contact;
 use deelip_sip::PresenceState;
 use egui::{RichText, Ui};
 
-use crate::app::DeelipApp;
+use crate::app::{DeelipApp, SharedApp};
 use crate::helpers::{
     account_status_label, avatar, double_clickable_label, empty_state, list_row_menu,
-    save_text_file,
+    save_text_file, text_edit_scope, window_icon,
 };
 
 impl DeelipApp {
@@ -13,13 +13,14 @@ impl DeelipApp {
         ui.add_space(8.0);
 
         // Search bar -- import/export moved to Settings' Advanced tab.
+        let palette = self.palette;
         ui.horizontal(|ui| {
             ui.label("Search:");
-            ui.add(
+            text_edit_scope(ui, &palette, |ui| ui.add(
                 egui::TextEdit::singleline(&mut self.contact_search)
                     .desired_width(200.0)
-                    .hint_text("name or sip URI"),
-            );
+                    .hint_text(RichText::new("name or number").color(palette.ink_muted)),
+            ));
         });
         ui.add_space(4.0);
 
@@ -53,27 +54,31 @@ impl DeelipApp {
                         |ui| {
                             avatar(ui, name, uri);
                             ui.add_space(6.0);
-                            ui.vertical(|ui| {
-                                ui.horizontal(|ui| {
-                                    let name_text = RichText::new(name)
-                                        .font(crate::theme::font_medium(13.0));
-                                    if double_clickable_label(ui, name_text) {
-                                        default_action_target = Some(*idx);
-                                    }
-                                    if *watch_presence {
-                                        let color = match presence {
-                                            Some(PresenceState::Available) => palette.signal,
-                                            _ => palette.ink_muted,
-                                        };
-                                        ui.label(RichText::new("●").color(color)).on_hover_text(
-                                            match presence {
-                                                Some(PresenceState::Available) => "Available",
-                                                Some(PresenceState::Offline) => "Offline",
-                                                _ => "Unknown",
-                                            },
-                                        );
-                                    }
-                                });
+                            let name_text = RichText::new(name)
+                                .font(crate::theme::font_medium(13.0));
+                            if double_clickable_label(ui, name_text) {
+                                default_action_target = Some(*idx);
+                            }
+                            if *watch_presence {
+                                let color = match presence {
+                                    Some(PresenceState::Available) => palette.signal,
+                                    _ => palette.ink_muted,
+                                };
+                                ui.label(RichText::new("●").color(color)).on_hover_text(
+                                    match presence {
+                                        Some(PresenceState::Available) => "Available",
+                                        Some(PresenceState::Offline) => "Offline",
+                                        _ => "Unknown",
+                                    },
+                                );
+                            }
+                            // Trailing right-aligned group for the number --
+                            // added *last* (matching History's own row
+                            // pattern), a single leaf `Label`, so it claims
+                            // the row's real remaining width and anchors to
+                            // its actual right edge instead of just sitting
+                            // next in sequence after the name.
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 ui.label(
                                     RichText::new(uri)
                                         .font(egui::FontId::new(
@@ -180,96 +185,159 @@ impl DeelipApp {
     /// mode). Rendered from `frame.rs::update()`, not from inside
     /// `show_contacts`, since History needs to trigger it while the
     /// History tab -- not Contacts -- is the active one.
-    pub(crate) fn show_contact_dialog(&mut self, ctx: &egui::Context) {
+    /// Add/Edit Contact as a real separate OS window, same `Deferred`-
+    /// viewport pattern as `show_messages_window`/`show_transfer_window`
+    /// (see `show_messages_window`'s doc comment for why the
+    /// `embed_viewports()` fallback has to run inline rather than through
+    /// the deferred closure, and why `self_app.lock()` must be called as a
+    /// method rather than reaching through `self_app.0.lock()` directly).
+    /// Previously an in-canvas `egui::Window` nested in the main viewport's
+    /// own tick -- promoted to a genuine second window so it behaves like
+    /// every other modal in this app (Settings, Messages, Transfer), not
+    /// as a one-off exception.
+    pub(crate) fn show_contact_dialog(&mut self, ctx: &egui::Context, self_app: SharedApp) {
         if !self.contact_dialog_open {
             return;
         }
-        let title = if self.editing_contact_idx.is_some() {
+
+        if ctx.embed_viewports() {
+            let title = self.contact_dialog_title();
+            let mut open = true;
+            let (mut save_clicked, mut cancel_clicked) = (false, false);
+            egui::Window::new(title)
+                .id(egui::Id::new("contact_dialog_fallback"))
+                .collapsible(false)
+                .resizable(false)
+                .open(&mut open)
+                .show(ctx, |ui| {
+                    (save_clicked, cancel_clicked) = self.show_contact_dialog_content(ui);
+                });
+            self.finish_contact_dialog(save_clicked, cancel_clicked || !open);
+            return;
+        }
+
+        let viewport_id = egui::ViewportId::from_hash_of("deelip_contact_dialog");
+        ctx.show_viewport_deferred(
+            viewport_id,
+            egui::ViewportBuilder::default()
+                .with_title("DeeLip Contact")
+                .with_inner_size([320.0, 300.0])
+                .with_min_inner_size([280.0, 260.0])
+                .with_resizable(false)
+                .with_icon(window_icon()),
+            move |child_ctx, _class| {
+                let mut app = self_app.lock();
+                if !app.contact_dialog_open {
+                    return;
+                }
+                let title = app.contact_dialog_title();
+                let (mut save_clicked, mut cancel_clicked) = (false, false);
+
+                egui::TopBottomPanel::top("contact_dialog_titlebar").show(child_ctx, |ui| {
+                    ui.add_space(4.0);
+                    ui.label(RichText::new(title).font(crate::theme::font_heading(16.0)));
+                    ui.add_space(4.0);
+                });
+
+                egui::CentralPanel::default().show(child_ctx, |ui| {
+                    (save_clicked, cancel_clicked) = app.show_contact_dialog_content(ui);
+                });
+
+                if child_ctx.input(|i| i.viewport().close_requested()) {
+                    cancel_clicked = true;
+                }
+                app.finish_contact_dialog(save_clicked, cancel_clicked);
+            },
+        );
+    }
+
+    fn contact_dialog_title(&self) -> &'static str {
+        if self.editing_contact_idx.is_some() {
             "Edit Contact"
         } else {
             "Add Contact"
-        };
-        let mut open = true;
-        let mut save_clicked = false;
-        let mut cancel_clicked = false;
-        egui::Window::new(title)
-            .collapsible(false)
-            .resizable(false)
-            .open(&mut open)
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label("Name:");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.new_contact.name)
-                            .desired_width(160.0),
-                    );
-                });
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    ui.label("URI:");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.new_contact.sip_uri)
-                            .hint_text("sip:alice@example.com")
-                            .font(egui::FontId::new(13.0, egui::FontFamily::Monospace))
-                            .desired_width(220.0),
-                    );
-                });
-                ui.add_space(6.0);
-                ui.checkbox(&mut self.new_contact.watch_presence, "Watch presence");
-                if self.accounts.len() > 1 {
-                    ui.add_space(4.0);
-                    ui.horizontal(|ui| {
-                        ui.label("via:");
-                        let (current_reg_ok, current_text) =
-                            match &self.new_contact.presence_account {
-                                Some(username) => self
-                                    .accounts
-                                    .iter()
-                                    .find(|a| &a.account.username == username)
-                                    .map(|a| (a.reg_ok, a.label.clone()))
-                                    .unwrap_or((false, username.clone())),
-                                None => self
-                                    .accounts
-                                    .first()
-                                    .map(|a| (a.reg_ok, format!("{} (default)", a.label)))
-                                    .unwrap_or_default(),
-                            };
-                        let palette = self.palette;
-                        let selected_label =
-                            account_status_label(ui, &palette, current_reg_ok, &current_text);
-                        egui::ComboBox::from_id_source("contact_presence_account_picker")
-                            .selected_text(selected_label)
-                            .show_ui(ui, |ui| {
-                                for acc in &self.accounts {
-                                    let is_sel = self.new_contact.presence_account.as_deref()
-                                        == Some(acc.account.username.as_str());
-                                    let label =
-                                        account_status_label(ui, &palette, acc.reg_ok, &acc.label);
-                                    if ui.add(egui::SelectableLabel::new(is_sel, label)).clicked()
-                                    {
-                                        self.new_contact.presence_account =
-                                            Some(acc.account.username.clone());
-                                    }
-                                }
-                            });
-                    });
-                }
-                ui.add_space(10.0);
-                ui.horizontal(|ui| {
-                    let can_save =
-                        !self.new_contact.name.is_empty() && !self.new_contact.sip_uri.is_empty();
-                    if ui
-                        .add_enabled(can_save, egui::Button::new("Save"))
-                        .clicked()
-                    {
-                        save_clicked = true;
-                    }
-                    if ui.button("Cancel").clicked() {
-                        cancel_clicked = true;
-                    }
-                });
-            });
+        }
+    }
 
+    /// Returns `(save_clicked, cancel_clicked)` -- the caller (the
+    /// `embed_viewports()` fallback or the deferred-viewport closure) still
+    /// owns deciding when a window-close counts as "cancel", since that
+    /// signal comes from two different places (`egui::Window`'s own
+    /// `open` bool vs. `close_requested()`).
+    fn show_contact_dialog_content(&mut self, ui: &mut Ui) -> (bool, bool) {
+        let (mut save_clicked, mut cancel_clicked) = (false, false);
+        let palette = self.palette;
+        ui.horizontal(|ui| {
+            ui.label("Name:");
+            text_edit_scope(ui, &palette, |ui| {
+                ui.add(egui::TextEdit::singleline(&mut self.new_contact.name).desired_width(160.0))
+            });
+        });
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.label("Number:");
+            text_edit_scope(ui, &palette, |ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.new_contact.sip_uri)
+                        .hint_text(RichText::new("e.g. 1234567").color(palette.ink_muted))
+                        .font(egui::FontId::new(13.0, egui::FontFamily::Monospace))
+                        .desired_width(220.0),
+                )
+            });
+        });
+        ui.add_space(6.0);
+        ui.checkbox(&mut self.new_contact.watch_presence, "Watch presence");
+        if self.accounts.len() > 1 {
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.label("via:");
+                let (current_reg_ok, current_text) = match &self.new_contact.presence_account {
+                    Some(username) => self
+                        .accounts
+                        .iter()
+                        .find(|a| &a.account.username == username)
+                        .map(|a| (a.reg_ok, a.label.clone()))
+                        .unwrap_or((false, username.clone())),
+                    None => self
+                        .accounts
+                        .first()
+                        .map(|a| (a.reg_ok, format!("{} (default)", a.label)))
+                        .unwrap_or_default(),
+                };
+                let palette = self.palette;
+                let selected_label =
+                    account_status_label(ui, &palette, current_reg_ok, &current_text);
+                egui::ComboBox::from_id_source("contact_presence_account_picker")
+                    .selected_text(selected_label)
+                    .show_ui(ui, |ui| {
+                        for acc in &self.accounts {
+                            let is_sel = self.new_contact.presence_account.as_deref()
+                                == Some(acc.account.username.as_str());
+                            let label =
+                                account_status_label(ui, &palette, acc.reg_ok, &acc.label);
+                            if ui.add(egui::SelectableLabel::new(is_sel, label)).clicked() {
+                                self.new_contact.presence_account =
+                                    Some(acc.account.username.clone());
+                            }
+                        }
+                    });
+            });
+        }
+        ui.add_space(10.0);
+        ui.horizontal(|ui| {
+            let can_save =
+                !self.new_contact.name.is_empty() && !self.new_contact.sip_uri.is_empty();
+            if ui.add_enabled(can_save, egui::Button::new("Save")).clicked() {
+                save_clicked = true;
+            }
+            if ui.button("Cancel").clicked() {
+                cancel_clicked = true;
+            }
+        });
+        (save_clicked, cancel_clicked)
+    }
+
+    fn finish_contact_dialog(&mut self, save_clicked: bool, cancel_clicked: bool) {
         if save_clicked {
             let c = std::mem::take(&mut self.new_contact);
             if let Some(idx) = self.editing_contact_idx.take() {
@@ -284,7 +352,7 @@ impl DeelipApp {
             let _ = self.contacts.save(&self.db);
             self.contact_dialog_open = false;
         }
-        if cancel_clicked || !open {
+        if cancel_clicked {
             self.editing_contact_idx = None;
             self.new_contact = Contact::default();
             self.contact_dialog_open = false;

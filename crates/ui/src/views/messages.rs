@@ -1,76 +1,79 @@
 use deelip_config::{Message, MessageDirection};
 use egui::{RichText, Ui};
 
-use crate::app::DeelipApp;
+use crate::app::{DeelipApp, SharedApp};
 use crate::helpers::{
-    avatar, empty_state, format_timestamp, list_row_divider, resolve_caller, unix_now, window_icon,
+    avatar, empty_state, format_timestamp, list_row_divider, resolve_caller, text_edit_scope,
+    unix_now, window_icon,
 };
 
 impl DeelipApp {
-    /// Messages as a separate native OS window, same
-    /// `Context::show_viewport_immediate` pattern as `show_settings_modal`
-    /// (see its own doc comment for why a real second window rather than an
-    /// in-canvas one) -- except there's no tab-bar entry point at all: the
-    /// only way `messages_window_open` becomes `true` is `message_from_list`
-    /// (a right-click "Message" action on a History/Contacts/Directory row).
-    /// No-op when closed. Called every frame, same lifecycle as Settings.
-    pub(crate) fn show_messages_window(&mut self, ctx: &egui::Context) {
+    /// Messages as a separate native OS window, same `Deferred`-viewport
+    /// pattern as `show_settings_modal` (see its own doc comment for why a
+    /// real, independently-redrawing second window rather than an in-canvas
+    /// one, and why that requires locking a shared `Arc<Mutex<DeelipApp>>`
+    /// instead of directly capturing `&mut self`) -- except there's no
+    /// tab-bar entry point at all: the only way `messages_window_open`
+    /// becomes `true` is `message_from_list` (a right-click "Message"
+    /// action on a History/Contacts/Directory row). No-op when closed.
+    /// Called every frame, same lifecycle as Settings.
+    pub(crate) fn show_messages_window(&mut self, ctx: &egui::Context, self_app: SharedApp) {
         if !self.messages_window_open {
             return;
         }
 
-        let peers = self.message_peers();
+        // See `show_settings_modal`'s doc comment for why this has to be
+        // checked up front rather than branched on from inside the deferred
+        // closure: on a backend that embeds, the closure runs synchronously
+        // right here, and locking `self_arc` there would deadlock against
+        // the lock this method's own caller already holds.
+        if ctx.embed_viewports() {
+            let peers = self.message_peers();
+            let mut open = true;
+            egui::Window::new("Messages")
+                .id(egui::Id::new("messages_window_fallback"))
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(true)
+                .default_size([640.0, 520.0])
+                .min_width(480.0)
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.allocate_ui(egui::vec2(200.0, ui.available_height()), |ui| {
+                            self.show_messages_peer_list(ui, &peers)
+                        });
+                        ui.separator();
+                        ui.vertical(|ui| self.show_messages_thread_and_compose(ui));
+                    });
+                });
+            if !open {
+                self.messages_window_open = false;
+            }
+            return;
+        }
+
         let viewport_id = egui::ViewportId::from_hash_of("deelip_messages_window");
-        let mut close_requested = false;
-        ctx.show_viewport_immediate(
+        ctx.show_viewport_deferred(
             viewport_id,
             egui::ViewportBuilder::default()
                 .with_title("DeeLip Messages")
                 .with_inner_size([640.0, 520.0])
                 .with_min_inner_size([480.0, 360.0])
                 .with_icon(window_icon()),
-            |child_ctx, class| {
-                // Same `Embedded` fallback as Settings for a backend/
-                // compositor without real multi-window support -- true
-                // `SidePanel`+`CentralPanel` can't be nested inside a single
-                // in-canvas `egui::Window`'s `Ui`, so this approximates the
-                // two-pane layout with a manual horizontal split instead of
-                // a real resizable divider.
-                if class == egui::ViewportClass::Embedded {
-                    let mut open = true;
-                    egui::Window::new("Messages")
-                        .id(egui::Id::new("messages_window_fallback"))
-                        .open(&mut open)
-                        .collapsible(false)
-                        .resizable(true)
-                        .default_size([640.0, 520.0])
-                        .min_width(480.0)
-                        .show(child_ctx, |ui| {
-                            ui.horizontal(|ui| {
-                                ui.allocate_ui(
-                                    egui::vec2(200.0, ui.available_height()),
-                                    |ui| self.show_messages_peer_list(ui, &peers),
-                                );
-                                ui.separator();
-                                ui.vertical(|ui| self.show_messages_thread_and_compose(ui));
-                            });
-                        });
-                    if !open {
-                        close_requested = true;
-                    }
+            move |child_ctx, _class| {
+                let mut app = self_app.lock();
+                if !app.messages_window_open {
                     return;
                 }
+                // Recomputed here (not passed in from the outer call) since
+                // this closure can run well after that call returns, on its
+                // own independent redraw schedule -- a value captured
+                // upfront would go stale.
+                let peers = app.message_peers();
 
                 egui::TopBottomPanel::top("messages_window_titlebar").show(child_ctx, |ui| {
                     ui.add_space(4.0);
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new("Messages").font(crate::theme::font_heading(16.0)));
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.button("Close").clicked() {
-                                close_requested = true;
-                            }
-                        });
-                    });
+                    ui.label(RichText::new("Messages").font(crate::theme::font_heading(16.0)));
                     ui.add_space(4.0);
                 });
 
@@ -78,41 +81,37 @@ impl DeelipApp {
                     .resizable(true)
                     .default_width(200.0)
                     .width_range(160.0..=320.0)
-                    .show(child_ctx, |ui| self.show_messages_peer_list(ui, &peers));
+                    .show(child_ctx, |ui| app.show_messages_peer_list(ui, &peers));
 
                 egui::CentralPanel::default()
-                    .show(child_ctx, |ui| self.show_messages_thread_and_compose(ui));
+                    .show(child_ctx, |ui| app.show_messages_thread_and_compose(ui));
 
                 if child_ctx.input(|i| i.viewport().close_requested()) {
-                    close_requested = true;
+                    app.messages_window_open = false;
                 }
             },
         );
-        if close_requested {
-            self.messages_window_open = false;
-        }
     }
 
-    /// Distinct peers with their most recent message, most-recently-active
-    /// first -- `messages.messages` is already newest-first, so the first
-    /// occurrence of each `peer_uri` while walking it in order is exactly
-    /// that peer's latest activity, snippet included.
-    fn message_peers(&self) -> Vec<(String, String, u64)> {
-        let mut peers: Vec<(String, String, u64)> = Vec::new();
+    /// Distinct peers, most-recently-active first -- `messages.messages` is
+    /// already newest-first, so the first occurrence of each `peer_uri`
+    /// while walking it in order is exactly that peer's latest activity.
+    fn message_peers(&self) -> Vec<String> {
+        let mut peers: Vec<String> = Vec::new();
         for m in &self.messages.messages {
-            if !peers.iter().any(|(p, _, _)| p == &m.peer_uri) {
-                peers.push((m.peer_uri.clone(), m.body.clone(), m.timestamp));
+            if !peers.iter().any(|p| p == &m.peer_uri) {
+                peers.push(m.peer_uri.clone());
             }
         }
         peers
     }
 
-    /// Left-pane conversation list -- avatar + resolved name + a truncated
-    /// last-message preview + timestamp, "modern chat app" style. Clicking a
-    /// row re-scopes the window to that peer; this is the *only* way to
-    /// switch conversations once the window is open (no picker/dropdown --
-    /// that redundancy is what this whole redesign was for).
-    fn show_messages_peer_list(&mut self, ui: &mut Ui, peers: &[(String, String, u64)]) {
+    /// Left-pane conversation list -- avatar + resolved name only, "modern
+    /// chat app" style. Clicking a row re-scopes the window to that peer;
+    /// this is the *only* way to switch conversations once the window is
+    /// open (no picker/dropdown -- that redundancy is what this whole
+    /// redesign was for).
+    fn show_messages_peer_list(&mut self, ui: &mut Ui, peers: &[String]) {
         let palette = self.palette;
         if peers.is_empty() {
             empty_state(ui, &palette, "No conversations yet.");
@@ -123,9 +122,9 @@ impl DeelipApp {
             .show(ui, |ui| self.show_messages_peer_rows(ui, peers));
     }
 
-    fn show_messages_peer_rows(&mut self, ui: &mut Ui, peers: &[(String, String, u64)]) {
+    fn show_messages_peer_rows(&mut self, ui: &mut Ui, peers: &[String]) {
         let palette = self.palette;
-        for (peer, last_body, last_ts) in peers {
+        for peer in peers {
             let selected = self.messages_window_peer.as_deref() == Some(peer.as_str());
             let (name, _) = resolve_caller(&self.contacts, peer);
             let bg_idx = ui.painter().add(egui::Shape::Noop);
@@ -134,21 +133,7 @@ impl DeelipApp {
                     ui.horizontal(|ui| {
                         avatar(ui, &name, peer);
                         ui.add_space(6.0);
-                        ui.vertical(|ui| {
-                            ui.label(RichText::new(&name).font(crate::theme::font_medium(13.0)));
-                            ui.label(
-                                RichText::new(truncate_preview(last_body))
-                                    .color(palette.ink_muted)
-                                    .small(),
-                            );
-                        });
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.label(
-                                RichText::new(format_timestamp(*last_ts))
-                                    .color(palette.ink_muted)
-                                    .small(),
-                            );
-                        });
+                        ui.label(RichText::new(&name).font(crate::theme::font_medium(13.0)));
                     })
                 })
                 .inner
@@ -189,12 +174,13 @@ impl DeelipApp {
 
         egui::TopBottomPanel::bottom("messages_compose_panel").show_inside(ui, |ui| {
             ui.add_space(4.0);
-            ui.add(
+            let palette = self.palette;
+            text_edit_scope(ui, &palette, |ui| ui.add(
                 egui::TextEdit::multiline(&mut self.message_body)
                     .desired_rows(3)
-                    .hint_text("Message text")
+                    .hint_text(RichText::new("Message text").color(palette.ink_muted))
                     .desired_width(f32::INFINITY),
-            );
+            ));
             ui.add_space(4.0);
             let can_send = !self.message_body.trim().is_empty()
                 && self.reg_ok
@@ -275,19 +261,5 @@ impl DeelipApp {
         let _ = self.messages.save(&self.db);
         self.message_body.clear();
         self.messages_window_peer = Some(to);
-    }
-}
-
-/// Truncate a message body to a short list-row preview -- `"…"` appended
-/// only when it's actually cut, so a short message isn't left with a
-/// dangling ellipsis.
-fn truncate_preview(body: &str) -> String {
-    const MAX: usize = 42;
-    let body = body.trim();
-    if body.chars().count() <= MAX {
-        body.to_string()
-    } else {
-        let truncated: String = body.chars().take(MAX).collect();
-        format!("{truncated}…")
     }
 }

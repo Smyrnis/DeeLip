@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use deelip_config::{
     AppConfig, CallDirection, CallHistory, CallStatus, Contact, ContactBook, Db, MessageLog,
@@ -29,7 +30,7 @@ pub(crate) enum Tab {
 /// than the earlier single long scrolling stack of 12 sections. Grouped
 /// down from those 12 section methods to 8 tabs -- some sections (a lone
 /// checkbox) weren't worth their own tab.
-#[derive(PartialEq, Eq, Clone, Copy, Default)]
+#[derive(PartialEq, Eq, Clone, Copy, Default, Debug)]
 pub(crate) enum SettingsTab {
     #[default]
     General,
@@ -165,10 +166,34 @@ pub struct DeelipApp {
     /// (egui repaints continuously) hammered every ALSA/jack backend dozens
     /// of times a second, producing log spam and a real UI slowdown.
     pub(crate) audio_device_cache: Option<(Vec<String>, Vec<String>)>,
+    /// Set while a background enumeration kicked off by `show_audio_section`
+    /// is in flight -- drained (like `event_rx` elsewhere) on the next frame
+    /// it resolves. Needed because cpal enumeration itself -- not just
+    /// running it every frame -- can block the calling thread for hundreds
+    /// of ms on some backends (measured ~620ms on first Audio-tab visit,
+    /// live via PulseAudio), and that thread is the same one driving both
+    /// the main window and the Settings viewport, so a synchronous call
+    /// here froze the whole app for that long right as the user switched
+    /// tabs. Runs once, not every frame -- see `audio_device_cache`.
+    pub(crate) audio_device_rx: Option<std::sync::mpsc::Receiver<(Vec<String>, Vec<String>)>>,
+    /// TEMP diagnostic -- timestamp of the last `update()` call while
+    /// Settings was open, to log real inter-frame wall-clock gaps (content
+    /// build + tessellation + present + any compositor stall) instead of
+    /// just the content-build portion. Remove once the Settings lag is
+    /// root-caused.
+    pub(crate) diag_last_frame: Option<std::time::Instant>,
+    /// TEMP diagnostic -- same idea as `diag_last_frame`, but measures the
+    /// Settings viewport's *own* successive-redraw gap now that it's a
+    /// `Deferred` viewport with its own independent redraw path, instead of
+    /// being nested inside the main window's tick. Remove once confirmed
+    /// this no longer tracks the main window's throttled cadence.
+    pub(crate) diag_settings_viewport_last_frame: Option<std::time::Instant>,
     /// Same idiom as `audio_device_cache`, for the Settings tab's camera
     /// picker -- `nokhwa` enumeration is likewise too expensive to run
     /// every frame.
     pub(crate) camera_device_cache: Option<Vec<String>>,
+    /// Same idiom as `audio_device_rx`, for camera enumeration.
+    pub(crate) camera_device_rx: Option<std::sync::mpsc::Receiver<Vec<String>>>,
     /// Mirrors whether `~/.config/autostart/deelip.desktop` currently exists
     /// -- a separate on-disk file, not part of `config.toml`, so it needs
     /// its own bit of UI-bound state (checked once at startup, then kept in
@@ -189,6 +214,19 @@ pub struct DeelipApp {
     /// `tray` module docs) — `None` degrades to normal close-quits-the-app
     /// behavior if the tray icon failed to start.
     pub(crate) tray: Option<(CtxSlot, QuitState, tray::BadgeSender)>,
+    /// Slot every background producer that isn't already covered by
+    /// `tray`'s own copy (SIP events, global hotkeys, desktop-notification
+    /// actions, the update checker, LDAP directory search, Settings'
+    /// audio/camera device scans) uses to call `request_repaint()` the
+    /// instant it has something, instead of DeeLip's idle repaint tick
+    /// having to poll for it. Refreshed every frame in `update()`, same as
+    /// `tray`'s copy was before this existed -- see `frame.rs`'s repaint-
+    /// interval comment for why this matters: without it, the only way to
+    /// notice a new event while idle was a periodic forced repaint of the
+    /// *whole* window (including, while Settings is open, its own viewport),
+    /// which is what caused the Settings-window slowdown this was added to
+    /// fix.
+    pub(crate) ctx_slot: CtxSlot,
     /// Missed calls not yet acknowledged by opening the History tab —
     /// mirrored to the tray icon's badge (see `sync_tray_badge`) whenever
     /// it changes; reset to 0 on switching to the History tab.
@@ -280,6 +318,52 @@ pub struct DeelipApp {
         Option<std::sync::mpsc::Receiver<crate::views::directory::DirectoryMsg>>,
 }
 
+/// Wraps `DeelipApp` behind a lock so Settings/Messages can render as real
+/// independent (`Deferred`-class) viewports instead of ones nested inside
+/// the main window's own per-tick callback (`Immediate`-class) -- see
+/// `show_settings_modal`'s doc comment for why that nesting was the actual
+/// cause of Settings feeling slow/laggy whenever the main window was
+/// unfocused (GNOME/Mutter throttles frame delivery for whichever window
+/// isn't focused, and an `Immediate` child viewport can only redraw when
+/// its parent's own tick runs). `eframe::App` can't be implemented directly
+/// on `Arc<Mutex<DeelipApp>>` (neither side is local to this crate), hence
+/// this thin newtype -- `update`/`on_exit` just lock and delegate to
+/// `DeelipApp::update_inner`/`on_exit_inner`.
+///
+/// Locking here is a borrow-checker/orphan-rule necessity, not a real
+/// concurrency mechanism -- eframe's winit event loop is single-threaded,
+/// and a `Deferred` viewport's callback is only ever invoked as a separate,
+/// sequential event on that same thread (confirmed against `eframe`'s own
+/// source), never nested inside another locked call to this `update`, so
+/// there's no reentrant-locking/deadlock risk in practice.
+#[derive(Clone)]
+pub struct SharedApp(pub Arc<Mutex<DeelipApp>>);
+
+// SAFETY: see the doc comment above -- the Mutex is a borrow-checker/
+// orphan-rule necessity here, not a real cross-thread concurrency
+// mechanism. eframe's Deferred-viewport callbacks and the root
+// update()/on_exit() are all invoked from the same single winit event-
+// loop thread, sequentially, never reentrantly -- confirmed against
+// eframe 0.28.1's native/{glow,wgpu}_integration.rs. DeelipApp itself
+// is !Send only because it transitively holds a cpal::Stream, which
+// cpal marks !Send defensively for genuine cross-thread use it never
+// sees here.
+unsafe impl Send for SharedApp {}
+unsafe impl Sync for SharedApp {}
+
+impl SharedApp {
+    /// A method (not a bare `.0.lock()` at the call site) so that a `move`
+    /// closure calling this captures the whole `SharedApp` -- which carries
+    /// the `unsafe impl Send`/`Sync` above -- rather than reaching straight
+    /// through to the inner `Arc<Mutex<DeelipApp>>` field. Rust's 2021
+    /// disjoint-closure-capture captures the minimal path actually used,
+    /// so `self_app.0.lock()` inside a closure captures just that `!Send`
+    /// field, silently missing this wrapper's unsafe impl.
+    pub(crate) fn lock(&self) -> std::sync::MutexGuard<'_, DeelipApp> {
+        self.0.lock().unwrap()
+    }
+}
+
 /// A not-yet-answered incoming call.
 pub(crate) struct PendingCall {
     /// Index into `DeelipApp::accounts` — which identity this INVITE arrived on.
@@ -328,6 +412,16 @@ pub(crate) struct CallSlot {
     pub(crate) direction: CallDirection,
     pub(crate) start_time: u64,
     pub(crate) is_held: bool,
+    /// Whether `start_media` should start this call's `MediaEngine` with
+    /// recording on -- seeded from the global `config.recording_enabled`
+    /// when the call connects, but then tracks the user's own manual
+    /// Record/Stop-recording toggle (`do_record_toggle`) from then on. A
+    /// hold tears down and resume rebuilds a fresh `MediaEngine` (see
+    /// `do_hold_slot`/`do_swap_to`), which used to mean `start_media` only
+    /// ever consulted the global config again on resume -- silently
+    /// re-enabling recording after the user had explicitly turned it off
+    /// for this call, since nothing remembered that per-call override.
+    pub(crate) recording_enabled: bool,
     pub(crate) media: CallMediaReady,
 }
 
@@ -374,6 +468,7 @@ impl DeelipApp {
         config: AppConfig,
         db: Db,
         tray: Option<(CtxSlot, QuitState, tray::BadgeSender)>,
+        ctx_slot: CtxSlot,
     ) -> Self {
         let accounts = accounts
             .into_iter()
@@ -397,7 +492,7 @@ impl DeelipApp {
                 config.hotkey_hangup.as_str(),
                 config.hotkey_mute.as_str(),
             ));
-            match Hotkeys::spawn(custom, config.handle_media_buttons) {
+            match Hotkeys::spawn(custom, config.handle_media_buttons, ctx_slot.clone()) {
                 Ok(h) => Some(h),
                 Err(e) => {
                     tracing::warn!(
@@ -445,11 +540,16 @@ impl DeelipApp {
             edit_account_idx: 0,
             show_account_password: false,
             audio_device_cache: None,
+            audio_device_rx: None,
+            diag_last_frame: None,
+            diag_settings_viewport_last_frame: None,
             camera_device_cache: None,
+            camera_device_rx: None,
             autostart_enabled: deelip_config::is_autostart_enabled(),
             first_frame: true,
-            palette: Palette::dark(),
+            palette: Palette::light(),
             tray,
+            ctx_slot,
             unseen_missed_calls: 0,
             tray_calls_key: Vec::new(),
             tray_pending_key: None,

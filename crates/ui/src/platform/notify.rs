@@ -12,6 +12,8 @@
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Mutex, OnceLock};
 
+use crate::platform::tray::CtxSlot;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NotificationAction {
     Accept,
@@ -35,7 +37,7 @@ fn action_channel() -> &'static ActionChannel {
 /// Reject buttons. Best-effort — failures (no notification daemon running,
 /// a daemon that ignores actions entirely, etc.) are logged, not fatal; the
 /// call is still perfectly answerable/rejectable from the app UI either way.
-pub fn notify_incoming_call(call_id: &str, from: &str) {
+pub fn notify_incoming_call(call_id: &str, from: &str, ctx_slot: CtxSlot) {
     let body = format!("Incoming call from {from}");
     let mut notification = notify_rust::Notification::new();
     notification
@@ -60,6 +62,9 @@ pub fn notify_incoming_call(call_id: &str, from: &str) {
                     };
                     if let Some(action) = resolved {
                         let _ = tx.send((call_id, action));
+                        if let Some(ctx) = ctx_slot.lock().unwrap().as_ref() {
+                            ctx.request_repaint_of(egui::ViewportId::ROOT);
+                        }
                     }
                 });
             });

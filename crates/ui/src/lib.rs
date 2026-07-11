@@ -9,7 +9,7 @@ mod theme;
 mod update;
 mod views;
 
-pub use app::DeelipApp;
+pub use app::{DeelipApp, SharedApp};
 pub use platform::tray;
 
 /// Embedded JetBrains Mono, SIL OFL 1.1 -- see

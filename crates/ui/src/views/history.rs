@@ -4,7 +4,7 @@ use egui::{RichText, Ui};
 use crate::app::DeelipApp;
 use crate::helpers::{
     csv_escape, double_clickable_label, empty_state, extract_user_part, format_duration,
-    format_timestamp, list_row_menu, resolve_caller, status_filter_label,
+    format_timestamp, list_row_menu, resolve_caller, status_filter_label, text_edit_scope,
 };
 
 impl DeelipApp {
@@ -16,13 +16,14 @@ impl DeelipApp {
         }
 
         // ── Search / filter / export bar ─────────────────────────────────────
+        let palette = self.palette;
         ui.horizontal(|ui| {
             ui.label("Search:");
-            ui.add(
+            text_edit_scope(ui, &palette, |ui| ui.add(
                 egui::TextEdit::singleline(&mut self.history_search)
                     .desired_width(140.0)
-                    .hint_text("name or URI"),
-            );
+                    .hint_text(RichText::new("name or number").color(palette.ink_muted)),
+            ));
             ui.label("Status:");
             egui::ComboBox::from_id_source("history_status_filter")
                 .selected_text(status_filter_label(&self.history_status_filter))

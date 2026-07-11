@@ -66,7 +66,7 @@ impl DeelipApp {
             input_device: input_device.as_deref(),
             output_device: output_device.as_deref(),
             recording: RecordingOptions {
-                enabled: self.config.recording_enabled,
+                enabled: self.calls[idx].recording_enabled,
                 format: self.config.recording_format,
                 dir_override: self.config.recordings_dir_override.clone(),
             },
@@ -218,7 +218,7 @@ impl DeelipApp {
             input_device: input_device.as_deref(),
             output_device: output_device.as_deref(),
             recording: RecordingOptions {
-                enabled: self.config.recording_enabled,
+                enabled: self.calls[0].recording_enabled,
                 format: self.config.recording_format,
                 dir_override: self.config.recordings_dir_override.clone(),
             },

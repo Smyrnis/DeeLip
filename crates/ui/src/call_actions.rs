@@ -319,10 +319,19 @@ impl DeelipApp {
     }
 
     /// Manual per-call Record button -- independent of the global
-    /// auto-record setting, same shape as `do_mute_toggle`.
-    pub(crate) fn do_record_toggle(&self) {
+    /// auto-record setting, same shape as `do_mute_toggle`. Also persists
+    /// onto the focused `CallSlot` (not just the live `MediaEngine`) so a
+    /// later hold/resume -- which tears down and rebuilds the engine from
+    /// scratch (see `do_hold_slot`/`do_swap_to`) -- restarts recording (or
+    /// not) exactly as the user last manually set it here, instead of
+    /// `start_media` falling back to the global auto-record setting again.
+    pub(crate) fn do_record_toggle(&mut self) {
         if let Some(engine) = &self.media {
-            engine.set_recording(!engine.is_recording());
+            let new_state = !engine.is_recording();
+            engine.set_recording(new_state);
+            if let Some(idx) = self.focused_call {
+                self.calls[idx].recording_enabled = new_state;
+            }
         }
     }
 

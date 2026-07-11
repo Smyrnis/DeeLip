@@ -44,6 +44,33 @@
 //! had gone further than this redesign's own margins needed, per feedback
 //! that the whole app now read as too tight/cramped.
 //!
+//! **v4 (2026-07-11)**: switched from Darcula to real IntelliJ Light theme
+//! values, per user request ("light mode only", no toggle -- same
+//! single-theme shape v3 already had, just the other identity). Sourced
+//! from JetBrains' own `expUI_light.theme.json` (the modern IntelliJ Light
+//! theme's named palette), not approximated: canvas `#F7F8FA` (`Gray13`,
+//! the theme's own global `"*"` background), surface `#FFFFFF` (`Gray14`,
+//! used for elevated/search-field-style surfaces) one step lighter than
+//! canvas -- mirrors the same canvas/surface relationship v3's Darcula had
+//! (surface one step off canvas), just inverted since light canvases sit
+//! *below* white surfaces instead of above a darker one. `border` is the
+//! theme's own `Component.borderColor` (`Gray9` `#C9CCD6`). `signal`/
+//! `ringing`/`danger` are `Green4`/`Yellow1`/`Red2` from the same palette --
+//! `Yellow1` (`#A46704`, a dark amber) and `Red2` (`#BC303E`) rather than
+//! the theme's own lighter `Yellow4`/`Red4` tokens, since DeeLip uses these
+//! as solid text/fill colors needing real contrast against a white surface,
+//! not the subtle inline-hint tint JetBrains uses `Red4` for. `link` is the
+//! theme's own `Blue2` (`#315FBD`) -- same narrow "hyperlink text only"
+//! role v3.1 established, still off by default since nothing renders one.
+//! `ink` (`#000000`, `Gray1`) is the palette's own darkest token; the theme
+//! file has no single explicit global foreground key to quote (inherited
+//! from the base Swing LaF), so this is the closest sourced value rather
+//! than a guess. The "color = call state only, chrome stays neutral" rule
+//! from v3.1 carries over unchanged -- buttons/tabs/selection still use
+//! `surface`/`surface_hover` grey, not `signal` or the theme's own blue
+//! accent (`Blue4` `#3574F0`, deliberately not used anywhere in this
+//! palette, same reasoning as v3.1's "blue only for links" decision).
+//!
 //! **Known broken icons**: the bundled `egui-phosphor` 0.6.0 "Regular"
 //! variant font has several codepoints whose cmap resolves to the wrong
 //! glyph -- not a tofu box, but a real (wrong) Latin letter or punctuation
@@ -95,21 +122,21 @@ pub struct Palette {
 }
 
 impl Palette {
-    /// The app's one and only theme -- see this module's own v3-revision
-    /// doc comment for why there's no `light()`/`for_theme()` counterpart
-    /// anymore.
-    pub fn dark() -> Self {
+    /// The app's one and only theme -- see this module's own v4-revision
+    /// doc comment for the real IntelliJ Light values used here and why
+    /// there's still no `dark()`/`for_theme()` counterpart.
+    pub fn light() -> Self {
         Self {
-            canvas: Color32::from_rgb(0x2B, 0x2B, 0x2B),
-            surface: Color32::from_rgb(0x3C, 0x3F, 0x41),
-            surface_hover: Color32::from_rgb(0x4B, 0x4E, 0x50),
-            border: Color32::from_rgb(0x4B, 0x4B, 0x4B),
-            ink: Color32::from_rgb(0xA9, 0xB7, 0xC6),
-            ink_muted: Color32::from_rgb(0x80, 0x80, 0x80),
-            signal: Color32::from_rgb(0x6A, 0x87, 0x59),
-            ringing: Color32::from_rgb(0xCC, 0x78, 0x32),
-            danger: Color32::from_rgb(0xBC, 0x3F, 0x3C),
-            link: Color32::from_rgb(0x68, 0x97, 0xBB),
+            canvas: Color32::from_rgb(0xF7, 0xF8, 0xFA),
+            surface: Color32::from_rgb(0xFF, 0xFF, 0xFF),
+            surface_hover: Color32::from_rgb(0xEB, 0xEC, 0xF0),
+            border: Color32::from_rgb(0xC9, 0xCC, 0xD6),
+            ink: Color32::from_rgb(0x00, 0x00, 0x00),
+            ink_muted: Color32::from_rgb(0x81, 0x85, 0x94),
+            signal: Color32::from_rgb(0x20, 0x8A, 0x3C),
+            ringing: Color32::from_rgb(0xA4, 0x67, 0x04),
+            danger: Color32::from_rgb(0xBC, 0x30, 0x3E),
+            link: Color32::from_rgb(0x31, 0x5F, 0xBD),
         }
     }
 }

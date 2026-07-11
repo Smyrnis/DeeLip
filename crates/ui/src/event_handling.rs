@@ -78,6 +78,7 @@ impl DeelipApp {
                         direction: CallDirection::Inbound,
                         start_time: pending.start_time,
                         is_held: false,
+                        recording_enabled: self.config.recording_enabled,
                         media,
                     };
                     self.calls.push(slot);
@@ -92,6 +93,7 @@ impl DeelipApp {
                         direction: CallDirection::Outbound,
                         start_time: out.start_time,
                         is_held: false,
+                        recording_enabled: self.config.recording_enabled,
                         media,
                     };
                     self.calls.push(slot);
@@ -393,23 +395,6 @@ impl DeelipApp {
         }
         if self.accounts[idx].account.publish_presence {
             self.accounts[idx].handle.publish_presence(!new_dnd);
-        }
-        self.save_config_quietly();
-    }
-
-    /// Same shape as `toggle_dnd`, for `auto_answer_enabled` -- a dialer
-    /// quick-toggle for the setting that's otherwise Settings-tab-only.
-    pub(crate) fn toggle_auto_answer(&mut self, idx: usize) {
-        let new_val = !self.accounts[idx].account.auto_answer_enabled;
-        self.accounts[idx].account.auto_answer_enabled = new_val;
-        let username = self.accounts[idx].account.username.clone();
-        if let Some(cfg_acc) = self
-            .config
-            .accounts
-            .iter_mut()
-            .find(|a| a.username == username)
-        {
-            cfg_acc.auto_answer_enabled = new_val;
         }
         self.save_config_quietly();
     }

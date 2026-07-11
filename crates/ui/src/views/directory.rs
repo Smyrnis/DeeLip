@@ -8,7 +8,7 @@ use anyhow::Context as _;
 use egui::{RichText, Ui};
 
 use crate::app::DeelipApp;
-use crate::helpers::{empty_state, list_row};
+use crate::helpers::{empty_state, list_row, text_edit_scope};
 
 /// One directory search result -- just enough to call/message/save it.
 pub(crate) struct DirectoryEntry {
@@ -182,9 +182,13 @@ impl DeelipApp {
         let (tx, rx) = std::sync::mpsc::channel();
         self.directory_rx = Some(rx);
         self.directory_state = DirectoryState::Searching;
+        let ctx_slot = self.ctx_slot.clone();
         std::thread::spawn(move || {
             let result = rt.block_on(run_ldap_search(cfg, query));
             let _ = tx.send(DirectoryMsg::Done(result));
+            if let Some(ctx) = ctx_slot.lock().unwrap().as_ref() {
+                ctx.request_repaint_of(egui::ViewportId::ROOT);
+            }
         });
     }
 
@@ -223,13 +227,14 @@ impl DeelipApp {
             return;
         }
 
+        let palette = self.palette;
         ui.horizontal(|ui| {
             ui.label("Search:");
-            let resp = ui.add(
+            let resp = text_edit_scope(ui, &palette, |ui| ui.add(
                 egui::TextEdit::singleline(&mut self.directory_query)
                     .desired_width(200.0)
-                    .hint_text("name, phone, or email"),
-            );
+                    .hint_text(RichText::new("name, phone, or email").color(palette.ink_muted)),
+            ));
             let enter_pressed =
                 resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             let search_clicked = ui.button("Search").clicked();

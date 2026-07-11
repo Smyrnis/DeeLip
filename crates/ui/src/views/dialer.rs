@@ -3,10 +3,10 @@ use deelip_media::video_codec::Yuv420Frame;
 use deelip_sip::AudioCodec;
 use egui::{Align2, Color32, RichText, Ui};
 
-use crate::app::{DeelipApp, VideoViewCache};
+use crate::app::{DeelipApp, SharedApp, VideoViewCache};
 use crate::helpers::{
     account_status_label, audio_codec_label, ctx_key_enter, empty_state, format_call_timer,
-    phone_keypad, resolve_caller, short_uri, unix_now,
+    phone_keypad, resolve_caller, short_uri, styled_slider, text_edit_scope, unix_now, window_icon,
 };
 use crate::theme::{self, Palette};
 
@@ -14,7 +14,7 @@ use crate::theme::{self, Palette};
 /// centered within -- the address field and keypad are the whole point of
 /// the idle screen, so they read as one small, deliberate instrument
 /// instead of stretching edge-to-edge in a resized window.
-const STAGE_WIDTH: f32 = 280.0;
+const STAGE_WIDTH: f32 = 320.0;
 
 impl DeelipApp {
     pub(crate) fn show_dialer(&mut self, ui: &mut Ui) {
@@ -58,14 +58,6 @@ impl DeelipApp {
             ui.add_space(6.0);
         }
 
-        if let Some(current) = self.selected_account_idx() {
-            let mut auto_answer = self.accounts[current].account.auto_answer_enabled;
-            if ui.checkbox(&mut auto_answer, "Auto-answer incoming calls").changed() {
-                self.toggle_auto_answer(current);
-            }
-            ui.add_space(10.0);
-        }
-
         // A centered fixed-width column, not `ui.vertical_centered` -- that
         // only centers single fixed-size children; a nested `ui.horizontal`
         // row (the keypad, the backspace/clear row) reports its own
@@ -81,13 +73,16 @@ impl DeelipApp {
             ui.vertical(|ui| {
                 ui.set_width(STAGE_WIDTH);
 
-                let resp = ui.add_sized(
-                    [STAGE_WIDTH, 38.0],
-                    egui::TextEdit::singleline(&mut self.call_target)
-                        .hint_text("Enter a number")
-                        .font(egui::FontId::new(15.0, egui::FontFamily::Monospace))
-                        .horizontal_align(egui::Align::Center),
-                );
+                let palette = self.palette;
+                let resp = text_edit_scope(ui, &palette, |ui| {
+                    ui.add_sized(
+                        [STAGE_WIDTH, 48.0],
+                        egui::TextEdit::singleline(&mut self.call_target)
+                            .hint_text(RichText::new("Enter a number").color(palette.ink_muted))
+                            .font(egui::FontId::new(19.0, egui::FontFamily::Monospace))
+                            .horizontal_align(egui::Align::Center),
+                    )
+                });
                 if resp.lost_focus() && ctx_key_enter(ui) {
                     self.do_call(None);
                 }
@@ -97,7 +92,7 @@ impl DeelipApp {
                 phone_keypad(ui, palette, |digit| self.call_target.push(digit));
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
-                    let row_width = 56.0 + ui.spacing().item_spacing.x + 52.0;
+                    let row_width = 64.0 + ui.spacing().item_spacing.x + 60.0;
                     ui.add_space(((STAGE_WIDTH - row_width) / 2.0).max(0.0));
                     // Plain Unicode, not `egui_phosphor::regular::BACKSPACE` --
                     // see the crate-level note on the broken icon set in
@@ -162,6 +157,22 @@ impl DeelipApp {
     // ringing/dialing/connected, instead of stacking status boxes above it ──
 
     fn show_dialer_in_call(&mut self, ui: &mut Ui) {
+        // A focused call's controls (Mute/Record/Transfer/Attended/Keypad,
+        // their expanded sub-panels, gain sliders, DTMF pad, Call
+        // statistics) can add up to more vertical space than the window's
+        // own fixed default height -- unlike the idle dial pad, this
+        // content is open-ended (any combination of those sub-panels can be
+        // showing at once), so it's wrapped in a `ScrollArea` rather than
+        // assumed to always fit. A `ScrollArea` with content shorter than
+        // the viewport doesn't scroll or look any different, so this is a
+        // no-op for the common case and only kicks in once something
+        // actually doesn't fit.
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| self.show_dialer_in_call_content(ui));
+    }
+
+    fn show_dialer_in_call_content(&mut self, ui: &mut Ui) {
         // A fresh incoming call takes over the whole screen; a *second*
         // incoming call while one is already active is shown as a compact
         // banner above the existing in-call content instead.
@@ -322,7 +333,17 @@ impl DeelipApp {
                         );
                     }
                     ui.add_space(16.0);
+                    // `vertical_centered` only centers a single fixed-size
+                    // child -- a nested `ui.horizontal` row reports its own
+                    // min_rect flush against the left edge instead (the
+                    // same footgun `show_dialer_idle`'s `STAGE_WIDTH` margin
+                    // and `phone_keypad`'s per-row centering already work
+                    // around) -- so this row centers itself explicitly via a
+                    // leading `add_space` sized to its own known width,
+                    // rather than trusting the parent to do it.
+                    let row_width = if self.in_conference { 64.0 } else { 64.0 + 10.0 + 56.0 };
                     ui.horizontal(|ui| {
+                        ui.add_space(((ui.available_width() - row_width) / 2.0).max(0.0));
                         if circular_action_button(
                             ui,
                             egui_phosphor::regular::PHONE_X,
@@ -338,7 +359,7 @@ impl DeelipApp {
                                     .color(self.palette.ink_muted),
                             )
                             .fill(self.palette.surface)
-                            .rounding(egui::Rounding::same(32.0));
+                            .rounding(egui::Rounding::same(14.0));
                             if ui.add_sized([56.0, 56.0], b).clicked() {
                                 hold_idx = Some(idx);
                             }
@@ -447,121 +468,98 @@ impl DeelipApp {
 
     fn show_focused_call_controls(&mut self, ui: &mut Ui) {
         theme::full_width_card(ui, self.palette, |ui| {
+            let palette = self.palette;
+            let row_width = 4.0 * ICON_TOGGLE_COL_WIDTH + 3.0 * ui.spacing().item_spacing.x;
             ui.horizontal(|ui| {
-                let mute_icon = if self.is_muted() {
-                    egui_phosphor::regular::MICROPHONE_SLASH
-                } else {
-                    egui_phosphor::regular::MICROPHONE
-                };
-                let mute_label = format!(
-                    "{mute_icon}  {}",
-                    if self.is_muted() { "Unmute" } else { "Mute" }
-                );
-                if ui.button(mute_label).clicked() {
+                ui.add_space(((ui.available_width() - row_width) / 2.0).max(0.0));
+                let muted = self.is_muted();
+                if icon_toggle_button(
+                    ui,
+                    &palette,
+                    if muted { egui_phosphor::regular::MICROPHONE_SLASH } else { egui_phosphor::regular::MICROPHONE },
+                    if muted { "Unmute" } else { "Mute" },
+                    muted,
+                    false,
+                ) {
                     self.do_mute_toggle();
                 }
-                let record_label = format!(
-                    "{}  {}",
+                let recording = self.is_recording();
+                if icon_toggle_button(
+                    ui,
+                    &palette,
                     egui_phosphor::regular::RECORD,
-                    if self.is_recording() { "Stop recording" } else { "Record" }
-                );
-                if ui.button(record_label).clicked() {
+                    if recording { "Stop" } else { "Record" },
+                    recording,
+                    recording,
+                ) {
                     self.do_record_toggle();
                 }
-                let transfer_label = format!(
-                    "{}  {}",
-                    "↱", // plain Unicode -- see the broken-icon note in `theme.rs`
-                    if self.showing_transfer {
-                        "Cancel transfer"
-                    } else {
-                        "Transfer"
-                    }
-                );
-                if ui.button(transfer_label).clicked() {
-                    self.showing_transfer = !self.showing_transfer;
+                let transfer_open = self.showing_transfer || self.showing_attended;
+                if icon_toggle_button(
+                    ui,
+                    &palette,
+                    // Not the plain "↱" this codebase otherwise uses as its
+                    // broken-`ARROW_BEND_UP_RIGHT` workaround -- confirmed
+                    // live in Xvfb that "↱" itself renders as "?" in this
+                    // exact spot (a smaller/differently-weighted context
+                    // than wherever it was last checked), so per `theme.rs`'s
+                    // own "always verify, don't assume" rule this uses
+                    // `EXPORT` instead, one of the icons that file already
+                    // lists as confirmed-rendering-correctly.
+                    egui_phosphor::regular::EXPORT,
+                    "Xfer", // short caption -- "Transfer" wraps to 2 lines in the 48px-wide slot
+                    transfer_open,
+                    false,
+                ) {
+                    self.showing_transfer = !transfer_open;
+                    self.showing_attended = false;
                 }
-                let can_attend = self.calls.len() == 1;
-                let attended_label = format!(
-                    "{}  {}",
-                    "↱", // plain Unicode -- see the broken-icon note in `theme.rs`
-                    if self.showing_attended {
-                        "Cancel attended"
-                    } else {
-                        "Attended"
-                    }
-                );
-                if ui
-                    .add_enabled(can_attend, egui::Button::new(attended_label))
-                    .clicked()
-                {
-                    self.showing_attended = !self.showing_attended;
-                }
-                let dtmf_label = format!("{}  Keypad", egui_phosphor::regular::NUMPAD);
-                if ui.selectable_label(self.showing_dtmf, dtmf_label).clicked() {
+                if icon_toggle_button(
+                    ui,
+                    &palette,
+                    egui_phosphor::regular::NUMPAD,
+                    "Keypad",
+                    self.showing_dtmf,
+                    false,
+                ) {
                     self.showing_dtmf = !self.showing_dtmf;
                 }
             });
-            ui.add_space(4.0);
+            ui.add_space(10.0);
+            // Centered as a group -- same leading-margin technique as the
+            // icon-button row above (a plain `ui.horizontal` here would
+            // otherwise sit flush against the card's left edge).
+            let slider_row_width = 2.0 * (20.0 + ui.spacing().slider_width) + 8.0 + 2.0 * ui.spacing().item_spacing.x;
             ui.horizontal(|ui| {
+                ui.add_space(((ui.available_width() - slider_row_width) / 2.0).max(0.0));
                 ui.label(egui_phosphor::regular::SPEAKER_HIGH);
                 let mut out_gain = self.output_gain();
-                if ui.add(egui::Slider::new(&mut out_gain, 0.0..=2.0).show_value(false)).changed() {
+                if styled_slider(ui, &self.palette, egui::Slider::new(&mut out_gain, 0.0..=2.0).show_value(false)).changed() {
                     self.set_output_gain(out_gain);
                 }
                 ui.add_space(8.0);
                 ui.label(egui_phosphor::regular::MICROPHONE);
                 let mut in_gain = self.input_gain();
-                if ui.add(egui::Slider::new(&mut in_gain, 0.0..=2.0).show_value(false)).changed() {
+                if styled_slider(ui, &self.palette, egui::Slider::new(&mut in_gain, 0.0..=2.0).show_value(false)).changed() {
                     self.set_input_gain(in_gain);
                 }
             });
-            if self.showing_transfer {
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.transfer_target)
-                            .hint_text("sip:carol@example.com")
-                            .font(egui::FontId::new(13.0, egui::FontFamily::Monospace))
-                            .desired_width(f32::INFINITY),
-                    );
-                    if ui.button("Send").clicked() {
-                        self.do_transfer();
-                    }
-                });
-            }
-            if self.showing_attended {
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.attended_target)
-                            .hint_text("sip:carol@example.com")
-                            .font(egui::FontId::new(13.0, egui::FontFamily::Monospace))
-                            .desired_width(f32::INFINITY),
-                    );
-                    if ui.button("Call").clicked() {
-                        self.do_attended_transfer_dial();
-                    }
-                });
-            }
             if self.attended_transfer_original.is_some() && self.calls.len() == 2 {
-                ui.add_space(4.0);
+                ui.add_space(8.0);
                 let complete = format!(
                     "{}  Complete Transfer",
                     egui_phosphor::regular::CHECK_CIRCLE
                 );
-                if ui.button(complete).clicked() {
-                    self.do_complete_attended_transfer();
-                }
+                ui.vertical_centered(|ui| {
+                    if ui
+                        .add(egui::Button::new(RichText::new(complete).color(palette.signal)))
+                        .clicked()
+                    {
+                        self.do_complete_attended_transfer();
+                    }
+                });
             }
         });
-
-        if self.showing_dtmf {
-            ui.add_space(8.0);
-            let palette = self.palette;
-            theme::full_width_card(ui, palette, |ui| {
-                phone_keypad(ui, palette, |digit| self.do_dtmf(digit));
-            });
-        }
 
         if let Some(engine) = self.media.as_ref() {
             ui.add_space(8.0);
@@ -598,6 +596,215 @@ impl DeelipApp {
             });
         }
     }
+
+    /// Transfer/Attended as a real separate OS window, same `Deferred`-
+    /// viewport pattern as `show_messages_window` (see its doc comment for
+    /// why the `embed_viewports()` fallback branch has to run inline
+    /// rather than through the deferred closure, and why `self_app.lock()`
+    /// must be called as a method, not `self_app.0.lock()`, to keep the
+    /// `unsafe impl Send` sound). One shared window covers both blind and
+    /// attended transfer via a mode switch, rather than two near-identical
+    /// windows -- they're one workflow, not two unrelated features.
+    /// `do_transfer`/`do_attended_transfer_dial` already flip
+    /// `showing_transfer`/`showing_attended` back to `false` on success
+    /// (see their own doc comments), which is this window's open
+    /// condition -- so firing either one closes this window as a side
+    /// effect, no separate "close" bookkeeping needed for the happy path.
+    pub(crate) fn show_transfer_window(&mut self, ctx: &egui::Context, self_app: SharedApp) {
+        if !(self.showing_transfer || self.showing_attended) {
+            return;
+        }
+
+        if ctx.embed_viewports() {
+            let mut open = true;
+            egui::Window::new("Transfer Call")
+                .id(egui::Id::new("transfer_window_fallback"))
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(false)
+                .show(ctx, |ui| self.show_transfer_window_content(ui));
+            if !open {
+                self.showing_transfer = false;
+                self.showing_attended = false;
+            }
+            return;
+        }
+
+        let viewport_id = egui::ViewportId::from_hash_of("deelip_transfer_window");
+        ctx.show_viewport_deferred(
+            viewport_id,
+            egui::ViewportBuilder::default()
+                .with_title("DeeLip Transfer Call")
+                .with_inner_size([320.0, 540.0])
+                .with_min_inner_size([280.0, 420.0])
+                .with_icon(window_icon()),
+            move |child_ctx, _class| {
+                let mut app = self_app.lock();
+                if !(app.showing_transfer || app.showing_attended) {
+                    return;
+                }
+
+                egui::TopBottomPanel::top("transfer_window_titlebar").show(child_ctx, |ui| {
+                    ui.add_space(4.0);
+                    ui.label(RichText::new("Transfer Call").font(theme::font_heading(16.0)));
+                    ui.add_space(4.0);
+                });
+
+                egui::CentralPanel::default()
+                    .show(child_ctx, |ui| app.show_transfer_window_content(ui));
+
+                if child_ctx.input(|i| i.viewport().close_requested()) {
+                    app.showing_transfer = false;
+                    app.showing_attended = false;
+                }
+            },
+        );
+    }
+
+    fn show_transfer_window_content(&mut self, ui: &mut Ui) {
+        // `ScrollArea`, same reasoning as `show_dialer_in_call`'s -- the
+        // mode switch + separator + field + full keypad + backspace/clear
+        // + action button is taller than this window's own default size at
+        // some window heights (confirmed live), so this is a no-op safety
+        // net once it fits, not a design choice to always scroll.
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| self.show_transfer_window_content_inner(ui));
+    }
+
+    fn show_transfer_window_content_inner(&mut self, ui: &mut Ui) {
+        let palette = self.palette;
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            if ui.selectable_label(!self.showing_attended, "Blind Transfer").clicked() {
+                self.showing_transfer = true;
+                self.showing_attended = false;
+            }
+            if ui
+                .add_enabled(
+                    self.calls.len() == 1,
+                    egui::SelectableLabel::new(self.showing_attended, "Attended Transfer"),
+                )
+                .clicked()
+            {
+                self.showing_transfer = false;
+                self.showing_attended = true;
+            }
+        });
+        ui.add_space(8.0);
+        ui.separator();
+        ui.add_space(8.0);
+        if self.showing_attended {
+            transfer_target_editor(ui, palette, &mut self.attended_target);
+            ui.add_space(8.0);
+            ui.vertical_centered(|ui| {
+                if ui.button(format!("{}  Call", egui_phosphor::regular::PHONE)).clicked() {
+                    self.do_attended_transfer_dial();
+                }
+            });
+        } else {
+            transfer_target_editor(ui, palette, &mut self.transfer_target);
+            ui.add_space(8.0);
+            ui.vertical_centered(|ui| {
+                if ui
+                    .button(format!("{}  Send", egui_phosphor::regular::EXPORT))
+                    .clicked()
+                {
+                    self.do_transfer();
+                }
+            });
+        }
+    }
+
+    /// In-call DTMF keypad as a real separate OS window, same `Deferred`-
+    /// viewport pattern as `show_transfer_window` (see `show_messages_window`'s
+    /// doc comment for the full rationale) -- previously rendered inline as
+    /// a card in the main window, inconsistent with Transfer/Contacts once
+    /// those were promoted to real windows.
+    pub(crate) fn show_dtmf_window(&mut self, ctx: &egui::Context, self_app: SharedApp) {
+        if !self.showing_dtmf {
+            return;
+        }
+
+        if ctx.embed_viewports() {
+            let mut open = true;
+            egui::Window::new("Keypad")
+                .id(egui::Id::new("dtmf_window_fallback"))
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(false)
+                .show(ctx, |ui| {
+                    let palette = self.palette;
+                    phone_keypad(ui, palette, |digit| self.do_dtmf(digit));
+                });
+            if !open {
+                self.showing_dtmf = false;
+            }
+            return;
+        }
+
+        let viewport_id = egui::ViewportId::from_hash_of("deelip_dtmf_window");
+        ctx.show_viewport_deferred(
+            viewport_id,
+            egui::ViewportBuilder::default()
+                .with_title("DeeLip Keypad")
+                .with_inner_size([260.0, 360.0])
+                .with_min_inner_size([240.0, 340.0])
+                .with_icon(window_icon()),
+            move |child_ctx, _class| {
+                let mut app = self_app.lock();
+                if !app.showing_dtmf {
+                    return;
+                }
+
+                egui::TopBottomPanel::top("dtmf_window_titlebar").show(child_ctx, |ui| {
+                    ui.add_space(4.0);
+                    ui.label(RichText::new("Keypad").font(theme::font_heading(16.0)));
+                    ui.add_space(4.0);
+                });
+
+                egui::CentralPanel::default().show(child_ctx, |ui| {
+                    let palette = app.palette;
+                    phone_keypad(ui, palette, |digit| app.do_dtmf(digit));
+                });
+
+                if child_ctx.input(|i| i.viewport().close_requested()) {
+                    app.showing_dtmf = false;
+                }
+            },
+        );
+    }
+}
+
+/// Number entry for the Transfer/Attended sub-panels -- a text field (still
+/// directly editable, for a full `sip:user@host` target) plus the same
+/// on-screen dial pad the idle Dialer and in-call DTMF panel use, so picking
+/// a transfer target doesn't require a physical keyboard (matches MicroSIP's
+/// own transfer keypad). Shared by both panels since they're otherwise
+/// identical field+keypad+backspace/clear blocks, just feeding a different
+/// `String` and followed by a different action button.
+fn transfer_target_editor(ui: &mut Ui, palette: Palette, target: &mut String) {
+    text_edit_scope(ui, &palette, |ui| {
+        ui.add(
+            egui::TextEdit::singleline(target)
+                .hint_text(RichText::new("e.g. 1234567").color(palette.ink_muted))
+                .font(egui::FontId::new(13.0, egui::FontFamily::Monospace))
+                .desired_width(f32::INFINITY),
+        )
+    });
+    ui.add_space(6.0);
+    phone_keypad(ui, palette, |digit| target.push(digit));
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        // Plain Unicode, not `egui_phosphor::regular::BACKSPACE` -- see the
+        // crate-level note on the broken icon set in `theme.rs`.
+        if ui.add_enabled(!target.is_empty(), egui::Button::new("⌫")).clicked() {
+            target.pop();
+        }
+        if ui.add_enabled(!target.is_empty(), egui::Button::new("Clear")).clicked() {
+            target.clear();
+        }
+    });
 }
 
 /// Which state `call_avatar`/`state_badge` reflect -- `Pending`
@@ -625,7 +832,7 @@ enum RingState {
 /// dot at its corner -- see the `RingState` doc comment for why this
 /// replaced the original pass's big pulse-ring animation.
 fn call_avatar(ui: &mut Ui, palette: &Palette, display_name: &str, state: RingState) {
-    let avatar_d = 52.0;
+    let avatar_d = 68.0;
     let pad = 8.0; // room for the status dot to sit outside the avatar's own edge
     let (rect, _resp) =
         ui.allocate_exact_size(egui::vec2(avatar_d + pad, avatar_d + pad), egui::Sense::hover());
@@ -639,7 +846,7 @@ fn call_avatar(ui: &mut Ui, palette: &Palette, display_name: &str, state: RingSt
         center,
         Align2::CENTER_CENTER,
         avatar_initial(display_name).to_string(),
-        theme::font_heading(17.0),
+        theme::font_heading(22.0),
         palette.ink,
     );
 
@@ -705,21 +912,115 @@ fn avatar_initial(display_name: &str) -> char {
 /// mono, names are Inter) applied to the in-call screen's hero label.
 fn caller_name_label(ui: &mut Ui, palette: &Palette, name: &str, is_name: bool) {
     let font = if is_name {
-        theme::font_heading(19.0)
+        theme::font_heading(24.0)
     } else {
-        egui::FontId::new(16.0, egui::FontFamily::Monospace)
+        egui::FontId::new(20.0, egui::FontFamily::Monospace)
     };
     ui.label(RichText::new(name).font(font).color(palette.ink));
 }
 
-/// A large circular icon-only button for the focused-call screen's primary
-/// actions (Accept/Reject/Hang Up) -- `phone_keypad`'s digit buttons use
-/// the same rounded-square-as-circle trick at a smaller size.
+/// A large rounded-square icon-only button for the focused-call screen's
+/// primary actions (Accept/Reject/Hang Up) -- same rounded-square language
+/// as `phone_keypad`'s digit buttons, not a full circle.
 fn circular_action_button(ui: &mut Ui, icon: &str, color: egui::Color32) -> bool {
     let button = egui::Button::new(RichText::new(icon).size(22.0).color(egui::Color32::WHITE))
         .fill(color)
-        .rounding(egui::Rounding::same(32.0));
+        .rounding(egui::Rounding::same(14.0));
     ui.add_sized([64.0, 64.0], button).clicked()
+}
+
+/// Column width reserved per button in the Mute/Record/Xfer/Keypad row --
+/// wider than the 48px button itself so "Record"/"Keypad" have room not to
+/// wrap (see `icon_toggle_button`'s doc comment for why a column that wraps
+/// its caption while its neighbors don't caused a real bug). Also used by
+/// `show_focused_call_controls` to compute that row's own centering width.
+const ICON_TOGGLE_COL_WIDTH: f32 = 60.0;
+
+/// A smaller icon-only rounded-square button with a small caption
+/// underneath -- the secondary in-call actions (Mute, Record, Transfer,
+/// Keypad), same icon+caption idiom `phone_keypad` already uses for its
+/// digit+letters. `active` (the surface_hover fill, matching this theme's
+/// existing "toggled on" convention e.g. the tab bar's selected state)
+/// reflects the button's own on/off state (muted, currently recording,
+/// panel open); `danger` additionally recolors the icon+caption to
+/// `palette.danger` for a state that's not just "on" but actively
+/// consequential (recording right now).
+///
+/// Deliberately built from raw `ui.painter()` calls on one
+/// `ui.allocate_exact_size` rect, not `egui::Button` + a layout container
+/// (`vertical_centered`, then `allocate_ui_with_layout`, both tried and
+/// both wrong in different ways) -- live testing on a real desktop (not
+/// just this project's own Xvfb sandbox, which never reproduced it) showed
+/// the *whole button box* for Mute sitting visibly higher than
+/// Record/Xfer/Keypad's. Root cause: those were built as 4 separate
+/// `ui.allocate_ui_with_layout(_, Layout::top_down(Align::Center), ...)`
+/// calls inside one `ui.horizontal` -- `horizontal`'s default cross-axis
+/// alignment is `Align::Center`, so if any one column's *measured content
+/// height* differs (e.g. "Xfer"'s caption already needed shortening from
+/// "Transfer" because it wraps to 2 lines in a 48px-wide slot -- a
+/// content-height difference exactly like this can happen, just gated on
+/// exact font metrics that apparently differ between this sandbox's font
+/// stack and a real desktop's), that column gets re-centered against the
+/// row's shared center line, shifting its whole contents up/down relative
+/// to the others. Painting everything at fixed offsets within one
+/// `allocate_exact_size` rect leaves no content-dependent height for any
+/// column to differ by, on any font stack.
+fn icon_toggle_button(
+    ui: &mut Ui,
+    palette: &Palette,
+    icon: &str,
+    caption: &str,
+    active: bool,
+    danger: bool,
+) -> bool {
+    const BTN: f32 = 48.0;
+    let icon_color = if danger { palette.danger } else { palette.ink };
+    let fill = if active { palette.surface_hover } else { palette.surface };
+
+    let (col_rect, response) = ui.allocate_exact_size(
+        egui::vec2(ICON_TOGGLE_COL_WIDTH, 64.0),
+        egui::Sense::click(),
+    );
+    let btn_rect = egui::Rect::from_min_size(
+        egui::pos2(col_rect.center().x - BTN / 2.0, col_rect.min.y),
+        egui::vec2(BTN, BTN),
+    );
+
+    let painter = ui.painter();
+    painter.rect(
+        btn_rect,
+        egui::Rounding::same(12.0),
+        fill,
+        egui::Stroke::new(1.0, palette.border),
+    );
+    // Per-glyph vertical nudge -- the Phosphor `MICROPHONE`/
+    // `MICROPHONE_SLASH` glyph's ink sits visibly higher within its own
+    // font-metrics line box than `RECORD`/`EXPORT`/`NUMPAD` do (confirmed
+    // via a zoomed side-by-side screenshot), unrelated to the box-position
+    // bug above -- this only recenters that one glyph's ink within an
+    // already-correctly-positioned button.
+    let nudge_y = if icon == egui_phosphor::regular::MICROPHONE
+        || icon == egui_phosphor::regular::MICROPHONE_SLASH
+    {
+        3.0
+    } else {
+        0.0
+    };
+    painter.text(
+        btn_rect.center() + egui::vec2(0.0, nudge_y),
+        egui::Align2::CENTER_CENTER,
+        icon,
+        egui::FontId::proportional(18.0),
+        icon_color,
+    );
+    painter.text(
+        egui::pos2(col_rect.center().x, btn_rect.max.y + 2.0),
+        egui::Align2::CENTER_TOP,
+        caption,
+        egui::FontId::new(11.0, egui::FontFamily::Proportional), // matches `RichText::small()`
+        icon_color,
+    );
+    response.clicked()
 }
 
 /// Convert `frame` (if it differs from `cache.frame`, the last one already

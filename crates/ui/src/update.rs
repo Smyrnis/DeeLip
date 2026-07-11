@@ -38,9 +38,13 @@ impl DeelipApp {
         let (tx, rx) = std::sync::mpsc::channel();
         self.update_rx = Some(rx);
         self.update_state = UpdateState::Checking;
+        let ctx_slot = self.ctx_slot.clone();
         std::thread::spawn(move || {
             let result = deelip_updater::check_latest(env!("CARGO_PKG_VERSION"));
             let _ = tx.send(UpdateMsg::Checked(result));
+            if let Some(ctx) = ctx_slot.lock().unwrap().as_ref() {
+                ctx.request_repaint_of(egui::ViewportId::ROOT);
+            }
         });
     }
 
@@ -88,10 +92,14 @@ impl DeelipApp {
         self.update_state = UpdateState::Downloading;
         let (tx, rx) = std::sync::mpsc::channel();
         self.update_rx = Some(rx);
+        let ctx_slot = self.ctx_slot.clone();
         std::thread::spawn(move || {
             let version = release.version.clone();
             let result = deelip_updater::download_and_replace(&release);
             let _ = tx.send(UpdateMsg::Installed(result, version));
+            if let Some(ctx) = ctx_slot.lock().unwrap().as_ref() {
+                ctx.request_repaint_of(egui::ViewportId::ROOT);
+            }
         });
     }
 

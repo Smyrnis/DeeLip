@@ -4,12 +4,20 @@ use deelip_config::{
 };
 use egui::{RichText, Ui};
 
-use crate::app::{DeelipApp, SettingsTab};
+use crate::app::{DeelipApp, SettingsTab, SharedApp};
 use crate::helpers::{
     account_label, account_status_label, codec_label, device_picker, empty_state, field_label,
-    info_hint, settings_section, window_icon,
+    info_hint, settings_section, styled_slider, text_edit_scope, window_icon,
 };
 use crate::theme::{self, Palette};
+
+/// Shared between `show_settings_modal` (which opens the viewport under
+/// this id) and the background device-scan spawns below (which need the
+/// same id to wake *this* viewport specifically, not just `ROOT` -- see
+/// their own doc comments for why waking only `ROOT` left this window
+/// showing stale "Scanning..." text until the user happened to interact
+/// with it directly).
+const SETTINGS_VIEWPORT_NAME: &str = "deelip_settings_window";
 
 impl DeelipApp {
     /// Settings as a separate, genuinely movable native OS window rather
@@ -23,21 +31,68 @@ impl DeelipApp {
     /// mechanically trapped inside the main window's bounds, unable to be
     /// dragged out to a different part of the screen (a real user-reported
     /// bug: "the settings window is inside the initial deelip window, and i
-    /// can not move it"). `Context::show_viewport_immediate` creates an
+    /// can not move it"). `Context::show_viewport_deferred` creates an
     /// actual second native window (its own OS-level title bar, move,
     /// resize, and close -- not an egui-drawn imitation of one), which is
-    /// what a "separate window" needs to mean here. Called every frame
-    /// while `settings_open` is true, same lifecycle as the old
-    /// `egui::Window` had (egui's immediate-viewport model, not a
-    /// create-once-and-forget window).
-    pub(crate) fn show_settings_modal(&mut self, ctx: &egui::Context) {
+    /// what a "separate window" needs to mean here.
+    ///
+    /// `Deferred`, not `Immediate` -- this used to be `Immediate`, which
+    /// renders synchronously nested inside the *main* window's own per-tick
+    /// callback (confirmed against `eframe`'s own source: an `Immediate`
+    /// child viewport has no redraw path of its own, it only ever repaints
+    /// when its parent's tick runs). That's what made Settings feel slow
+    /// whenever the main window was unfocused (which it always is while
+    /// Settings itself has focus): GNOME/Mutter throttles frame delivery for
+    /// whichever of the two windows isn't focused down to roughly 1Hz
+    /// (confirmed live, independent of whether the windows visually
+    /// overlap), and since Settings was nested inside the main window's own
+    /// callback, every click/keystroke inside Settings was gated by that
+    /// same ~1s throttle on the *main* window's redraw. `Deferred` viewports
+    /// get their own independent redraw path (`eframe` invokes their stored
+    /// callback directly whenever *their* window needs a repaint, not the
+    /// main window's), so Settings now responds to its own input normally
+    /// regardless of the main window's focus/throttle state. This is why
+    /// `DeelipApp` is wrapped in `SharedApp` (`Arc<Mutex<_>>`) -- a
+    /// `Deferred` callback must be `Fn + Send + Sync + 'static`, so it can't
+    /// directly borrow `&mut self` the way the old `Immediate` closure did;
+    /// it locks the shared app instead. Called every frame while
+    /// `settings_open` is true, same lifecycle as before (egui's viewport
+    /// model is still declarative, not create-once-and-forget).
+    pub(crate) fn show_settings_modal(&mut self, ctx: &egui::Context, self_app: SharedApp) {
         if !self.settings_open {
             return;
         }
 
-        let viewport_id = egui::ViewportId::from_hash_of("deelip_settings_window");
-        let mut close_requested = false;
-        ctx.show_viewport_immediate(
+        // Some backends (or a compositor without multi-window support)
+        // can't actually open a second native window -- `embed_viewports()`
+        // reports that, in which case both `show_viewport_immediate` and
+        // `show_viewport_deferred` fall back to running their callback
+        // *synchronously*, right here, against the main window's own
+        // context. Deciding this up front (rather than branching on
+        // `ViewportClass::Embedded` from inside the deferred closure, as
+        // this used to) matters now: if we called `show_viewport_deferred`
+        // below on a backend that embeds, its closure would run inline in
+        // this same call, and locking `self_arc` there would deadlock
+        // against the lock this method's own caller already holds. Render
+        // the fallback directly against `self` instead -- no lock needed.
+        if ctx.embed_viewports() {
+            let mut open = true;
+            egui::Window::new("Settings")
+                .id(egui::Id::new("settings_window_fallback"))
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(true)
+                .default_size([500.0, 640.0])
+                .min_width(380.0)
+                .show(ctx, |ui| self.show_settings(ui));
+            if !open {
+                self.settings_open = false;
+            }
+            return;
+        }
+
+        let viewport_id = egui::ViewportId::from_hash_of(SETTINGS_VIEWPORT_NAME);
+        ctx.show_viewport_deferred(
             viewport_id,
             egui::ViewportBuilder::default()
                 .with_title("DeeLip Settings")
@@ -48,66 +103,53 @@ impl DeelipApp {
                 // taller (700 -> 740) alongside the v3.1 spacing/margin
                 // loosening in `theme.rs`/`frame.rs` -- needs the same
                 // live re-check as before once that's verified.
-                .with_inner_size([500.0, 740.0])
-                .with_min_inner_size([380.0, 320.0])
+                .with_inner_size([950.0, 740.0])
+                .with_min_inner_size([580.0, 520.0])
                 .with_icon(window_icon()),
-            |child_ctx, class| {
-                // Some backends (or a compositor without multi-window
-                // support) can't actually open a second native window --
-                // `embed_viewports()` reports that via `ViewportClass::
-                // Embedded`, in which case this callback runs against the
-                // *main* window's context instead of a real child one.
-                // Falling back to the old in-canvas `egui::Window` there
-                // keeps Settings reachable rather than silently invisible.
-                if class == egui::ViewportClass::Embedded {
-                    let mut open = true;
-                    egui::Window::new("Settings")
-                        .id(egui::Id::new("settings_window_fallback"))
-                        .open(&mut open)
-                        .collapsible(false)
-                        .resizable(true)
-                        .default_size([500.0, 640.0])
-                        .min_width(380.0)
-                        .show(child_ctx, |ui| self.show_settings(ui));
-                    if !open {
-                        close_requested = true;
-                    }
+            move |child_ctx, _class| {
+                let mut app = self_app.lock();
+                if !app.settings_open {
                     return;
                 }
 
-                egui::CentralPanel::default().show(child_ctx, |ui| {
-                    // An in-app Close button, not just reliance on the OS
-                    // window chrome's own close button -- some window
-                    // managers (or none at all, e.g. a bare X server) don't
-                    // draw title-bar decorations at all, which would
-                    // otherwise leave no way to close this window short of
-                    // quitting the whole app. This is also the *reliable*
-                    // close path: it goes through the same graceful
-                    // "stop calling show_viewport_immediate next frame"
-                    // shutdown as everything else in this function, rather
-                    // than depending on the OS/window-manager's own close
-                    // protocol, which is a real title-bar interaction this
-                    // codebase can't fully control or verify across every
-                    // window manager.
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new("Settings").font(theme::font_heading(16.0)));
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.button("Close").clicked() {
-                                close_requested = true;
-                            }
-                        });
-                    });
+                // TEMP diagnostic -- see `diag_settings_viewport_last_frame`'s
+                // doc comment. Measures the gap between *this* viewport's own
+                // successive redraws, independent of the main window's --
+                // the thing the `Immediate` -> `Deferred` switch is meant to
+                // fix. Remove alongside that field once confirmed live.
+                let __diag_now = std::time::Instant::now();
+                if let Some(last) = app.diag_settings_viewport_last_frame {
+                    tracing::info!("__diag settings viewport update() gap: {:?}", __diag_now.duration_since(last));
+                }
+                app.diag_settings_viewport_last_frame = Some(__diag_now);
+
+                // Explicit margin, not `CentralPanel::default()`'s bare
+                // default -- confirmed live (Xvfb, at this viewport's real
+                // 950px default width) that content rendered flush against
+                // the literal right edge with zero breathing room. Same
+                // value/reasoning as the main window's own central panel
+                // (`frame.rs`).
+                let central_frame = egui::Frame::central_panel(&child_ctx.style()).inner_margin(14.0);
+                egui::CentralPanel::default().frame(central_frame).show(child_ctx, |ui| {
+                    // No in-app Close button -- removed per explicit request
+                    // (the user's real desktop always has working title-bar
+                    // decorations, so it was redundant); relies solely on
+                    // `close_requested()` below now. A window-manager-less
+                    // environment with no decorations at all (e.g. this
+                    // project's own Xvfb live-verification sandbox) has no
+                    // *visible* way to close this window short of that same
+                    // OS-level close-request path -- still reachable there
+                    // via a synthetic request (e.g. `xdotool windowclose`),
+                    // just not from a click.
+                    ui.label(RichText::new("Settings").font(theme::font_heading(16.0)));
                     ui.separator();
-                    self.show_settings(ui);
+                    app.show_settings(ui);
                 });
                 if child_ctx.input(|i| i.viewport().close_requested()) {
-                    close_requested = true;
+                    app.settings_open = false;
                 }
             },
         );
-        if close_requested {
-            self.settings_open = false;
-        }
     }
 
     /// Renders every Settings section in order inside the scroll area, then
@@ -169,6 +211,7 @@ impl DeelipApp {
             ui.add_space(4.0);
         });
 
+        let __diag_content_start = std::time::Instant::now();
         let edited = match self.settings_tab {
             SettingsTab::General => {
                 self.show_notifications_section(ui, &palette);
@@ -199,17 +242,28 @@ impl DeelipApp {
             SettingsTab::Network => self.show_network_section(ui, &palette),
             SettingsTab::Directory => self.show_directory_section(ui, &palette),
             SettingsTab::Hotkeys => self.show_global_hotkeys_section(ui, &palette),
+            // Same "doesn't fit, scroll just this tab" exception as Account
+            // above -- confirmed live that its 4 stacked sections (Updates/
+            // Blocklist/Call History/Contacts Import-Export, the latter two
+            // added in a later session than the comment above was written)
+            // overflow past the window's bottom, taking the Save button
+            // with them.
             SettingsTab::Advanced => {
-                self.show_updates_section(ui, &palette);
-                ui.add_space(14.0);
-                self.show_blocklist_section(ui, &palette);
-                ui.add_space(14.0);
-                self.show_history_export_section(ui, &palette);
-                ui.add_space(14.0);
-                self.show_contacts_data_section(ui, &palette);
+                egui::ScrollArea::vertical()
+                    .id_source("advanced_tab_scroll")
+                    .show(ui, |ui| {
+                        self.show_updates_section(ui, &palette);
+                        ui.add_space(14.0);
+                        self.show_blocklist_section(ui, &palette);
+                        ui.add_space(14.0);
+                        self.show_history_export_section(ui, &palette);
+                        ui.add_space(14.0);
+                        self.show_contacts_data_section(ui, &palette);
+                    });
                 false
             }
         };
+        tracing::info!("__diag settings tab {:?} content: {:?}", self.settings_tab, __diag_content_start.elapsed());
 
         if edited {
             self.settings_saved_notice = false;
@@ -276,9 +330,9 @@ impl DeelipApp {
     fn show_blocklist_section(&mut self, ui: &mut Ui, palette: &Palette) {
         settings_section(ui, palette, "Blocklist", Some("Applies immediately — no restart needed."), |ui| {
             ui.horizontal(|ui| {
-                ui.add(egui::TextEdit::singleline(&mut self.blocklist_input)
-                    .hint_text("number or sip:user@host")
-                    .desired_width(200.0));
+                text_edit_scope(ui, palette, |ui| ui.add(egui::TextEdit::singleline(&mut self.blocklist_input)
+                    .hint_text(RichText::new("number or sip:user@host").color(palette.ink_muted))
+                    .desired_width(200.0)));
                 if ui.button("Block").clicked() {
                     let entry = self.blocklist_input.trim().to_string();
                     if !entry.is_empty() && !self.config.blocklist.iter().any(|e| e.eq_ignore_ascii_case(&entry)) {
@@ -522,19 +576,19 @@ impl DeelipApp {
                 .spacing([8.0, 4.0])
                 .show(ui, |ui| {
                     field_label(ui, palette, "Account name:");
-                    edited |= optional_text_field(ui, &mut account.account_name, "e.g. Home, Work");
+                    edited |= optional_text_field(ui, palette, &mut account.account_name, "e.g. Home, Work");
                     ui.end_row();
 
                     field_label(ui, palette, "Username:");
-                    edited |= ui.add(egui::TextEdit::singleline(&mut account.username)
-                        .desired_width(f32::INFINITY)).changed();
+                    edited |= text_edit_scope(ui, palette, |ui| ui.add(egui::TextEdit::singleline(&mut account.username)
+                        .desired_width(f32::INFINITY)).changed());
                     ui.end_row();
 
                     field_label(ui, palette, "Password:");
                     ui.horizontal(|ui| {
-                        edited |= ui.add(egui::TextEdit::singleline(&mut account.password)
+                        edited |= text_edit_scope(ui, palette, |ui| ui.add(egui::TextEdit::singleline(&mut account.password)
                             .password(!self.show_account_password)
-                            .desired_width(200.0)).changed();
+                            .desired_width(200.0)).changed());
                         let icon = if self.show_account_password {
                             egui_phosphor::regular::EYE_SLASH
                         } else {
@@ -548,16 +602,16 @@ impl DeelipApp {
 
                     field_label(ui, palette, "Login (optional):");
                     ui.horizontal(|ui| {
-                        edited |= optional_text_field(ui, &mut account.auth_username, "defaults to Username");
+                        edited |= optional_text_field_sized(ui, palette, &mut account.auth_username, "defaults to Username", 240.0);
                         info_hint(ui, palette, "Digest-auth identity, when a provider requires \
                             a login distinct from the public SIP username above.");
                     });
                     ui.end_row();
 
                     field_label(ui, palette, "Server:");
-                    edited |= ui.add(egui::TextEdit::singleline(&mut account.server)
+                    edited |= text_edit_scope(ui, palette, |ui| ui.add(egui::TextEdit::singleline(&mut account.server)
                         .font(egui::FontId::new(13.0, egui::FontFamily::Monospace))
-                        .desired_width(f32::INFINITY)).changed();
+                        .desired_width(f32::INFINITY)).changed());
                     ui.end_row();
 
                     field_label(ui, palette, "Port:");
@@ -566,7 +620,7 @@ impl DeelipApp {
 
                     field_label(ui, palette, "Domain (optional):");
                     ui.horizontal(|ui| {
-                        edited |= optional_text_field(ui, &mut account.domain, "defaults to Server");
+                        edited |= optional_text_field_sized(ui, palette, &mut account.domain, "defaults to Server", 240.0);
                         info_hint(ui, palette, "SIP domain used in From/To/Contact URIs, when it \
                             differs from the registrar host in Server above.");
                     });
@@ -574,14 +628,14 @@ impl DeelipApp {
 
                     field_label(ui, palette, "SIP proxy (optional):");
                     ui.horizontal(|ui| {
-                        edited |= optional_text_field(ui, &mut account.sip_proxy, "host[:port]");
+                        edited |= optional_text_field_sized(ui, palette, &mut account.sip_proxy, "host[:port]", 240.0);
                         info_hint(ui, palette, "Outbound proxy to actually connect through, \
                             instead of Server/Port directly.");
                     });
                     ui.end_row();
 
                     field_label(ui, palette, "Display name:");
-                    edited |= optional_text_field(ui, &mut account.display_name, "");
+                    edited |= optional_text_field(ui, palette, &mut account.display_name, "");
                     ui.end_row();
 
                     field_label(ui, palette, "Transport:");
@@ -618,39 +672,73 @@ impl DeelipApp {
             }
 
             ui.add_space(6.0);
-            field_label(ui, palette, "Codecs (order = preference):");
+            field_label(ui, palette, "Codecs:");
+            let mut to_enable: Option<&str> = None;
             let mut move_up: Option<usize> = None;
             let mut move_down: Option<usize> = None;
             let mut to_disable: Option<usize> = None;
-            for (i, name) in account.codec_order.iter().enumerate() {
-                ui.horizontal(|ui| {
-                    ui.label(codec_label(name));
-                    if ui.add_enabled(i > 0, egui::Button::new("↑")).clicked() {
-                        move_up = Some(i);
-                    }
-                    if ui.add_enabled(i + 1 < account.codec_order.len(), egui::Button::new("↓")).clicked() {
-                        move_down = Some(i);
-                    }
-                    let can_disable = account.codec_order.len() > 1;
-                    if ui.add_enabled(can_disable, egui::Button::new("Disable")).clicked() {
-                        to_disable = Some(i);
-                    }
+            let list_frame = egui::Frame::none()
+                .stroke(egui::Stroke::new(1.0, palette.border))
+                .inner_margin(egui::Margin::symmetric(8.0, 6.0));
+            ui.horizontal(|ui| {
+                ui.vertical(|ui| {
+                    ui.label(RichText::new("Available").color(palette.ink_muted).small());
+                    list_frame.show(ui, |ui| {
+                        // `set_width`, not just `set_min_size` -- a bare
+                        // minimum lets a *nested* `right_to_left` layout in
+                        // the Enabled column below (see its own comment)
+                        // expand to claim the rest of the whole Settings
+                        // panel's width instead of staying a tidy column.
+                        ui.set_width(150.0);
+                        ui.set_min_height(120.0);
+                        for name in ["opus", "g722", "pcmu", "pcma", "gsm", "ilbc", "g729"] {
+                            if account.codec_order.iter().any(|c| c == name) {
+                                continue;
+                            }
+                            ui.horizontal(|ui| {
+                                if ui.small_button(egui_phosphor::regular::ARROW_RIGHT).clicked() {
+                                    to_enable = Some(name);
+                                }
+                                ui.label(codec_label(name));
+                            });
+                        }
+                    });
                 });
-            }
+                ui.vertical(|ui| {
+                    ui.label(RichText::new("Enabled (order = preference)").color(palette.ink_muted).small());
+                    list_frame.show(ui, |ui| {
+                        // Fixed width, not just a minimum -- see the
+                        // Available column's comment above; without this,
+                        // the `right_to_left` group below expands to the
+                        // whole remaining Settings-panel width instead of
+                        // staying right next to the codec name, pushing the
+                        // ↑/↓ buttons off past the edge of this column.
+                        ui.set_width(290.0);
+                        ui.set_min_height(120.0);
+                        for (i, name) in account.codec_order.iter().enumerate() {
+                            ui.horizontal(|ui| {
+                                let can_disable = account.codec_order.len() > 1;
+                                if ui.add_enabled(can_disable, egui::Button::new(egui_phosphor::regular::ARROW_LEFT).small()).clicked() {
+                                    to_disable = Some(i);
+                                }
+                                ui.label(codec_label(name));
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    if ui.add_enabled(i + 1 < account.codec_order.len(), egui::Button::new("↓").small()).clicked() {
+                                        move_down = Some(i);
+                                    }
+                                    if ui.add_enabled(i > 0, egui::Button::new("↑").small()).clicked() {
+                                        move_up = Some(i);
+                                    }
+                                });
+                            });
+                        }
+                    });
+                });
+            });
+            if let Some(name) = to_enable { account.codec_order.push(name.to_string()); edited = true; }
             if let Some(i) = move_up { account.codec_order.swap(i, i - 1); edited = true; }
             if let Some(i) = move_down { account.codec_order.swap(i, i + 1); edited = true; }
             if let Some(i) = to_disable { account.codec_order.remove(i); edited = true; }
-            for name in ["opus", "g722", "pcmu", "pcma", "gsm", "ilbc", "g729"] {
-                if !account.codec_order.iter().any(|c| c == name) {
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new(codec_label(name)).color(palette.ink_muted));
-                        if ui.small_button("Enable").clicked() {
-                            account.codec_order.push(name.to_string());
-                            edited = true;
-                        }
-                    });
-                }
-            }
 
             ui.add_space(6.0);
             ui.horizontal(|ui| {
@@ -705,19 +793,19 @@ impl DeelipApp {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 field_label(ui, palette, "Forward always:");
-                edited |= optional_text_field(ui, &mut account.forward_always, "sip:reception@example.com");
+                edited |= optional_text_field(ui, palette, &mut account.forward_always, "sip:reception@example.com");
             });
 
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 field_label(ui, palette, "Forward when busy:");
-                edited |= optional_text_field(ui, &mut account.forward_on_busy, "sip:voicemail@example.com");
+                edited |= optional_text_field(ui, palette, &mut account.forward_on_busy, "sip:voicemail@example.com");
             });
 
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 field_label(ui, palette, "Forward if unanswered:");
-                edited |= optional_text_field_sized(ui, &mut account.no_answer_forward, "sip:voicemail@example.com", 180.0);
+                edited |= optional_text_field_sized(ui, palette, &mut account.no_answer_forward, "sip:voicemail@example.com", 180.0);
                 field_label(ui, palette, "after (s):");
                 edited |= ui.add(egui::DragValue::new(&mut account.no_answer_timeout_secs).range(1..=300)).changed();
             });
@@ -754,7 +842,7 @@ impl DeelipApp {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 field_label(ui, palette, "Voicemail mailbox (MWI):");
-                edited |= optional_text_field_sized(ui, &mut account.mailbox, "1000", 100.0);
+                edited |= optional_text_field_sized(ui, palette, &mut account.mailbox, "1000", 100.0);
                 info_hint(ui, palette, "Extension/mailbox this account subscribes to for \
                     Message-Waiting-Indicator (MWI) NOTIFY -- new-voicemail count shown as the \
                     badge next to the status bar. Leave blank to skip MWI subscription entirely.");
@@ -771,7 +859,7 @@ impl DeelipApp {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 field_label(ui, palette, "Dialing prefix:");
-                edited |= optional_text_field_sized(ui, &mut account.dialing_prefix, "e.g. 9", 60.0);
+                edited |= optional_text_field_sized(ui, palette, &mut account.dialing_prefix, "e.g. 9", 60.0);
                 info_hint(ui, palette, "Auto-prepended to bare numbers dialed from this account \
                     (e.g. \"9\" for an outside line) -- not applied to a full SIP URI or an \
                     explicit user@host entry. Only used as a fallback when no Dial Plan rule \
@@ -793,11 +881,13 @@ impl DeelipApp {
                 for (i, rule) in account.dial_plan.iter_mut().enumerate() {
                     ui.horizontal(|ui| {
                         edited |= ui.checkbox(&mut rule.enabled, "").changed();
-                        edited |= ui.add(egui::TextEdit::singleline(&mut rule.pattern)
-                            .hint_text("pattern").desired_width(120.0)).changed();
+                        edited |= text_edit_scope(ui, palette, |ui| ui.add(egui::TextEdit::singleline(&mut rule.pattern)
+                            .hint_text(RichText::new("pattern").color(palette.ink_muted))
+                            .desired_width(120.0)).changed());
                         field_label(ui, palette, "→");
-                        edited |= ui.add(egui::TextEdit::singleline(&mut rule.replacement)
-                            .hint_text("replacement").desired_width(100.0)).changed();
+                        edited |= text_edit_scope(ui, palette, |ui| ui.add(egui::TextEdit::singleline(&mut rule.replacement)
+                            .hint_text(RichText::new("replacement").color(palette.ink_muted))
+                            .desired_width(100.0)).changed());
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui.small_button("Remove").clicked() {
                                 remove_idx = Some(i);
@@ -811,11 +901,13 @@ impl DeelipApp {
                 }
             }
             ui.horizontal(|ui| {
-                ui.add(egui::TextEdit::singleline(&mut self.dialplan_pattern_input)
-                    .hint_text("pattern, e.g. ^0(\\d+)$").desired_width(120.0));
+                text_edit_scope(ui, palette, |ui| ui.add(egui::TextEdit::singleline(&mut self.dialplan_pattern_input)
+                    .hint_text(RichText::new("pattern, e.g. ^0(\\d+)$").color(palette.ink_muted))
+                    .desired_width(120.0)));
                 field_label(ui, palette, "→");
-                ui.add(egui::TextEdit::singleline(&mut self.dialplan_replacement_input)
-                    .hint_text("replacement, e.g. $1").desired_width(100.0));
+                text_edit_scope(ui, palette, |ui| ui.add(egui::TextEdit::singleline(&mut self.dialplan_replacement_input)
+                    .hint_text(RichText::new("replacement, e.g. $1").color(palette.ink_muted))
+                    .desired_width(100.0)));
                 if ui.button("Add rule").clicked() && !self.dialplan_pattern_input.trim().is_empty() {
                     account.dial_plan.push(DialPlanRule {
                         pattern: self.dialplan_pattern_input.trim().to_string(),
@@ -906,7 +998,7 @@ impl DeelipApp {
             ui.add_space(6.0);
             field_label(ui, palette, "Public address (optional):");
             ui.horizontal(|ui| {
-                edited |= optional_text_field(ui, &mut account.public_address, "e.g. 203.0.113.5");
+                edited |= optional_text_field_sized(ui, palette, &mut account.public_address, "e.g. 203.0.113.5", 240.0);
                 info_hint(ui, palette, "Overrides the address advertised in Contact/SDP for this \
                     account, instead of the globally STUN-discovered external IP.");
             });
@@ -944,18 +1036,75 @@ impl DeelipApp {
         edited
     }
 
+    /// Kicks off cpal device enumeration on a background thread instead of
+    /// blocking the render thread -- measured ~620ms on first Audio-tab
+    /// visit live (PulseAudio backend), which froze the whole app (main
+    /// window included -- both it and the Settings viewport are driven by
+    /// this same thread) for that long right as the tab was switched. See
+    /// `audio_device_rx`'s doc comment.
+    ///
+    /// Wakes both `ROOT` and the Settings viewport specifically: this scan
+    /// only ever runs while Settings is open (see the two call sites in
+    /// `show_audio_section`), and `ROOT` alone doesn't repaint a `Deferred`
+    /// child viewport -- confirmed live, this left the "Scanning..." label
+    /// stuck showing stale text after the scan had already finished, until
+    /// the user happened to move the mouse over the Settings window.
+    fn spawn_audio_device_scan(&mut self) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let ctx_slot = self.ctx_slot.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send((list_device_names(true), list_device_names(false)));
+            if let Some(ctx) = ctx_slot.lock().unwrap().as_ref() {
+                ctx.request_repaint_of(egui::ViewportId::ROOT);
+                ctx.request_repaint_of(egui::ViewportId::from_hash_of(SETTINGS_VIEWPORT_NAME));
+            }
+        });
+        self.audio_device_rx = Some(rx);
+    }
+
+    /// Same idiom (and same both-viewports wake reasoning) as
+    /// `spawn_audio_device_scan`, for camera enumeration.
+    fn spawn_camera_device_scan(&mut self) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let ctx_slot = self.ctx_slot.clone();
+        std::thread::spawn(move || {
+            let names = deelip_media::video_capture::list_cameras()
+                .into_iter()
+                .map(|(_, name)| name)
+                .collect();
+            let _ = tx.send(names);
+            if let Some(ctx) = ctx_slot.lock().unwrap().as_ref() {
+                ctx.request_repaint_of(egui::ViewportId::ROOT);
+                ctx.request_repaint_of(egui::ViewportId::from_hash_of(SETTINGS_VIEWPORT_NAME));
+            }
+        });
+        self.camera_device_rx = Some(rx);
+    }
+
     /// Restart required -- returns whether anything changed.
     fn show_audio_section(&mut self, ui: &mut Ui, palette: &Palette) -> bool {
         let mut edited = false;
         ui.label(RichText::new("Audio").font(theme::font_heading(13.5)));
         theme::full_width_card(ui, *palette, |ui| {
-            let (input_names, output_names) = self.audio_device_cache
-                .get_or_insert_with(|| (list_device_names(true), list_device_names(false)))
-                .clone();
-
-            if ui.button("Refresh device list").clicked() {
-                self.audio_device_cache = Some((list_device_names(true), list_device_names(false)));
+            if let Some(rx) = &self.audio_device_rx {
+                if let Ok(result) = rx.try_recv() {
+                    self.audio_device_cache = Some(result);
+                    self.audio_device_rx = None;
+                }
             }
+            if self.audio_device_cache.is_none() && self.audio_device_rx.is_none() {
+                self.spawn_audio_device_scan();
+            }
+            let (input_names, output_names) = self.audio_device_cache.clone().unwrap_or_default();
+
+            ui.horizontal(|ui| {
+                if ui.button("Refresh device list").clicked() {
+                    self.spawn_audio_device_scan();
+                }
+                if self.audio_device_rx.is_some() {
+                    ui.label(RichText::new("Scanning…").color(palette.ink_muted).small());
+                }
+            });
 
             egui::Grid::new("settings_audio_grid")
                 .num_columns(2)
@@ -998,7 +1147,7 @@ impl DeelipApp {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 field_label(ui, palette, "Ringtone volume:");
-                edited |= ui.add(egui::Slider::new(&mut self.config.audio.ringtone_volume, 0.0..=2.0)
+                edited |= styled_slider(ui, palette, egui::Slider::new(&mut self.config.audio.ringtone_volume, 0.0..=2.0)
                     .fixed_decimals(2)).changed();
             });
 
@@ -1055,15 +1204,25 @@ impl DeelipApp {
         let mut edited = false;
         ui.label(RichText::new("Video").font(theme::font_heading(13.5)));
         theme::full_width_card(ui, *palette, |ui| {
-            let cameras = self.camera_device_cache
-                .get_or_insert_with(|| deelip_media::video_capture::list_cameras()
-                    .into_iter().map(|(_, name)| name).collect())
-                .clone();
-
-            if ui.button("Refresh camera list").clicked() {
-                self.camera_device_cache = Some(deelip_media::video_capture::list_cameras()
-                    .into_iter().map(|(_, name)| name).collect());
+            if let Some(rx) = &self.camera_device_rx {
+                if let Ok(result) = rx.try_recv() {
+                    self.camera_device_cache = Some(result);
+                    self.camera_device_rx = None;
+                }
             }
+            if self.camera_device_cache.is_none() && self.camera_device_rx.is_none() {
+                self.spawn_camera_device_scan();
+            }
+            let cameras = self.camera_device_cache.clone().unwrap_or_default();
+
+            ui.horizontal(|ui| {
+                if ui.button("Refresh camera list").clicked() {
+                    self.spawn_camera_device_scan();
+                }
+                if self.camera_device_rx.is_some() {
+                    ui.label(RichText::new("Scanning…").color(palette.ink_muted).small());
+                }
+            });
 
             ui.horizontal(|ui| {
                 edited |= device_picker(ui, "settings_camera_device", "Camera:", &mut self.config.audio.camera_device, &cameras);
@@ -1099,7 +1258,7 @@ impl DeelipApp {
 
                     field_label(ui, palette, "STUN server:");
                     ui.horizontal(|ui| {
-                        edited |= optional_text_field(ui, &mut self.config.stun_server, "e.g. stun.l.google.com:19302");
+                        edited |= optional_text_field_sized(ui, palette, &mut self.config.stun_server, "e.g. stun.l.google.com:19302", 240.0);
                         info_hint(ui, palette, "Discovers your public IP/port for NAT traversal -- \
                             used as ICE's fallback (or directly, if ICE above is off).");
                     });
@@ -1107,7 +1266,7 @@ impl DeelipApp {
 
                     field_label(ui, palette, "TURN server:");
                     ui.horizontal(|ui| {
-                        edited |= optional_text_field(ui, &mut self.config.turn_server, "e.g. turn.example.com:3478");
+                        edited |= optional_text_field_sized(ui, palette, &mut self.config.turn_server, "e.g. turn.example.com:3478", 240.0);
                         info_hint(ui, palette, "Relay server used when direct/STUN NAT traversal \
                             fails (e.g. symmetric NAT on both ends). Needs the Username/Password \
                             below if the server requires auth.");
@@ -1115,16 +1274,16 @@ impl DeelipApp {
                     ui.end_row();
 
                     field_label(ui, palette, "TURN username:");
-                    edited |= optional_text_field(ui, &mut self.config.turn_username, "");
+                    edited |= optional_text_field(ui, palette, &mut self.config.turn_username, "");
                     ui.end_row();
 
                     field_label(ui, palette, "TURN password:");
-                    edited |= optional_password_field(ui, &mut self.config.turn_password);
+                    edited |= optional_password_field(ui, palette, &mut self.config.turn_password);
                     ui.end_row();
 
                     field_label(ui, palette, "Custom nameserver:");
                     ui.horizontal(|ui| {
-                        edited |= optional_text_field(ui, &mut self.config.custom_nameserver, "e.g. 1.1.1.1");
+                        edited |= optional_text_field_sized(ui, palette, &mut self.config.custom_nameserver, "e.g. 1.1.1.1", 240.0);
                         info_hint(ui, palette, "DNS server used for SIP server / SRV lookups, \
                             instead of the OS-configured resolver.");
                     });
@@ -1192,7 +1351,7 @@ impl DeelipApp {
                 .spacing([8.0, 4.0])
                 .show(ui, |ui| {
                     field_label(ui, palette, "Server:");
-                    edited |= optional_text_field(ui, &mut self.config.ldap_server, "e.g. ldap.example.com");
+                    edited |= optional_text_field(ui, palette, &mut self.config.ldap_server, "e.g. ldap.example.com");
                     ui.end_row();
 
                     field_label(ui, palette, "Port:");
@@ -1200,19 +1359,19 @@ impl DeelipApp {
                     ui.end_row();
 
                     field_label(ui, palette, "Base DN:");
-                    edited |= optional_text_field(ui, &mut self.config.ldap_base_dn, "e.g. dc=example,dc=com");
+                    edited |= optional_text_field(ui, palette, &mut self.config.ldap_base_dn, "e.g. dc=example,dc=com");
                     ui.end_row();
 
                     field_label(ui, palette, "Bind DN (optional):");
                     ui.horizontal(|ui| {
-                        edited |= optional_text_field(ui, &mut self.config.ldap_bind_dn, "e.g. cn=readonly,dc=example,dc=com");
+                        edited |= optional_text_field_sized(ui, palette, &mut self.config.ldap_bind_dn, "e.g. cn=readonly,dc=example,dc=com", 240.0);
                         info_hint(ui, palette, "Leave blank for an anonymous bind, if the \
                             directory allows unauthenticated search.");
                     });
                     ui.end_row();
 
                     field_label(ui, palette, "Bind password:");
-                    edited |= optional_password_field(ui, &mut self.config.ldap_bind_password);
+                    edited |= optional_password_field(ui, palette, &mut self.config.ldap_bind_password);
                     ui.end_row();
                 });
             ui.horizontal(|ui| {
@@ -1222,7 +1381,7 @@ impl DeelipApp {
             ui.add_space(4.0);
             field_label(ui, palette, "Search filter template (optional):");
             ui.horizontal(|ui| {
-                edited |= optional_text_field(ui, &mut self.config.ldap_search_filter, "(|(cn=*{query}*)(mail=*{query}*))");
+                edited |= optional_text_field_sized(ui, palette, &mut self.config.ldap_search_filter, "(|(cn=*{query}*)(mail=*{query}*))", 240.0);
                 info_hint(ui, palette, "\"{query}\" is replaced with the (escaped) search text. \
                     Empty: falls back to a built-in filter matching cn/displayName/mail/sn/givenName.");
             });
@@ -1302,18 +1461,29 @@ fn is_irrelevant_alsa_device(name: &str) -> bool {
 }
 
 /// Text field bound to an `Option<String>` — an empty field maps to `None`.
-fn optional_text_field(ui: &mut Ui, value: &mut Option<String>, hint: &str) -> bool {
-    optional_text_field_sized(ui, value, hint, f32::INFINITY)
+fn optional_text_field(ui: &mut Ui, palette: &Palette, value: &mut Option<String>, hint: &str) -> bool {
+    optional_text_field_sized(ui, palette, value, hint, f32::INFINITY)
 }
 
 /// Same as `optional_text_field`, but with a caller-chosen width instead of
 /// always filling the rest of the row -- for a row that needs to fit
 /// something else (a trailing label/control) after the field.
-fn optional_text_field_sized(ui: &mut Ui, value: &mut Option<String>, hint: &str, width: f32) -> bool {
+fn optional_text_field_sized(
+    ui: &mut Ui,
+    palette: &Palette,
+    value: &mut Option<String>,
+    hint: &str,
+    width: f32,
+) -> bool {
     let mut text = value.clone().unwrap_or_default();
-    let changed = ui
-        .add(egui::TextEdit::singleline(&mut text).hint_text(hint).desired_width(width))
-        .changed();
+    let changed = text_edit_scope(ui, palette, |ui| {
+        ui.add(
+            egui::TextEdit::singleline(&mut text)
+                .hint_text(RichText::new(hint).color(palette.ink_muted))
+                .desired_width(width),
+        )
+        .changed()
+    });
     if changed {
         *value = if text.is_empty() { None } else { Some(text) };
     }
@@ -1321,15 +1491,16 @@ fn optional_text_field_sized(ui: &mut Ui, value: &mut Option<String>, hint: &str
 }
 
 /// Masked text field bound to an `Option<String>` — an empty field maps to `None`.
-fn optional_password_field(ui: &mut Ui, value: &mut Option<String>) -> bool {
+fn optional_password_field(ui: &mut Ui, palette: &Palette, value: &mut Option<String>) -> bool {
     let mut text = value.clone().unwrap_or_default();
-    let changed = ui
-        .add(
+    let changed = text_edit_scope(ui, palette, |ui| {
+        ui.add(
             egui::TextEdit::singleline(&mut text)
                 .password(true)
                 .desired_width(f32::INFINITY),
         )
-        .changed();
+        .changed()
+    });
     if changed {
         *value = if text.is_empty() { None } else { Some(text) };
     }
