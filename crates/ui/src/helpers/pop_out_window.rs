@@ -43,7 +43,7 @@ pub(crate) fn show_pop_out_window(
     ctx: &egui::Context,
     self_app: SharedApp,
     key: &'static str,
-    window_title: &'static str,
+    window_title: String,
     size: [f32; 2],
     min_size: [f32; 2],
     resizable: bool,

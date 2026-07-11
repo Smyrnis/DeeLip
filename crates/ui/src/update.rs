@@ -1,6 +1,7 @@
 use egui::{RichText, Ui};
 
 use crate::app::DeelipApp;
+use crate::strings::{t, tf};
 
 /// Where the startup update check currently stands. Drives both the popup
 /// (`show_update_popup`) and, when `config.auto_update_enabled` is on, the
@@ -136,35 +137,34 @@ impl DeelipApp {
                 let mut update_clicked = false;
                 let mut skip_clicked = false;
                 let mut later_clicked = false;
-                egui::Window::new("Update available")
+                egui::Window::new(t("update.window_available"))
                     .collapsible(false)
                     .resizable(false)
                     .anchor(egui::Align2::CENTER_TOP, [0.0, 40.0])
                     .show(ctx, |ui: &mut Ui| {
-                        ui.label(format!(
-                            "DeeLip {version} is available (you're on {}).",
-                            env!("CARGO_PKG_VERSION")
+                        ui.label(tf(
+                            "update.available_message",
+                            &[("version", &version), ("current", env!("CARGO_PKG_VERSION"))],
                         ));
                         if !can_self_replace {
                             ui.label(RichText::new(
-                                "This install can't be updated automatically -- use your package \
-                                 manager or re-run install.sh."
+                                t("update.cant_auto_update")
                             ).small());
                         }
                         ui.add_space(6.0);
                         ui.horizontal(|ui| {
-                            if can_self_replace && ui.button("Update Now").clicked() {
+                            if can_self_replace && ui.button(t("update.update_now_button")).clicked() {
                                 update_clicked = true;
                             }
-                            if ui.button("View Release").clicked() {
+                            if ui.button(t("update.view_release_button")).clicked() {
                                 let _ = std::process::Command::new("xdg-open")
                                     .arg(&html_url)
                                     .spawn();
                             }
-                            if ui.button("Skip this version").clicked() {
+                            if ui.button(t("update.skip_version_button")).clicked() {
                                 skip_clicked = true;
                             }
-                            if ui.button("Later").clicked() {
+                            if ui.button(t("update.later_button")).clicked() {
                                 later_clicked = true;
                             }
                         });
@@ -180,14 +180,14 @@ impl DeelipApp {
                 }
             }
             UpdateState::Downloading => {
-                egui::Window::new("Update available")
+                egui::Window::new(t("update.window_available"))
                     .collapsible(false)
                     .resizable(false)
                     .anchor(egui::Align2::CENTER_TOP, [0.0, 40.0])
                     .show(ctx, |ui| {
                         ui.horizontal(|ui| {
                             ui.spinner();
-                            ui.label("Downloading update…");
+                            ui.label(t("update.downloading_update"));
                         });
                     });
             }
@@ -195,24 +195,24 @@ impl DeelipApp {
                 let version = version.clone();
                 let mut restart_clicked = false;
                 let mut later_clicked = false;
-                egui::Window::new("Update installed")
+                egui::Window::new(t("update.window_installed"))
                     .collapsible(false)
                     .resizable(false)
                     .anchor(egui::Align2::CENTER_TOP, [0.0, 40.0])
                     .show(ctx, |ui| {
-                        ui.label(format!("Updated to {version} -- restart DeeLip to finish."));
+                        ui.label(tf("update.updated_message", &[("version", &version)]));
                         if call_active {
-                            ui.label(RichText::new("Finish your call first.").small());
+                            ui.label(RichText::new(t("update.finish_call_first")).small());
                         }
                         ui.add_space(6.0);
                         ui.horizontal(|ui| {
                             if ui
-                                .add_enabled(!call_active, egui::Button::new("Restart Now"))
+                                .add_enabled(!call_active, egui::Button::new(t("update.restart_now_button")))
                                 .clicked()
                             {
                                 restart_clicked = true;
                             }
-                            if ui.button("Later").clicked() {
+                            if ui.button(t("update.later_button")).clicked() {
                                 later_clicked = true;
                             }
                         });
@@ -226,14 +226,14 @@ impl DeelipApp {
             UpdateState::Failed(reason) => {
                 let reason = reason.clone();
                 let mut dismiss_clicked = false;
-                egui::Window::new("Update failed")
+                egui::Window::new(t("update.window_failed"))
                     .collapsible(false)
                     .resizable(false)
                     .anchor(egui::Align2::CENTER_TOP, [0.0, 40.0])
                     .show(ctx, |ui| {
                         ui.label(RichText::new(&reason).small());
                         ui.add_space(6.0);
-                        if ui.button("Dismiss").clicked() {
+                        if ui.button(t("update.dismiss_button")).clicked() {
                             dismiss_clicked = true;
                         }
                     });

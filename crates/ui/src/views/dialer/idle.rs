@@ -2,6 +2,7 @@ use egui::{RichText, Ui};
 
 use crate::app::DeelipApp;
 use crate::helpers::{account_status_label, ctx_key_enter, phone_keypad, text_edit_scope};
+use crate::strings::t;
 use crate::theme;
 
 /// Width the idle dial pad and the in-call "stage" are capped to and
@@ -16,7 +17,7 @@ impl DeelipApp {
     pub(super) fn show_dialer_idle(&mut self, ui: &mut Ui) {
         if self.accounts.len() > 1 {
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Call from").color(self.palette.ink_muted).small());
+                ui.label(RichText::new(t("dialer.call_from")).color(self.palette.ink_muted).small());
                 let current = self.selected_account_idx().unwrap_or(0);
                 let palette = self.palette;
                 let selected_label = {
@@ -62,7 +63,7 @@ impl DeelipApp {
                     ui.add_sized(
                         [STAGE_WIDTH, 48.0],
                         egui::TextEdit::singleline(&mut self.call_target)
-                            .hint_text(RichText::new("Enter a number").color(palette.ink_muted))
+                            .hint_text(RichText::new(t("dialer.enter_a_number")).color(palette.ink_muted))
                             .font(egui::FontId::new(19.0, egui::FontFamily::Monospace))
                             .horizontal_align(egui::Align::Center),
                     )
@@ -91,7 +92,7 @@ impl DeelipApp {
                         self.call_target.pop();
                     }
                     if ui
-                        .add_enabled(!self.call_target.is_empty(), egui::Button::new("Clear"))
+                        .add_enabled(!self.call_target.is_empty(), egui::Button::new(t("common.clear_button")))
                         .clicked()
                     {
                         self.call_target.clear();
@@ -102,7 +103,7 @@ impl DeelipApp {
                 // Grey chrome, not the `signal` accent -- see theme.rs's
                 // v3.1 doc note. `signal` is reserved for actual call-state
                 // signals now, not generic buttons.
-                let call_text = RichText::new(format!("{}  Call", egui_phosphor::regular::PHONE))
+                let call_text = RichText::new(format!("{}  {}", egui_phosphor::regular::PHONE, t("common.call_button")))
                     .font(theme::font_medium(15.0))
                     .color(self.palette.ink);
                 if ui
@@ -123,8 +124,9 @@ impl DeelipApp {
                     ui.add_space(8.0);
                     ui.vertical_centered(|ui| {
                         let redial_text = RichText::new(format!(
-                            "{}  Redial",
-                            egui_phosphor::regular::CLOCK_COUNTER_CLOCKWISE
+                            "{}  {}",
+                            egui_phosphor::regular::CLOCK_COUNTER_CLOCKWISE,
+                            t("dialer.redial_button")
                         ))
                         .color(self.palette.ink_muted)
                         .small();

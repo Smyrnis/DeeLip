@@ -2,6 +2,7 @@ use deelip_config::{CallDirection, CallStatus, DtmfMode};
 
 use crate::app::{DeelipApp, PendingAccept, PendingOutbound, Tab};
 use crate::helpers::{normalize_target_with_prefix, short_uri, unix_now};
+use crate::strings::t;
 
 impl DeelipApp {
     // ── Call actions ─────────────────────────────────────────────────────────
@@ -131,7 +132,7 @@ impl DeelipApp {
         self.accounts[acc]
             .handle
             .attended_transfer(&original_call_id, &consult_call_id);
-        self.status_line = "Completing transfer…".into();
+        self.status_line = t("status.completing_transfer");
     }
 
     pub(crate) fn do_accept(&mut self) {

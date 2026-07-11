@@ -13,6 +13,7 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Mutex, OnceLock};
 
 use crate::platform::tray::CtxSlot;
+use crate::strings::{t, tf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NotificationAction {
@@ -38,13 +39,13 @@ fn action_channel() -> &'static ActionChannel {
 /// a daemon that ignores actions entirely, etc.) are logged, not fatal; the
 /// call is still perfectly answerable/rejectable from the app UI either way.
 pub fn notify_incoming_call(call_id: &str, from: &str, ctx_slot: CtxSlot) {
-    let body = format!("Incoming call from {from}");
+    let body = tf("notify.incoming_call_body", &[("from", from)]);
     let mut notification = notify_rust::Notification::new();
     notification
         .summary("DeeLip")
         .body(&body)
-        .action("accept", "Accept")
-        .action("reject", "Reject");
+        .action("accept", &t("common.accept_button"))
+        .action("reject", &t("common.reject_button"));
 
     match notification.show() {
         Ok(handle) => {
@@ -80,7 +81,7 @@ pub fn notify_incoming_call(call_id: &str, from: &str, ctx_slot: CtxSlot) {
 pub fn notify_message_received(from: &str, body: &str) {
     let mut notification = notify_rust::Notification::new();
     notification
-        .summary(&format!("DeeLip — message from {from}"))
+        .summary(&tf("notify.message_from", &[("from", from)]))
         .body(body);
     match notification.show() {
         Ok(_) => tracing::debug!("Message notification shown for {from}"),

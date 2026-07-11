@@ -1671,6 +1671,7 @@ dependencies = [
  "rand 0.8.6",
  "rfd",
  "rodio",
+ "serde_json",
  "tokio",
  "tracing",
  "tray-icon",

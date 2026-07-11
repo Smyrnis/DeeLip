@@ -3,6 +3,7 @@ use egui::{RichText, Ui};
 
 use crate::app::DeelipApp;
 use crate::helpers::{device_picker, field_label, info_hint, styled_slider};
+use crate::strings::t;
 use crate::theme::{self, Palette};
 
 use super::SETTINGS_VIEWPORT_NAME;
@@ -37,7 +38,7 @@ impl DeelipApp {
     /// Restart required -- returns whether anything changed.
     pub(super) fn show_audio_section(&mut self, ui: &mut Ui, palette: &Palette) -> bool {
         let mut edited = false;
-        ui.label(RichText::new("Audio").font(theme::font_heading(13.5)));
+        ui.label(RichText::new(t("settings.tab_audio")).font(theme::font_heading(13.5)));
         theme::full_width_card(ui, *palette, |ui| {
             if let Some(rx) = &self.audio_device_rx {
                 if let Ok(result) = rx.try_recv() {
@@ -51,11 +52,11 @@ impl DeelipApp {
             let (input_names, output_names) = self.audio_device_cache.clone().unwrap_or_default();
 
             ui.horizontal(|ui| {
-                if ui.button("Refresh device list").clicked() {
+                if ui.button(t("settings.audio.refresh_devices_button")).clicked() {
                     self.spawn_audio_device_scan();
                 }
                 if self.audio_device_rx.is_some() {
-                    ui.label(RichText::new("Scanning…").color(palette.ink_muted).small());
+                    ui.label(RichText::new(t("settings.audio.scanning")).color(palette.ink_muted).small());
                 }
             });
 
@@ -63,35 +64,33 @@ impl DeelipApp {
                 .num_columns(2)
                 .spacing([8.0, 4.0])
                 .show(ui, |ui| {
-                    edited |= device_picker(ui, "settings_input_device", "Input device:", &mut self.config.audio.input_device, &input_names);
+                    edited |= device_picker(ui, "settings_input_device", &t("settings.audio.input_device_label"), &mut self.config.audio.input_device, &input_names);
                     ui.end_row();
-                    edited |= device_picker(ui, "settings_output_device", "Output device:", &mut self.config.audio.output_device, &output_names);
+                    edited |= device_picker(ui, "settings_output_device", &t("settings.audio.output_device_label"), &mut self.config.audio.output_device, &output_names);
                     ui.end_row();
-                    edited |= device_picker(ui, "settings_ringtone_device", "Ringing device:", &mut self.config.audio.ringtone_device, &output_names);
+                    edited |= device_picker(ui, "settings_ringtone_device", &t("settings.audio.ringing_device_label"), &mut self.config.audio.ringtone_device, &output_names);
                     ui.end_row();
                 });
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Ringing device").color(palette.ink_muted).small());
-                info_hint(ui, palette, "Independent of the Output device above -- lets the \
-                    ringtone play on a different device than call audio, e.g. ring on \
-                    speakers, talk on a headset.");
+                ui.label(RichText::new(t("settings.audio.ringing_device_caption")).color(palette.ink_muted).small());
+                info_hint(ui, palette, &t("settings.audio.ringing_device_hint"));
             });
 
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                field_label(ui, palette, "Custom ringtone (WAV):");
+                field_label(ui, palette, &t("settings.audio.custom_ringtone_label"));
                 let name = self.config.audio.ringtone_file.as_deref()
                     .and_then(|p| std::path::Path::new(p).file_name())
                     .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| "Built-in tone".into());
+                    .unwrap_or_else(|| t("settings.audio.built_in_tone"));
                 ui.label(RichText::new(name).color(palette.ink_muted));
-                if ui.small_button("Choose…").clicked() {
+                if ui.small_button(t("settings.choose_button")).clicked() {
                     if let Some(path) = rfd::FileDialog::new().add_filter("WAV", &["wav"]).pick_file() {
                         self.config.audio.ringtone_file = Some(path.to_string_lossy().into_owned());
                         edited = true;
                     }
                 }
-                if self.config.audio.ringtone_file.is_some() && ui.small_button("Clear").clicked() {
+                if self.config.audio.ringtone_file.is_some() && ui.small_button(t("common.clear_button")).clicked() {
                     self.config.audio.ringtone_file = None;
                     edited = true;
                 }
@@ -99,50 +98,49 @@ impl DeelipApp {
 
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                field_label(ui, palette, "Ringtone volume:");
+                field_label(ui, palette, &t("settings.audio.ringtone_volume_label"));
                 edited |= styled_slider(ui, palette, egui::Slider::new(&mut self.config.audio.ringtone_volume, 0.0..=2.0)
                     .fixed_decimals(2)).changed();
             });
 
             ui.add_space(6.0);
-            edited |= ui.checkbox(&mut self.config.audio.echo_cancellation, "Echo cancellation").changed();
+            edited |= ui.checkbox(&mut self.config.audio.echo_cancellation, t("settings.audio.echo_cancellation_checkbox")).changed();
             ui.horizontal(|ui| {
-                edited |= ui.checkbox(&mut self.config.audio.agc_enabled, "Automatic microphone gain control").changed();
-                info_hint(ui, palette, "Adaptively boosts a quiet mic signal and limits a loud one.");
+                edited |= ui.checkbox(&mut self.config.audio.agc_enabled, t("settings.audio.agc_checkbox")).changed();
+                info_hint(ui, palette, &t("settings.audio.agc_hint"));
             });
 
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                edited |= ui.checkbox(&mut self.config.recording_enabled, "Record calls").changed();
-                info_hint(ui, palette, "Saves locally to ~/.config/deelip/recordings by default \
-                    (see Save to below) -- never uploaded anywhere. Check your local laws on \
-                    call-recording consent before enabling.");
+                edited |= ui.checkbox(&mut self.config.recording_enabled, t("settings.audio.record_calls_checkbox")).changed();
+                info_hint(ui, palette, &t("settings.audio.record_calls_hint"));
             });
             if self.config.recording_enabled {
                 ui.horizontal(|ui| {
-                    field_label(ui, palette, "Format:");
+                    field_label(ui, palette, &t("settings.audio.format_label"));
                     egui::ComboBox::from_id_source("settings_recording_format")
                         .selected_text(match self.config.recording_format {
-                            RecordingFormat::Wav => "WAV (lossless, larger files)",
-                            RecordingFormat::Mp3 => "MP3 (lossy, smaller files)",
+                            RecordingFormat::Wav => t("settings.audio.format_wav"),
+                            RecordingFormat::Mp3 => t("settings.audio.format_mp3"),
                         })
                         .show_ui(ui, |ui| {
-                            edited |= ui.selectable_value(&mut self.config.recording_format, RecordingFormat::Wav, "WAV (lossless, larger files)").changed();
-                            edited |= ui.selectable_value(&mut self.config.recording_format, RecordingFormat::Mp3, "MP3 (lossy, smaller files)").changed();
+                            edited |= ui.selectable_value(&mut self.config.recording_format, RecordingFormat::Wav, t("settings.audio.format_wav")).changed();
+                            edited |= ui.selectable_value(&mut self.config.recording_format, RecordingFormat::Mp3, t("settings.audio.format_mp3")).changed();
                         });
                 });
                 ui.horizontal(|ui| {
-                    field_label(ui, palette, "Save to:");
+                    field_label(ui, palette, &t("settings.audio.save_to_label"));
+                    let default_shown = t("settings.audio.save_to_default");
                     let shown = self.config.recordings_dir_override.as_deref()
-                        .unwrap_or("~/.config/deelip/recordings (default)");
+                        .unwrap_or(default_shown.as_str());
                     ui.label(RichText::new(shown).color(palette.ink_muted));
-                    if ui.small_button("Choose…").clicked() {
+                    if ui.small_button(t("settings.choose_button")).clicked() {
                         if let Some(dir) = rfd::FileDialog::new().pick_folder() {
                             self.config.recordings_dir_override = Some(dir.to_string_lossy().into_owned());
                             edited = true;
                         }
                     }
-                    if self.config.recordings_dir_override.is_some() && ui.small_button("Reset").clicked() {
+                    if self.config.recordings_dir_override.is_some() && ui.small_button(t("settings.reset_button")).clicked() {
                         self.config.recordings_dir_override = None;
                         edited = true;
                     }

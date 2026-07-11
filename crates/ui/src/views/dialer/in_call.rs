@@ -8,6 +8,7 @@ use crate::helpers::{
     audio_codec_label, empty_state, format_call_timer, resolve_caller, short_uri, styled_slider,
     unix_now,
 };
+use crate::strings::{t, tf};
 use crate::theme::{self, Palette};
 
 impl DeelipApp {
@@ -60,7 +61,7 @@ impl DeelipApp {
             ui.add_space(8.0);
             caller_name_label(ui, &self.palette, &name, is_name);
             ui.add_space(4.0);
-            state_badge(ui, "ringing", self.palette.ringing);
+            state_badge(ui, &t("dialer.status_ringing"), self.palette.ringing);
         });
         ui.add_space(20.0);
         ui.horizontal(|ui| {
@@ -80,20 +81,20 @@ impl DeelipApp {
         let (name, _) = self.caller_display(from);
         theme::full_width_card(ui, self.palette, |ui| {
             ui.label(
-                RichText::new(format!("Call waiting -- {name}"))
+                RichText::new(tf("dialer.call_waiting", &[("name", &name)]))
                     .color(self.palette.ringing)
                     .font(theme::font_medium(14.0)),
             );
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                let accept = format!("{}  Accept", egui_phosphor::regular::PHONE);
+                let accept = format!("{}  {}", egui_phosphor::regular::PHONE, t("common.accept_button"));
                 if ui
                     .button(RichText::new(accept).color(self.palette.signal))
                     .clicked()
                 {
                     self.do_accept();
                 }
-                let reject = format!("{}  Reject", egui_phosphor::regular::PHONE_X);
+                let reject = format!("{}  {}", egui_phosphor::regular::PHONE_X, t("common.reject_button"));
                 if ui
                     .button(RichText::new(reject).color(self.palette.danger))
                     .clicked()
@@ -113,7 +114,7 @@ impl DeelipApp {
             ui.add_space(8.0);
             caller_name_label(ui, &self.palette, &name, is_name);
             ui.add_space(4.0);
-            state_badge(ui, "calling", self.palette.ringing);
+            state_badge(ui, &t("dialer.status_calling"), self.palette.ringing);
         });
     }
 
@@ -137,7 +138,7 @@ impl DeelipApp {
         if let Some(out) = &self.pending_outbound {
             let (name, _) = self.caller_display(&out.remote_uri);
             ui.label(
-                RichText::new(format!("Calling {name}…")).color(self.palette.ink_muted),
+                RichText::new(tf("dialer.calling_name", &[("name", &name)])).color(self.palette.ink_muted),
             );
             ui.add_space(6.0);
         }
@@ -161,8 +162,8 @@ impl DeelipApp {
                     ui.add_space(8.0);
                     caller_name_label(ui, &self.palette, &name, is_name);
                     ui.add_space(4.0);
-                    let state = if self.in_conference { "in conference" } else { "connected" };
-                    state_badge(ui, state, self.palette.signal);
+                    let state = if self.in_conference { t("dialer.status_in_conference") } else { t("dialer.status_connected") };
+                    state_badge(ui, &state, self.palette.signal);
                     ui.add_space(2.0);
                     let elapsed = unix_now().saturating_sub(start_time);
                     ui.label(
@@ -176,19 +177,16 @@ impl DeelipApp {
                     }
                     if self.is_recording() {
                         ui.add_space(4.0);
-                        ui.label(RichText::new("● REC").color(self.palette.danger).small());
+                        ui.label(RichText::new(format!("● {}", t("dialer.rec_indicator"))).color(self.palette.danger).small());
                     }
                     if let Some(sas) = self.media.as_ref().and_then(|m| m.zrtp_sas()) {
                         ui.add_space(4.0);
                         ui.label(
-                            RichText::new(format!("🔒 ZRTP SAS: {sas}"))
+                            RichText::new(format!("🔒 {}", tf("dialer.zrtp_sas", &[("sas", &sas)])))
                                 .font(egui::FontId::new(12.5, egui::FontFamily::Monospace))
                                 .color(self.palette.signal),
                         )
-                        .on_hover_text(
-                            "Read this 4-character code out loud with the other party to \
-                             confirm no one is intercepting this call.",
-                        );
+                        .on_hover_text(t("dialer.zrtp_sas_hover"));
                     }
                     ui.add_space(16.0);
                     // `vertical_centered` only centers a single fixed-size
@@ -235,7 +233,7 @@ impl DeelipApp {
                             ui.label(RichText::new(&name).font(theme::font_address()));
                         }
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            let hang_up = format!("{}  Hang Up", egui_phosphor::regular::PHONE_X);
+                            let hang_up = format!("{}  {}", egui_phosphor::regular::PHONE_X, t("dialer.hangup_button"));
                             if ui
                                 .button(RichText::new(hang_up).color(self.palette.danger))
                                 .clicked()
@@ -244,14 +242,14 @@ impl DeelipApp {
                             }
                             ui.add_space(4.0);
                             if !self.in_conference {
-                                let resume = format!("{}  Resume", egui_phosphor::regular::PLAY);
+                                let resume = format!("{}  {}", egui_phosphor::regular::PLAY, t("dialer.resume_button"));
                                 if ui.button(resume).clicked() {
                                     swap_idx = Some(idx);
                                 }
                             }
                             ui.add_space(4.0);
                             ui.label(
-                                RichText::new("on hold")
+                                RichText::new(t("dialer.on_hold_label"))
                                     .font(egui::FontId::new(11.0, egui::FontFamily::Monospace))
                                     .color(self.palette.ringing),
                             );
@@ -273,7 +271,7 @@ impl DeelipApp {
         }
 
         if self.calls.len() == 2 && !self.in_conference {
-            let merge = format!("{}  Merge into Conference", egui_phosphor::regular::PHONE);
+            let merge = format!("{}  {}", egui_phosphor::regular::PHONE, t("dialer.merge_conference_button"));
             if ui.button(merge).clicked() {
                 self.start_conference();
             }
@@ -313,9 +311,9 @@ impl DeelipApp {
         let palette = self.palette;
         if let Some(v) = self.video.as_ref() {
             ui.horizontal(|ui| {
-                show_video_view(ui, &palette, &v.remote, "Remote");
+                show_video_view(ui, &palette, &v.remote, &t("dialer.video_remote_label"), false);
                 ui.add_space(8.0);
-                show_video_view(ui, &palette, &v.local, "You");
+                show_video_view(ui, &palette, &v.local, &t("dialer.video_you_label"), true);
             });
         }
         ui.add_space(4.0);
@@ -328,28 +326,34 @@ impl DeelipApp {
             ui.horizontal(|ui| {
                 ui.add_space(((ui.available_width() - row_width) / 2.0).max(0.0));
                 let muted = self.is_muted();
+                let mute_caption = if muted { t("common.unmute_button") } else { t("common.mute_button") };
                 if icon_toggle_button(
                     ui,
                     &palette,
                     if muted { egui_phosphor::regular::MICROPHONE_SLASH } else { egui_phosphor::regular::MICROPHONE },
-                    if muted { "Unmute" } else { "Mute" },
+                    &mute_caption,
                     muted,
                     false,
                 ) {
                     self.do_mute_toggle();
                 }
                 let recording = self.is_recording();
+                let record_caption = if recording { t("common.stop_button") } else { t("common.record_button") };
                 if icon_toggle_button(
                     ui,
                     &palette,
                     egui_phosphor::regular::RECORD,
-                    if recording { "Stop" } else { "Record" },
+                    &record_caption,
                     recording,
                     recording,
                 ) {
                     self.do_record_toggle();
                 }
                 let transfer_open = self.showing_transfer || self.showing_attended;
+                // Short caption -- "Transfer" (the untruncated translation
+                // of `dialer.xfer_caption`) wraps to 2 lines in the 48px-wide
+                // slot; see `dialer.xfer_caption`'s own locale-key comment.
+                let xfer_caption = t("dialer.xfer_caption");
                 if icon_toggle_button(
                     ui,
                     &palette,
@@ -362,18 +366,19 @@ impl DeelipApp {
                     // `EXPORT` instead, one of the icons that file already
                     // lists as confirmed-rendering-correctly.
                     egui_phosphor::regular::EXPORT,
-                    "Xfer", // short caption -- "Transfer" wraps to 2 lines in the 48px-wide slot
+                    &xfer_caption,
                     transfer_open,
                     false,
                 ) {
                     self.showing_transfer = !transfer_open;
                     self.showing_attended = false;
                 }
+                let keypad_caption = t("dialer.keypad_window_title");
                 if icon_toggle_button(
                     ui,
                     &palette,
                     egui_phosphor::regular::NUMPAD,
-                    "Keypad",
+                    &keypad_caption,
                     self.showing_dtmf,
                     false,
                 ) {
@@ -402,8 +407,9 @@ impl DeelipApp {
             if self.attended_transfer_original.is_some() && self.calls.len() == 2 {
                 ui.add_space(8.0);
                 let complete = format!(
-                    "{}  Complete Transfer",
-                    egui_phosphor::regular::CHECK_CIRCLE
+                    "{}  {}",
+                    egui_phosphor::regular::CHECK_CIRCLE,
+                    t("dialer.complete_transfer_button"),
                 );
                 ui.vertical_centered(|ui| {
                     if ui
@@ -420,7 +426,7 @@ impl DeelipApp {
             ui.add_space(8.0);
             let stats = engine.stats();
             let muted_color = self.palette.ink_muted;
-            egui::CollapsingHeader::new("Call statistics").show(ui, |ui| {
+            egui::CollapsingHeader::new(t("dialer.call_statistics_header")).show(ui, |ui| {
                 if self.in_conference && self.calls.len() == 2 {
                     show_leg_stats(
                         ui,
@@ -442,7 +448,7 @@ impl DeelipApp {
                 } else if let Some(idx) = self.focused_call {
                     show_leg_stats(
                         ui,
-                        "This call",
+                        &t("dialer.this_call_label"),
                         self.calls[idx].media.codec,
                         &stats.leg1,
                         muted_color,
@@ -696,8 +702,11 @@ fn update_video_view(
 /// Render one side of the video panel: the cached texture if one exists
 /// yet, else a muted placeholder ("No video yet" for the self-view, which
 /// never gets one without a camera; "Waiting for video…" for the remote
-/// side, which should fill in shortly after the call connects).
-fn show_video_view(ui: &mut Ui, palette: &Palette, cache: &VideoViewCache, label: &str) {
+/// side, which should fill in shortly after the call connects). `is_local`
+/// picks which placeholder applies -- previously inferred by comparing
+/// `label == "You"`, which broke once `label` became a localized string
+/// that isn't literally "You" in every language.
+fn show_video_view(ui: &mut Ui, palette: &Palette, cache: &VideoViewCache, label: &str, is_local: bool) {
     ui.vertical(|ui| {
         ui.label(RichText::new(label).color(palette.ink_muted).small());
         match &cache.texture {
@@ -705,8 +714,8 @@ fn show_video_view(ui: &mut Ui, palette: &Palette, cache: &VideoViewCache, label
                 ui.add(egui::Image::new(tex).fit_to_exact_size(egui::vec2(160.0, 120.0)));
             }
             None => {
-                let text = if label == "You" { "No video yet" } else { "Waiting for video…" };
-                empty_state(ui, palette, text);
+                let text = if is_local { t("dialer.no_video_yet") } else { t("dialer.waiting_for_video") };
+                empty_state(ui, palette, &text);
             }
         }
     });
@@ -724,12 +733,14 @@ fn show_leg_stats(
     let codec_name = audio_codec_label(codec);
     ui.label(RichText::new(format!("{label} — {codec_name}")).strong());
     ui.label(
-        RichText::new(format!(
-            "Sent: {} pkts / {}    Received: {} pkts / {}",
-            stats.packets_sent,
-            format_bytes(stats.bytes_sent),
-            stats.packets_received,
-            format_bytes(stats.bytes_received),
+        RichText::new(tf(
+            "dialer.stats_sent_received",
+            &[
+                ("sent_pkts", &stats.packets_sent.to_string()),
+                ("sent_bytes", &format_bytes(stats.bytes_sent)),
+                ("recv_pkts", &stats.packets_received.to_string()),
+                ("recv_bytes", &format_bytes(stats.bytes_received)),
+            ],
         ))
         .color(muted)
         .small(),
@@ -740,9 +751,13 @@ fn show_leg_stats(
         0.0
     };
     ui.label(
-        RichText::new(format!(
-            "Loss: {} ({:.1}%)    Jitter: {:.1} ms",
-            stats.packets_lost, loss_pct, stats.jitter_ms,
+        RichText::new(tf(
+            "dialer.stats_loss_jitter",
+            &[
+                ("lost", &stats.packets_lost.to_string()),
+                ("pct", &format!("{loss_pct:.1}")),
+                ("jitter", &format!("{:.1}", stats.jitter_ms)),
+            ],
         ))
         .color(muted)
         .small(),

@@ -1,5 +1,6 @@
 use crate::app::{DeelipApp, SharedApp};
 use crate::helpers::{phone_keypad, show_pop_out_window};
+use crate::strings::t;
 
 impl DeelipApp {
     /// In-call DTMF keypad as a real separate OS window, same `Deferred`-
@@ -13,13 +14,13 @@ impl DeelipApp {
             ctx,
             self_app,
             "deelip_dtmf_window",
-            "DeeLip Keypad",
+            format!("DeeLip {}", t("dialer.keypad_window_title")),
             [260.0, 360.0],
             [240.0, 340.0],
             false,
             |app| app.showing_dtmf,
             |app| app.showing_dtmf = false,
-            |_app| "Keypad".to_string(),
+            |_app| t("dialer.keypad_window_title"),
             |app, ui| {
                 let palette = app.palette;
                 phone_keypad(ui, palette, |digit| app.do_dtmf(digit));

@@ -2,6 +2,7 @@ use egui::{RichText, Ui};
 
 use crate::app::{DeelipApp, SharedApp};
 use crate::helpers::{phone_keypad, show_pop_out_window, text_edit_scope};
+use crate::strings::t;
 use crate::theme::{self, Palette};
 
 impl DeelipApp {
@@ -24,7 +25,7 @@ impl DeelipApp {
             ctx,
             self_app,
             "deelip_transfer_window",
-            "DeeLip Transfer Call",
+            format!("DeeLip {}", t("dialer.transfer_window_title")),
             [320.0, 540.0],
             [280.0, 420.0],
             false,
@@ -33,7 +34,7 @@ impl DeelipApp {
                 app.showing_transfer = false;
                 app.showing_attended = false;
             },
-            |_app| "Transfer Call".to_string(),
+            |_app| t("dialer.transfer_window_title"),
             |app, ui| app.show_transfer_window_content(ui),
         );
     }
@@ -53,14 +54,14 @@ impl DeelipApp {
         let palette = self.palette;
         ui.add_space(4.0);
         ui.horizontal(|ui| {
-            if ui.selectable_label(!self.showing_attended, "Blind Transfer").clicked() {
+            if ui.selectable_label(!self.showing_attended, t("dialer.blind_transfer")).clicked() {
                 self.showing_transfer = true;
                 self.showing_attended = false;
             }
             if ui
                 .add_enabled(
                     self.calls.len() == 1,
-                    egui::SelectableLabel::new(self.showing_attended, "Attended Transfer"),
+                    egui::SelectableLabel::new(self.showing_attended, t("dialer.attended_transfer")),
                 )
                 .clicked()
             {
@@ -75,7 +76,7 @@ impl DeelipApp {
             transfer_target_editor(ui, palette, &mut self.attended_target);
             ui.add_space(8.0);
             ui.vertical_centered(|ui| {
-                if ui.button(format!("{}  Call", egui_phosphor::regular::PHONE)).clicked() {
+                if ui.button(format!("{}  {}", egui_phosphor::regular::PHONE, t("common.call_button"))).clicked() {
                     self.do_attended_transfer_dial();
                 }
             });
@@ -84,7 +85,7 @@ impl DeelipApp {
             ui.add_space(8.0);
             ui.vertical_centered(|ui| {
                 if ui
-                    .button(format!("{}  Send", egui_phosphor::regular::EXPORT))
+                    .button(format!("{}  {}", egui_phosphor::regular::EXPORT, t("common.send_button")))
                     .clicked()
                 {
                     self.do_transfer();
@@ -105,7 +106,7 @@ fn transfer_target_editor(ui: &mut Ui, palette: Palette, target: &mut String) {
     text_edit_scope(ui, &palette, |ui| {
         ui.add(
             egui::TextEdit::singleline(target)
-                .hint_text(RichText::new("e.g. 1234567").color(palette.ink_muted))
+                .hint_text(RichText::new(t("common.number_hint")).color(palette.ink_muted))
                 .font(theme::font_address())
                 .desired_width(f32::INFINITY),
         )
@@ -119,7 +120,7 @@ fn transfer_target_editor(ui: &mut Ui, palette: Palette, target: &mut String) {
         if ui.add_enabled(!target.is_empty(), egui::Button::new("⌫")).clicked() {
             target.pop();
         }
-        if ui.add_enabled(!target.is_empty(), egui::Button::new("Clear")).clicked() {
+        if ui.add_enabled(!target.is_empty(), egui::Button::new(t("common.clear_button"))).clicked() {
             target.clear();
         }
     });

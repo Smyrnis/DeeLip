@@ -1,5 +1,6 @@
 use egui::{Align2, RichText, Ui};
 
+use crate::strings::t;
 use crate::theme::{self, Palette};
 
 /// Deterministic avatar background color for a contact/peer, hashed from its
@@ -215,7 +216,7 @@ pub(crate) fn search_field(
     hint: &str,
     width: f32,
 ) -> egui::Response {
-    ui.label("Search:");
+    ui.label(t("common.search_label"));
     text_edit_scope(ui, palette, |ui| {
         ui.add(
             egui::TextEdit::singleline(text)

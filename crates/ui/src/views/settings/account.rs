@@ -6,6 +6,7 @@ use crate::helpers::{
     account_label, account_status_label, codec_label, empty_state, field_label, info_hint,
     text_edit_scope,
 };
+use crate::strings::t;
 use crate::theme::{self, Palette};
 
 use super::{optional_text_field, optional_text_field_sized};
@@ -16,17 +17,16 @@ impl DeelipApp {
         let mut edited = false;
 
         ui.horizontal(|ui| {
-            ui.label(RichText::new("Accounts").font(theme::font_heading(13.5)));
-            info_hint(ui, palette, "Each enabled account registers independently on its own \
-                local SIP port (base port below, incrementing by one per additional account).");
+            ui.label(RichText::new(t("settings.account.accounts_heading")).font(theme::font_heading(13.5)));
+            info_hint(ui, palette, &t("settings.account.accounts_hint"));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let can_remove = self.config.accounts.len() > 1;
-                if ui.add_enabled(can_remove, egui::Button::new("Remove")).clicked() {
+                if ui.add_enabled(can_remove, egui::Button::new(t("common.remove_button"))).clicked() {
                     self.config.accounts.remove(self.edit_account_idx);
                     self.edit_account_idx = self.edit_account_idx.min(self.config.accounts.len() - 1);
                     edited = true;
                 }
-                if ui.button("+ Add account").clicked() {
+                if ui.button(format!("+ {}", t("settings.account.add_account_button"))).clicked() {
                     self.config.accounts.push(SipAccount::default());
                     self.edit_account_idx = self.config.accounts.len() - 1;
                     edited = true;
@@ -59,18 +59,14 @@ impl DeelipApp {
         theme::full_width_card(ui, *palette, |ui| {
             let account = &mut self.config.accounts[self.edit_account_idx];
 
-            edited |= ui.checkbox(&mut account.enabled, "Enabled (register this account on next restart)").changed();
-            edited |= ui.checkbox(&mut account.dnd, "Do Not Disturb (reject all incoming calls)").changed();
+            edited |= ui.checkbox(&mut account.enabled, t("settings.account.enabled_checkbox")).changed();
+            edited |= ui.checkbox(&mut account.dnd, t("settings.account.dnd_checkbox")).changed();
             ui.horizontal(|ui| {
-                edited |= ui.checkbox(&mut account.local_account, "Local Account (serverless, direct-IP calling)").changed();
-                info_hint(ui, palette, "Place and receive calls straight to/from an IP address with \
-                    no SIP server at all -- no REGISTER is ever sent. Server, Password, Login, and \
-                    Transport below are ignored (always plain UDP); dial a bare IP or host[:port] \
-                    (e.g. 192.168.1.50 or 192.168.1.50:5060) directly from the dialer. Username/ \
-                    Display name are still used as this account's caller-ID identity. Restart required.");
+                edited |= ui.checkbox(&mut account.local_account, t("settings.account.local_account_checkbox")).changed();
+                info_hint(ui, palette, &t("settings.account.local_account_hint"));
             });
             if account.local_account {
-                empty_state(ui, palette, "Local Account: Server/Password/Login/Transport ignored below.");
+                empty_state(ui, palette, &t("settings.account.local_account_empty_state"));
             }
             ui.add_space(4.0);
 
@@ -78,16 +74,16 @@ impl DeelipApp {
                 .num_columns(2)
                 .spacing([8.0, 4.0])
                 .show(ui, |ui| {
-                    field_label(ui, palette, "Account name:");
-                    edited |= optional_text_field(ui, palette, &mut account.account_name, "e.g. Home, Work");
+                    field_label(ui, palette, &t("settings.account.account_name_label"));
+                    edited |= optional_text_field(ui, palette, &mut account.account_name, &t("settings.account.account_name_hint"));
                     ui.end_row();
 
-                    field_label(ui, palette, "Username:");
+                    field_label(ui, palette, &t("settings.account.username_label"));
                     edited |= text_edit_scope(ui, palette, |ui| ui.add(egui::TextEdit::singleline(&mut account.username)
                         .desired_width(f32::INFINITY)).changed());
                     ui.end_row();
 
-                    field_label(ui, palette, "Password:");
+                    field_label(ui, palette, &t("settings.account.password_label"));
                     ui.horizontal(|ui| {
                         edited |= text_edit_scope(ui, palette, |ui| ui.add(egui::TextEdit::singleline(&mut account.password)
                             .password(!self.show_account_password)
@@ -103,45 +99,42 @@ impl DeelipApp {
                     });
                     ui.end_row();
 
-                    field_label(ui, palette, "Login (optional):");
+                    field_label(ui, palette, &t("settings.account.login_label"));
                     ui.horizontal(|ui| {
-                        edited |= optional_text_field_sized(ui, palette, &mut account.auth_username, "defaults to Username", 240.0);
-                        info_hint(ui, palette, "Digest-auth identity, when a provider requires \
-                            a login distinct from the public SIP username above.");
+                        edited |= optional_text_field_sized(ui, palette, &mut account.auth_username, &t("settings.account.login_hint"), 240.0);
+                        info_hint(ui, palette, &t("settings.account.login_info"));
                     });
                     ui.end_row();
 
-                    field_label(ui, palette, "Server:");
+                    field_label(ui, palette, &t("settings.account.server_label"));
                     edited |= text_edit_scope(ui, palette, |ui| ui.add(egui::TextEdit::singleline(&mut account.server)
                         .font(theme::font_address())
                         .desired_width(f32::INFINITY)).changed());
                     ui.end_row();
 
-                    field_label(ui, palette, "Port:");
+                    field_label(ui, palette, &t("settings.account.port_label"));
                     edited |= ui.add(egui::DragValue::new(&mut account.port)).changed();
                     ui.end_row();
 
-                    field_label(ui, palette, "Domain (optional):");
+                    field_label(ui, palette, &t("settings.account.domain_label"));
                     ui.horizontal(|ui| {
-                        edited |= optional_text_field_sized(ui, palette, &mut account.domain, "defaults to Server", 240.0);
-                        info_hint(ui, palette, "SIP domain used in From/To/Contact URIs, when it \
-                            differs from the registrar host in Server above.");
+                        edited |= optional_text_field_sized(ui, palette, &mut account.domain, &t("settings.account.domain_hint"), 240.0);
+                        info_hint(ui, palette, &t("settings.account.domain_info"));
                     });
                     ui.end_row();
 
-                    field_label(ui, palette, "SIP proxy (optional):");
+                    field_label(ui, palette, &t("settings.account.sip_proxy_label"));
                     ui.horizontal(|ui| {
-                        edited |= optional_text_field_sized(ui, palette, &mut account.sip_proxy, "host[:port]", 240.0);
-                        info_hint(ui, palette, "Outbound proxy to actually connect through, \
-                            instead of Server/Port directly.");
+                        edited |= optional_text_field_sized(ui, palette, &mut account.sip_proxy, &t("settings.account.host_port_hint"), 240.0);
+                        info_hint(ui, palette, &t("settings.account.sip_proxy_info"));
                     });
                     ui.end_row();
 
-                    field_label(ui, palette, "Display name:");
+                    field_label(ui, palette, &t("settings.account.display_name_label"));
                     edited |= optional_text_field(ui, palette, &mut account.display_name, "");
                     ui.end_row();
 
-                    field_label(ui, palette, "Transport:");
+                    field_label(ui, palette, &t("settings.account.transport_label"));
                     egui::ComboBox::from_id_source("settings_transport")
                         .selected_text(match account.transport {
                             TransportProtocol::Udp => "UDP",
@@ -156,8 +149,7 @@ impl DeelipApp {
                             edited |= ui.selectable_value(&mut account.transport, TransportProtocol::Auto, "Auto").changed();
                         });
                     if account.transport == TransportProtocol::Auto {
-                        info_hint(ui, palette, "Tries UDP, then TCP, then TLS at connect time, \
-                            keeping whichever one actually gets a response from the server.");
+                        info_hint(ui, palette, &t("settings.account.transport_auto_info"));
                     }
                     ui.end_row();
                 });
@@ -165,17 +157,17 @@ impl DeelipApp {
             if matches!(account.transport, TransportProtocol::Tls | TransportProtocol::Auto) {
                 edited |= ui.checkbox(
                     &mut account.tls_insecure_skip_verify,
-                    "Skip TLS certificate verification (self-signed/home-lab PBXes)",
+                    t("settings.account.tls_skip_verify_checkbox"),
                 ).changed();
                 if account.tls_insecure_skip_verify {
                     ui.label(RichText::new(
-                        "Warning: certificate verification is disabled — traffic can be intercepted."
+                        t("settings.account.tls_warning")
                     ).color(palette.ringing));
                 }
             }
 
             ui.add_space(6.0);
-            field_label(ui, palette, "Codecs:");
+            field_label(ui, palette, &t("settings.account.codecs_label"));
             let mut to_enable: Option<&str> = None;
             let mut move_up: Option<usize> = None;
             let mut move_down: Option<usize> = None;
@@ -185,7 +177,7 @@ impl DeelipApp {
                 .inner_margin(egui::Margin::symmetric(8.0, 6.0));
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
-                    ui.label(RichText::new("Available").color(palette.ink_muted).small());
+                    ui.label(RichText::new(t("settings.account.codecs_available_label")).color(palette.ink_muted).small());
                     list_frame.show(ui, |ui| {
                         // `set_width`, not just `set_min_size` -- a bare
                         // minimum lets a *nested* `right_to_left` layout in
@@ -208,7 +200,7 @@ impl DeelipApp {
                     });
                 });
                 ui.vertical(|ui| {
-                    ui.label(RichText::new("Enabled (order = preference)").color(palette.ink_muted).small());
+                    ui.label(RichText::new(t("settings.account.codecs_enabled_label")).color(palette.ink_muted).small());
                     list_frame.show(ui, |ui| {
                         // Fixed width, not just a minimum -- see the
                         // Available column's comment above; without this,
@@ -245,14 +237,15 @@ impl DeelipApp {
 
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                field_label(ui, palette, "Force codec for incoming:");
+                field_label(ui, palette, &t("settings.account.force_incoming_codec_label"));
+                let no_override = t("settings.account.no_override_option");
                 let selected_label = account.force_incoming_codec.as_deref()
                     .map(codec_label)
-                    .unwrap_or("No override");
+                    .unwrap_or(no_override.as_str());
                 egui::ComboBox::from_id_source("settings_force_incoming_codec")
                     .selected_text(selected_label)
                     .show_ui(ui, |ui| {
-                        if ui.selectable_label(account.force_incoming_codec.is_none(), "No override").clicked() {
+                        if ui.selectable_label(account.force_incoming_codec.is_none(), t("settings.account.no_override_option")).clicked() {
                             account.force_incoming_codec = None;
                             edited = true;
                         }
@@ -263,136 +256,116 @@ impl DeelipApp {
                             }
                         }
                     });
-                info_hint(ui, palette, "Negotiates this codec on an incoming call whenever the \
-                    caller offers it at all, ignoring the caller's own preference order.");
+                info_hint(ui, palette, &t("settings.account.force_incoming_codec_info"));
             });
 
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                edited |= ui.checkbox(&mut account.vad_enabled, "Voice activity detection (comfort noise)").changed();
-                info_hint(ui, palette, "During silence, sends occasional comfort-noise packets \
-                    instead of continuous audio, and plays synthesized background noise for the \
-                    far end's silence instead of dead air. Only takes effect with a non-Opus codec.");
+                edited |= ui.checkbox(&mut account.vad_enabled, t("settings.account.vad_checkbox")).changed();
+                info_hint(ui, palette, &t("settings.account.vad_info"));
             });
 
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                field_label(ui, palette, "DTMF mode:");
+                field_label(ui, palette, &t("settings.account.dtmf_mode_label"));
                 egui::ComboBox::from_id_source("settings_dtmf_mode")
                     .selected_text(match account.dtmf_mode {
-                        DtmfMode::Rfc2833 => "RFC 2833 (RTP telephone-event)",
-                        DtmfMode::SipInfo => "SIP INFO",
-                        DtmfMode::Inband  => "Inband (audio tone)",
-                        DtmfMode::Auto    => "Auto (RFC 2833 if negotiated, else SIP INFO)",
+                        DtmfMode::Rfc2833 => t("settings.account.dtmf_rfc2833"),
+                        DtmfMode::SipInfo => t("settings.account.dtmf_sipinfo"),
+                        DtmfMode::Inband  => t("settings.account.dtmf_inband"),
+                        DtmfMode::Auto    => t("settings.account.dtmf_auto"),
                     })
                     .show_ui(ui, |ui| {
-                        edited |= ui.selectable_value(&mut account.dtmf_mode, DtmfMode::Rfc2833, "RFC 2833 (RTP telephone-event)").changed();
-                        edited |= ui.selectable_value(&mut account.dtmf_mode, DtmfMode::SipInfo, "SIP INFO").changed();
-                        edited |= ui.selectable_value(&mut account.dtmf_mode, DtmfMode::Inband, "Inband (audio tone)").changed();
-                        edited |= ui.selectable_value(&mut account.dtmf_mode, DtmfMode::Auto, "Auto (RFC 2833 if negotiated, else SIP INFO)").changed();
+                        edited |= ui.selectable_value(&mut account.dtmf_mode, DtmfMode::Rfc2833, t("settings.account.dtmf_rfc2833")).changed();
+                        edited |= ui.selectable_value(&mut account.dtmf_mode, DtmfMode::SipInfo, t("settings.account.dtmf_sipinfo")).changed();
+                        edited |= ui.selectable_value(&mut account.dtmf_mode, DtmfMode::Inband, t("settings.account.dtmf_inband")).changed();
+                        edited |= ui.selectable_value(&mut account.dtmf_mode, DtmfMode::Auto, t("settings.account.dtmf_auto")).changed();
                     });
             });
 
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                field_label(ui, palette, "Forward always:");
-                edited |= optional_text_field(ui, palette, &mut account.forward_always, "sip:reception@example.com");
+                field_label(ui, palette, &t("settings.account.forward_always_label"));
+                edited |= optional_text_field(ui, palette, &mut account.forward_always, &t("settings.account.forward_always_hint"));
             });
 
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                field_label(ui, palette, "Forward when busy:");
-                edited |= optional_text_field(ui, palette, &mut account.forward_on_busy, "sip:voicemail@example.com");
+                field_label(ui, palette, &t("settings.account.forward_busy_label"));
+                edited |= optional_text_field(ui, palette, &mut account.forward_on_busy, &t("settings.account.voicemail_uri_hint"));
             });
 
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                field_label(ui, palette, "Forward if unanswered:");
-                edited |= optional_text_field_sized(ui, palette, &mut account.no_answer_forward, "sip:voicemail@example.com", 180.0);
-                field_label(ui, palette, "after (s):");
+                field_label(ui, palette, &t("settings.account.forward_unanswered_label"));
+                edited |= optional_text_field_sized(ui, palette, &mut account.no_answer_forward, &t("settings.account.voicemail_uri_hint"), 180.0);
+                field_label(ui, palette, &t("settings.account.after_seconds_short_label"));
                 edited |= ui.add(egui::DragValue::new(&mut account.no_answer_timeout_secs).range(1..=300)).changed();
             });
 
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                edited |= ui.checkbox(&mut account.auto_answer_enabled, "Auto-answer incoming calls (intercom mode)").changed();
-                info_hint(ui, palette, "Answers any incoming call on this account after the \
-                    timer below, regardless of who's calling -- distinct from Auto Answer \
-                    (Control Button) below, which only fires on a specific remote paging signal.");
+                edited |= ui.checkbox(&mut account.auto_answer_enabled, t("settings.account.auto_answer_checkbox")).changed();
+                info_hint(ui, palette, &t("settings.account.auto_answer_info"));
             });
             if account.auto_answer_enabled {
                 ui.horizontal(|ui| {
-                    field_label(ui, palette, "after (seconds):");
+                    field_label(ui, palette, &t("settings.account.after_seconds_label"));
                     edited |= ui.add(egui::DragValue::new(&mut account.auto_answer_secs).range(0..=60)).changed();
                 });
             }
 
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                edited |= ui.checkbox(&mut account.auto_answer_control_button, "Auto Answer (Control Button)").changed();
-                info_hint(ui, palette, "Auto-answer only when the incoming INVITE itself carries a \
-                    remote paging/intercom signal (a Call-Info: ...;answer-after=N header, as sent \
-                    by door-intercom/paging hardware) -- unlike the timer above, this doesn't fire \
-                    on an ordinary call and bypasses DND/forwarding when it does fire.");
+                edited |= ui.checkbox(&mut account.auto_answer_control_button, t("settings.account.auto_answer_control_checkbox")).changed();
+                info_hint(ui, palette, &t("settings.account.auto_answer_control_info"));
             });
             ui.horizontal(|ui| {
-                edited |= ui.checkbox(&mut account.deny_incoming_control_button, "Deny Incoming (Control Button)").changed();
-                info_hint(ui, palette, "Reacts to the same remote paging/intercom signal as Auto \
-                    Answer (Control Button) above, but rejects the call instead. Takes priority if \
-                    both are somehow enabled.");
+                edited |= ui.checkbox(&mut account.deny_incoming_control_button, t("settings.account.deny_incoming_checkbox")).changed();
+                info_hint(ui, palette, &t("settings.account.deny_incoming_info"));
             });
 
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                field_label(ui, palette, "Voicemail mailbox (MWI):");
-                edited |= optional_text_field_sized(ui, palette, &mut account.mailbox, "1000", 100.0);
-                info_hint(ui, palette, "Extension/mailbox this account subscribes to for \
-                    Message-Waiting-Indicator (MWI) NOTIFY -- new-voicemail count shown as the \
-                    badge next to the status bar. Leave blank to skip MWI subscription entirely.");
+                field_label(ui, palette, &t("settings.account.mailbox_label"));
+                edited |= optional_text_field_sized(ui, palette, &mut account.mailbox, &t("settings.account.mailbox_hint"), 100.0);
+                info_hint(ui, palette, &t("settings.account.mailbox_info"));
             });
 
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                edited |= ui.checkbox(&mut account.publish_presence, "Publish presence status").changed();
-                info_hint(ui, palette, "Publishes this account's own availability (open/closed, \
-                    following Do Not Disturb) via PUBLISH -- needs a server with a presence agent \
-                    that accepts it. Restart required to apply.");
+                edited |= ui.checkbox(&mut account.publish_presence, t("settings.account.publish_presence_checkbox")).changed();
+                info_hint(ui, palette, &t("settings.account.publish_presence_info"));
             });
 
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                field_label(ui, palette, "Dialing prefix:");
-                edited |= optional_text_field_sized(ui, palette, &mut account.dialing_prefix, "e.g. 9", 60.0);
-                info_hint(ui, palette, "Auto-prepended to bare numbers dialed from this account \
-                    (e.g. \"9\" for an outside line) -- not applied to a full SIP URI or an \
-                    explicit user@host entry. Only used as a fallback when no Dial Plan rule \
-                    below matches.");
+                field_label(ui, palette, &t("settings.account.dialing_prefix_label"));
+                edited |= optional_text_field_sized(ui, palette, &mut account.dialing_prefix, &t("settings.account.dialing_prefix_hint"), 60.0);
+                info_hint(ui, palette, &t("settings.account.dialing_prefix_info"));
             });
 
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                field_label(ui, palette, "Dial Plan:");
-                info_hint(ui, palette, "Ordered regex match/replace rules applied to a bare \
-                    dialed number before the Dialing prefix fallback above -- the first enabled \
-                    rule whose pattern matches wins. E.g. pattern \"^0(\\d+)$\", replacement \"$1\" \
-                    strips a leading trunk-access 0.");
+                field_label(ui, palette, &t("settings.account.dial_plan_label"));
+                info_hint(ui, palette, &t("settings.account.dial_plan_info"));
             });
             if account.dial_plan.is_empty() {
-                empty_state(ui, palette, "No dial plan rules -- falls back to the prefix above.");
+                empty_state(ui, palette, &t("settings.account.dial_plan_empty"));
             } else {
                 let mut remove_idx = None;
                 for (i, rule) in account.dial_plan.iter_mut().enumerate() {
                     ui.horizontal(|ui| {
                         edited |= ui.checkbox(&mut rule.enabled, "").changed();
                         edited |= text_edit_scope(ui, palette, |ui| ui.add(egui::TextEdit::singleline(&mut rule.pattern)
-                            .hint_text(RichText::new("pattern").color(palette.ink_muted))
+                            .hint_text(RichText::new(t("settings.account.pattern_hint")).color(palette.ink_muted))
                             .desired_width(120.0)).changed());
                         field_label(ui, palette, "→");
                         edited |= text_edit_scope(ui, palette, |ui| ui.add(egui::TextEdit::singleline(&mut rule.replacement)
-                            .hint_text(RichText::new("replacement").color(palette.ink_muted))
+                            .hint_text(RichText::new(t("settings.account.replacement_hint")).color(palette.ink_muted))
                             .desired_width(100.0)).changed());
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.small_button("Remove").clicked() {
+                            if ui.small_button(t("common.remove_button")).clicked() {
                                 remove_idx = Some(i);
                             }
                         });
@@ -405,13 +378,13 @@ impl DeelipApp {
             }
             ui.horizontal(|ui| {
                 text_edit_scope(ui, palette, |ui| ui.add(egui::TextEdit::singleline(&mut self.dialplan_pattern_input)
-                    .hint_text(RichText::new("pattern, e.g. ^0(\\d+)$").color(palette.ink_muted))
+                    .hint_text(RichText::new(t("settings.account.pattern_example_hint")).color(palette.ink_muted))
                     .desired_width(120.0)));
                 field_label(ui, palette, "→");
                 text_edit_scope(ui, palette, |ui| ui.add(egui::TextEdit::singleline(&mut self.dialplan_replacement_input)
-                    .hint_text(RichText::new("replacement, e.g. $1").color(palette.ink_muted))
+                    .hint_text(RichText::new(t("settings.account.replacement_example_hint")).color(palette.ink_muted))
                     .desired_width(100.0)));
-                if ui.button("Add rule").clicked() && !self.dialplan_pattern_input.trim().is_empty() {
+                if ui.button(t("settings.account.add_rule_button")).clicked() && !self.dialplan_pattern_input.trim().is_empty() {
                     account.dial_plan.push(DialPlanRule {
                         pattern: self.dialplan_pattern_input.trim().to_string(),
                         replacement: self.dialplan_replacement_input.trim().to_string(),
@@ -425,114 +398,96 @@ impl DeelipApp {
 
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                edited |= ui.checkbox(&mut account.hide_caller_id, "Hide caller ID (send Privacy: id)").changed();
-                info_hint(ui, palette, "Requests the server withhold your identity from the \
-                    callee -- only effective if the server/provider actually honors Privacy: id; \
-                    this app can't force it on an uncooperative server.");
+                edited |= ui.checkbox(&mut account.hide_caller_id, t("settings.account.hide_caller_id_checkbox")).changed();
+                info_hint(ui, palette, &t("settings.account.hide_caller_id_info"));
             });
 
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                field_label(ui, palette, "Register refresh (seconds):");
+                field_label(ui, palette, &t("settings.account.register_refresh_label"));
                 edited |= ui.add(egui::DragValue::new(&mut account.register_expires).range(60..=86400)).changed();
-                info_hint(ui, palette, "Requested REGISTER Expires -- the server may return a \
-                    shorter value, which re-registration timing always honors regardless of this.");
+                info_hint(ui, palette, &t("settings.account.register_refresh_info"));
             });
 
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 let mut session_timers_on = account.session_timers_enabled;
-                if ui.checkbox(&mut session_timers_on, "Session Timers (RFC 4028)").changed() {
+                if ui.checkbox(&mut session_timers_on, t("settings.account.session_timers_checkbox")).changed() {
                     account.session_timers_enabled = session_timers_on;
                     edited = true;
                 }
-                info_hint(ui, palette, "Periodic re-INVITE keep-alives so a dead signaling path \
-                    (no BYE ever arrives) can still be detected. On by default; disabling sends \
-                    no Session-Expires/Min-SE at all.");
+                info_hint(ui, palette, &t("settings.account.session_timers_info"));
             });
 
             ui.add_space(6.0);
             let mut keepalive_on = account.keepalive_secs.is_some();
-            if ui.checkbox(&mut keepalive_on, "NAT keepalive").changed() {
+            if ui.checkbox(&mut keepalive_on, t("settings.account.nat_keepalive_checkbox")).changed() {
                 account.keepalive_secs = if keepalive_on { Some(15) } else { None };
                 edited = true;
             }
             if let Some(secs) = &mut account.keepalive_secs {
                 ui.horizontal(|ui| {
-                    field_label(ui, palette, "every (seconds):");
+                    field_label(ui, palette, &t("settings.account.every_seconds_label"));
                     edited |= ui.add(egui::DragValue::new(secs).range(5..=300)).changed();
-                    info_hint(ui, palette, "Sends a lone empty packet to the registrar on this \
-                        interval, to hold a NAT/firewall's outbound binding open between registrations.");
+                    info_hint(ui, palette, &t("settings.account.nat_keepalive_info"));
                 });
             }
 
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                field_label(ui, palette, "Media encryption:");
+                field_label(ui, palette, &t("settings.account.media_encryption_label"));
                 egui::ComboBox::from_id_source("settings_media_encryption")
                     .selected_text(match account.media_encryption {
-                        MediaEncryption::MatchTransport => "Match transport (default)",
-                        MediaEncryption::Disabled => "Disabled",
-                        MediaEncryption::Enabled => "Always (SRTP)",
-                        MediaEncryption::Zrtp => "ZRTP (experimental)",
+                        MediaEncryption::MatchTransport => t("settings.account.enc_match_transport"),
+                        MediaEncryption::Disabled => t("settings.account.enc_disabled"),
+                        MediaEncryption::Enabled => t("settings.account.enc_always_srtp"),
+                        MediaEncryption::Zrtp => t("settings.account.enc_zrtp"),
                     })
                     .show_ui(ui, |ui| {
-                        edited |= ui.selectable_value(&mut account.media_encryption, MediaEncryption::MatchTransport, "Match transport (default)").changed();
-                        edited |= ui.selectable_value(&mut account.media_encryption, MediaEncryption::Disabled, "Disabled").changed();
-                        edited |= ui.selectable_value(&mut account.media_encryption, MediaEncryption::Enabled, "Always (SRTP)").changed();
-                        edited |= ui.selectable_value(&mut account.media_encryption, MediaEncryption::Zrtp, "ZRTP (experimental)").changed();
+                        edited |= ui.selectable_value(&mut account.media_encryption, MediaEncryption::MatchTransport, t("settings.account.enc_match_transport")).changed();
+                        edited |= ui.selectable_value(&mut account.media_encryption, MediaEncryption::Disabled, t("settings.account.enc_disabled")).changed();
+                        edited |= ui.selectable_value(&mut account.media_encryption, MediaEncryption::Enabled, t("settings.account.enc_always_srtp")).changed();
+                        edited |= ui.selectable_value(&mut account.media_encryption, MediaEncryption::Zrtp, t("settings.account.enc_zrtp")).changed();
                     });
             });
-            info_hint(ui, palette, "\"Match transport\" offers SRTP exactly when the signaling \
-                transport is TLS (today's behavior); the other two are independent of transport. \
-                ZRTP is a from-scratch implementation, verified only against itself (two DeeLip \
-                instances) in this codebase's own test suite -- not against any other ZRTP client. \
-                Not supported in conference calls (falls back to no encryption for the merged call).");
+            info_hint(ui, palette, &t("settings.account.media_encryption_info"));
 
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                edited |= ui.checkbox(&mut account.video_enabled, "Enable video (H.264)").changed();
-                info_hint(ui, palette, "Offers/accepts a video leg (H.264, 640x480 @15fps) \
-                    alongside audio for calls on this account. Needs a working camera (see the \
-                    Video section below) to send video; you can still receive and view the other \
-                    party's video without one. Not supported in conference calls.");
+                edited |= ui.checkbox(&mut account.video_enabled, t("settings.account.video_enabled_checkbox")).changed();
+                info_hint(ui, palette, &t("settings.account.video_enabled_info"));
             });
 
             ui.add_space(6.0);
-            field_label(ui, palette, "Public address (optional):");
+            field_label(ui, palette, &t("settings.account.public_address_label"));
             ui.horizontal(|ui| {
-                edited |= optional_text_field_sized(ui, palette, &mut account.public_address, "e.g. 203.0.113.5", 240.0);
-                info_hint(ui, palette, "Overrides the address advertised in Contact/SDP for this \
-                    account, instead of the globally STUN-discovered external IP.");
+                edited |= optional_text_field_sized(ui, palette, &mut account.public_address, &t("settings.account.public_address_hint"), 240.0);
+                info_hint(ui, palette, &t("settings.account.public_address_info"));
             });
 
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                edited |= ui.checkbox(&mut account.allow_ip_rewrite, "Allow IP Rewrite").changed();
-                info_hint(ui, palette, "Rewrites the advertised Contact/SDP IP from the \
-                    registrar's own received= feedback on each (re-)registration -- a STUN-free \
-                    way to self-discover a public address. Ignored while Public address is set.");
+                edited |= ui.checkbox(&mut account.allow_ip_rewrite, t("settings.account.allow_ip_rewrite_checkbox")).changed();
+                info_hint(ui, palette, &t("settings.account.allow_ip_rewrite_info"));
             });
 
             ui.add_space(6.0);
             let mut ice_override_on = account.ice_enabled.is_some();
             ui.horizontal(|ui| {
-                if ui.checkbox(&mut ice_override_on, "Override global ICE setting for this account").changed() {
+                if ui.checkbox(&mut ice_override_on, t("settings.account.ice_override_checkbox")).changed() {
                     account.ice_enabled = if ice_override_on { Some(self.config.ice_enabled) } else { None };
                     edited = true;
                 }
-                info_hint(ui, palette, "Lets this one account use a different ICE setting than \
-                    the global one in Network below -- e.g. disable ICE for a local-only PBX \
-                    while keeping it on for other accounts.");
+                info_hint(ui, palette, &t("settings.account.ice_override_info"));
             });
             if let Some(ice_on) = &mut account.ice_enabled {
-                edited |= ui.checkbox(ice_on, "Use ICE (RFC 8445) for this account").changed();
+                edited |= ui.checkbox(ice_on, t("settings.account.use_ice_checkbox")).changed();
             }
         });
 
         if !self.config.accounts.iter().any(|a| a.enabled) {
             ui.label(RichText::new(
-                "Warning: no accounts are enabled — DeeLip won't be able to register on restart."
+                t("settings.account.no_accounts_warning")
             ).color(palette.ringing));
         }
 

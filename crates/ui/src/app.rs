@@ -12,6 +12,7 @@ use tokio::runtime::Handle;
 use crate::platform::hotkeys::Hotkeys;
 use crate::platform::ringtone::Ringtone;
 use crate::platform::tray::{self, CtxSlot, QuitState};
+use crate::strings::t;
 use crate::theme::Palette;
 
 // ── Tab navigation ────────────────────────────────────────────────────────────
@@ -458,6 +459,8 @@ impl DeelipApp {
         tray: Option<(CtxSlot, QuitState, tray::BadgeSender)>,
         ctx_slot: CtxSlot,
     ) -> Self {
+        crate::strings::init(config.language);
+
         let accounts = accounts
             .into_iter()
             .map(|(account, handle)| AccountState {
@@ -465,7 +468,7 @@ impl DeelipApp {
                 account,
                 handle,
                 reg_ok: false,
-                status: "Registering…".into(),
+                status: t("status.registering"),
                 mwi: None,
             })
             .collect();
@@ -502,7 +505,7 @@ impl DeelipApp {
             call_target: String::new(),
             selected_account: 0,
             last_dialed: None,
-            status_line: "Registering…".into(),
+            status_line: t("status.registering"),
             reg_ok: false,
             calls: Vec::new(),
             focused_call: None,

@@ -3,6 +3,7 @@ use deelip_sip::{PresenceState, SipEvent};
 
 use crate::app::{CallSlot, DeelipApp, PendingCall};
 use crate::helpers::{extract_user_part, normalize_target, short_uri, unix_now};
+use crate::strings::{t, tf};
 
 impl DeelipApp {
     // ── SIP event processing ─────────────────────────────────────────────────
@@ -28,9 +29,9 @@ impl DeelipApp {
             SipEvent::Registered { expires } => {
                 self.accounts[account].reg_ok = true;
                 self.accounts[account].status = if self.accounts[account].account.local_account {
-                    "Ready (Local Account)".into()
+                    t("status.ready_local")
                 } else {
-                    format!("Registered (expires {expires}s)")
+                    tf("status.registered", &[("expires", &expires.to_string())])
                 };
                 self.refresh_idle_status();
                 self.subscribe_account_contacts(account);
@@ -38,11 +39,11 @@ impl DeelipApp {
             }
             SipEvent::RegistrationFailed { reason } => {
                 self.accounts[account].reg_ok = false;
-                self.accounts[account].status = format!("Registration failed: {reason}");
+                self.accounts[account].status = tf("status.registration_failed", &[("reason", &reason)]);
                 self.refresh_idle_status();
             }
             SipEvent::CallRinging { .. } => {
-                self.status_line = "Ringing…".into();
+                self.status_line = t("status.ringing");
             }
             SipEvent::CallConnected { call_id, media } => {
                 // `pending_accept` (an inbound call we told `SipStack` to
@@ -83,7 +84,7 @@ impl DeelipApp {
                     };
                     self.calls.push(slot);
                     let idx = self.calls.len() - 1;
-                    self.status_line = format!("In call — {}", short_uri(&pending.remote_uri));
+                    self.status_line = tf("status.in_call", &[("uri", &short_uri(&pending.remote_uri))]);
                     self.start_media(idx);
                 } else if let Some(out) = self.pending_outbound.take() {
                     let slot = CallSlot {
@@ -98,7 +99,7 @@ impl DeelipApp {
                     };
                     self.calls.push(slot);
                     let idx = self.calls.len() - 1;
-                    self.status_line = format!("In call — {}", short_uri(&out.remote_uri));
+                    self.status_line = tf("status.in_call", &[("uri", &short_uri(&out.remote_uri))]);
                     self.start_media(idx);
                 } else {
                     tracing::warn!(call_id, "CallConnected with no pending call — ignoring");
@@ -228,9 +229,9 @@ impl DeelipApp {
                     return;
                 }
                 self.status_line = if waiting {
-                    format!("Call waiting: {}", short_uri(&from))
+                    tf("status.call_waiting", &[("uri", &short_uri(&from))])
                 } else {
-                    format!("Incoming from {}", short_uri(&from))
+                    tf("status.incoming_from", &[("uri", &short_uri(&from))])
                 };
                 let acc = &self.accounts[account].account;
                 let forward =
@@ -280,14 +281,14 @@ impl DeelipApp {
                 self.refresh_call_status();
             }
             SipEvent::RemoteHeld { .. } => {
-                self.status_line = "Remote party put you on hold".into();
+                self.status_line = t("status.remote_held");
             }
             SipEvent::RemoteResumed { .. } => {
-                self.status_line = "Call resumed by remote party".into();
+                self.status_line = t("status.remote_resumed");
             }
             SipEvent::TransferAccepted { call_id } => {
                 tracing::info!(call_id, "Transfer accepted");
-                self.status_line = "Transfer accepted".into();
+                self.status_line = t("status.transfer_accepted");
                 // Attended transfer only (blind transfer never sets this):
                 // both legs are done once the transferee re-INVITEs the
                 // target directly via Replaces, so hang up both ourselves
@@ -307,7 +308,7 @@ impl DeelipApp {
             }
             SipEvent::TransferFailed { call_id, reason } => {
                 tracing::warn!(call_id, reason, "Transfer failed");
-                self.status_line = format!("Transfer failed: {reason}");
+                self.status_line = tf("status.transfer_failed", &[("reason", &reason)]);
                 self.attended_transfer_original = None;
             }
             SipEvent::PresenceSubscribed { uri, expires } => {
@@ -343,10 +344,9 @@ impl DeelipApp {
             }
             SipEvent::MessageSendResult { to, ok, reason } => {
                 if !ok {
-                    self.status_line = format!(
-                        "Message to {} failed: {}",
-                        short_uri(&to),
-                        reason.unwrap_or_default()
+                    self.status_line = tf(
+                        "status.message_send_failed",
+                        &[("uri", &short_uri(&to)), ("reason", &reason.unwrap_or_default())],
                     );
                 }
             }
@@ -450,7 +450,7 @@ impl DeelipApp {
         if let Some(pending) = self.pending_accept.take() {
             if pending.call_id == call_id {
                 if let Some((code, reason)) = &failure {
-                    self.status_line = format!("Call failed ({code}): {reason}");
+                    self.status_line = tf("status.call_failed", &[("code", &code.to_string()), ("reason", reason)]);
                 }
                 self.record_history(
                     pending.remote_uri,
@@ -465,7 +465,7 @@ impl DeelipApp {
         }
         if let Some(idx) = self.calls.iter().position(|c| c.call_id == call_id) {
             let status = if let Some((code, reason)) = &failure {
-                self.status_line = format!("Call failed ({code}): {reason}");
+                self.status_line = tf("status.call_failed", &[("code", &code.to_string()), ("reason", reason)]);
                 CallStatus::Failed
             } else {
                 CallStatus::Answered
@@ -483,7 +483,7 @@ impl DeelipApp {
         }
         if let Some(out) = self.pending_outbound.take() {
             if let Some((code, reason)) = &failure {
-                self.status_line = format!("Call failed ({code}): {reason}");
+                self.status_line = tf("status.call_failed", &[("code", &code.to_string()), ("reason", reason)]);
             }
             self.record_history(
                 out.remote_uri,
@@ -541,9 +541,9 @@ impl DeelipApp {
     /// focused, or the idle registration summary once everything's cleared.
     pub(crate) fn refresh_call_status(&mut self) {
         if let Some(idx) = self.focused_call {
-            self.status_line = format!("In call — {}", short_uri(&self.calls[idx].remote_uri));
+            self.status_line = tf("status.in_call", &[("uri", &short_uri(&self.calls[idx].remote_uri))]);
         } else if !self.calls.is_empty() {
-            self.status_line = "On hold — tap Resume to continue".into();
+            self.status_line = t("status.on_hold");
         } else if self.pending_call.is_none() {
             self.refresh_idle_status();
         }
@@ -562,14 +562,14 @@ impl DeelipApp {
             Some(acc) => {
                 self.reg_ok = acc.reg_ok;
                 self.status_line = if acc.reg_ok {
-                    "Ready".into()
+                    t("status.ready")
                 } else {
-                    "Not registered".into()
+                    t("status.not_registered")
                 };
             }
             None => {
                 self.reg_ok = false;
-                self.status_line = "No accounts configured".into();
+                self.status_line = t("status.no_accounts_configured");
             }
         }
     }

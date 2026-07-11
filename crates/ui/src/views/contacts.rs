@@ -7,6 +7,7 @@ use crate::helpers::{
     account_status_label, avatar, double_clickable_label, empty_state, field_label, list_row_menu,
     save_text_file, search_field, show_pop_out_window, text_edit_scope,
 };
+use crate::strings::{t, tf};
 use crate::theme;
 
 impl DeelipApp {
@@ -16,7 +17,7 @@ impl DeelipApp {
         // Search bar -- import/export moved to Settings' Advanced tab.
         let palette = self.palette;
         ui.horizontal(|ui| {
-            search_field(ui, &palette, &mut self.contact_search, "name or number", 200.0);
+            search_field(ui, &palette, &mut self.contact_search, &t("common.search_hint_name_or_number"), 200.0);
         });
         ui.add_space(4.0);
 
@@ -38,7 +39,7 @@ impl DeelipApp {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 if results.is_empty() {
-                    empty_state(ui, &self.palette, "No contacts found.");
+                    empty_state(ui, &self.palette, &t("contacts.no_contacts_found"));
                 }
                 for (idx, name, uri, watch_presence) in &results {
                     let palette = self.palette;
@@ -62,9 +63,9 @@ impl DeelipApp {
                                 };
                                 ui.label(RichText::new("●").color(color)).on_hover_text(
                                     match presence {
-                                        Some(PresenceState::Available) => "Available",
-                                        Some(PresenceState::Offline) => "Offline",
-                                        _ => "Unknown",
+                                        Some(PresenceState::Available) => t("contacts.presence_available"),
+                                        Some(PresenceState::Offline) => t("contacts.presence_offline"),
+                                        _ => t("contacts.presence_unknown"),
                                     },
                                 );
                             }
@@ -86,21 +87,21 @@ impl DeelipApp {
                             });
                         },
                         |ui| {
-                            if ui.button("Call").clicked() {
+                            if ui.button(t("common.call_button")).clicked() {
                                 call_target = Some(uri.clone());
                                 ui.close_menu();
                             }
-                            if ui.button("Message").clicked() {
+                            if ui.button(t("common.message_button")).clicked() {
                                 message_target = Some(uri.clone());
                                 ui.close_menu();
                             }
-                            if ui.button("Edit").clicked() {
+                            if ui.button(t("common.edit_button")).clicked() {
                                 edit_idx = Some(*idx);
                                 ui.close_menu();
                             }
                             ui.separator();
                             if ui
-                                .button(RichText::new("Delete").color(palette.danger))
+                                .button(RichText::new(t("common.delete_button")).color(palette.danger))
                                 .clicked()
                             {
                                 delete_idx = Some(*idx);
@@ -129,7 +130,7 @@ impl DeelipApp {
                     .stroke(egui::Stroke::new(1.0, palette.border))
                     .min_size(egui::vec2(fab_size, fab_size))
                     .rounding(egui::Rounding::same(20.0));
-                if ui.add(button).on_hover_text("Add contact").clicked() {
+                if ui.add(button).on_hover_text(t("contacts.add_contact_hover")).clicked() {
                     self.editing_contact_idx = None;
                     self.new_contact = Contact::default();
                     self.contact_dialog_open = true;
@@ -200,13 +201,13 @@ impl DeelipApp {
             ctx,
             self_app,
             "deelip_contact_dialog",
-            "DeeLip Contact",
+            format!("DeeLip {}", t("contacts.dialog_os_title")),
             [320.0, 300.0],
             [280.0, 260.0],
             false,
             |app| app.contact_dialog_open,
             |app| app.finish_contact_dialog(false, true),
-            |app| app.contact_dialog_title().to_string(),
+            |app| app.contact_dialog_title(),
             |app, ui| {
                 let (save_clicked, cancel_clicked) = app.show_contact_dialog_content(ui);
                 app.finish_contact_dialog(save_clicked, cancel_clicked);
@@ -214,11 +215,11 @@ impl DeelipApp {
         );
     }
 
-    fn contact_dialog_title(&self) -> &'static str {
+    fn contact_dialog_title(&self) -> String {
         if self.editing_contact_idx.is_some() {
-            "Edit Contact"
+            t("contacts.edit_contact_title")
         } else {
-            "Add Contact"
+            t("contacts.add_contact_title")
         }
     }
 
@@ -231,29 +232,29 @@ impl DeelipApp {
         let (mut save_clicked, mut cancel_clicked) = (false, false);
         let palette = self.palette;
         ui.horizontal(|ui| {
-            field_label(ui, &palette, "Name:");
+            field_label(ui, &palette, &t("contacts.name_label"));
             text_edit_scope(ui, &palette, |ui| {
                 ui.add(egui::TextEdit::singleline(&mut self.new_contact.name).desired_width(160.0))
             });
         });
         ui.add_space(4.0);
         ui.horizontal(|ui| {
-            field_label(ui, &palette, "Number:");
+            field_label(ui, &palette, &t("contacts.number_label"));
             text_edit_scope(ui, &palette, |ui| {
                 ui.add(
                     egui::TextEdit::singleline(&mut self.new_contact.sip_uri)
-                        .hint_text(RichText::new("e.g. 1234567").color(palette.ink_muted))
+                        .hint_text(RichText::new(t("common.number_hint")).color(palette.ink_muted))
                         .font(theme::font_address())
                         .desired_width(220.0),
                 )
             });
         });
         ui.add_space(6.0);
-        ui.checkbox(&mut self.new_contact.watch_presence, "Watch presence");
+        ui.checkbox(&mut self.new_contact.watch_presence, t("contacts.watch_presence"));
         if self.accounts.len() > 1 {
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                field_label(ui, &palette, "via:");
+                field_label(ui, &palette, &t("contacts.via_label"));
                 let (current_reg_ok, current_text) = match &self.new_contact.presence_account {
                     Some(username) => self
                         .accounts
@@ -264,7 +265,7 @@ impl DeelipApp {
                     None => self
                         .accounts
                         .first()
-                        .map(|a| (a.reg_ok, format!("{} (default)", a.label)))
+                        .map(|a| (a.reg_ok, tf("contacts.default_account_suffix", &[("label", &a.label)])))
                         .unwrap_or_default(),
                 };
                 let palette = self.palette;
@@ -290,10 +291,10 @@ impl DeelipApp {
         ui.horizontal(|ui| {
             let can_save =
                 !self.new_contact.name.is_empty() && !self.new_contact.sip_uri.is_empty();
-            if ui.add_enabled(can_save, egui::Button::new("Save")).clicked() {
+            if ui.add_enabled(can_save, egui::Button::new(t("common.save_button"))).clicked() {
                 save_clicked = true;
             }
-            if ui.button("Cancel").clicked() {
+            if ui.button(t("common.cancel_button")).clicked() {
                 cancel_clicked = true;
             }
         });
@@ -373,7 +374,7 @@ impl DeelipApp {
     /// list with no dedup, matching the manual Add-contact flow's behavior.
     pub(crate) fn import_contacts(&mut self) {
         let Some(path) = rfd::FileDialog::new()
-            .add_filter("Contacts", &["csv", "vcf"])
+            .add_filter(t("contacts.import_filter_name"), &["csv", "vcf"])
             .pick_file()
         else {
             return;

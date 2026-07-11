@@ -18,6 +18,7 @@ fn friendly_uri_handles_bare_no_host() {
 
 #[test]
 fn friendly_uri_anonymous_caller() {
+    crate::strings::init(deelip_config::Language::En);
     assert_eq!(
         friendly_uri("sip:anonymous@anonymous.invalid"),
         "Unknown caller"

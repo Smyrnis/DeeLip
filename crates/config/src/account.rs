@@ -584,6 +584,34 @@ fn recording_format_from_str(s: &str) -> RecordingFormat {
     }
 }
 
+// ── Language ───────────────────────────────────────────────────────────────────
+
+/// UI display language -- infrastructure for `deelip_ui::strings`' locale
+/// loading. English-only for now (see `ARCHITECTURE_GAPS.md` item 6): a
+/// single variant so the load/save plumbing and the `assets/locales/*.json`
+/// lookup path both exist and are exercised, without a second translated
+/// locale to maintain yet.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Language {
+    #[default]
+    En,
+}
+
+fn language_to_str(l: Language) -> &'static str {
+    match l {
+        Language::En => "en",
+    }
+}
+fn language_from_str(_s: &str) -> Language {
+    // Only one variant exists today -- see `Language`'s own doc comment.
+    // Kept as a real function (not a bare constant) matching every sibling
+    // `..._from_str` in this file, so adding a second locale later is a
+    // one-line match-arm change here, not a signature change at both of
+    // this function's call sites.
+    Language::En
+}
+
 // ── Audio config ──────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -830,6 +858,12 @@ pub struct AppConfig {
     /// see `DefaultListAction`. Applies immediately, no restart needed.
     #[serde(default)]
     pub default_list_action: DefaultListAction,
+    /// UI display language -- see `Language`. Read once at startup by
+    /// `deelip_ui::strings::init` to pick which `assets/locales/*.json` to
+    /// load, so changing it is restart-required like other startup-only
+    /// settings.
+    #[serde(default)]
+    pub language: Language,
     /// Show the main window at a randomized position on the current monitor
     /// each time it's raised for an incoming call, instead of wherever it
     /// last was -- see `deelip_ui::frame::sync_window_raise`. Off by
@@ -927,6 +961,7 @@ impl Default for AppConfig {
             update_check_frequency: UpdateCheckFrequency::default(),
             last_update_check: None,
             default_list_action: DefaultListAction::default(),
+            language: Language::default(),
             random_popup_position: false,
             zrtp_zid: None,
             ldap_server: None,
@@ -1072,6 +1107,7 @@ impl AppConfig {
                 .as_deref()
                 .map(default_list_action_from_str)
                 .unwrap_or_default(),
+            language: get("language").as_deref().map(language_from_str).unwrap_or_default(),
             random_popup_position: get_bool("random_popup_position", false),
             zrtp_zid: get("zrtp_zid"),
             ldap_server: get("ldap_server"),
@@ -1216,6 +1252,7 @@ impl AppConfig {
             "default_list_action",
             default_list_action_to_str(self.default_list_action),
         )?;
+        db.set_setting("language", language_to_str(self.language))?;
         db.set_setting(
             "random_popup_position",
             bool_to_sql(self.random_popup_position),

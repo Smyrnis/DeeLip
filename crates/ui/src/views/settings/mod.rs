@@ -21,6 +21,7 @@ use egui::{RichText, Ui};
 
 use crate::app::{DeelipApp, SettingsTab, SharedApp};
 use crate::helpers::{show_pop_out_window, text_edit_scope};
+use crate::strings::t;
 use crate::theme::Palette;
 
 /// Shared between `show_settings_modal` (which opens the viewport under
@@ -83,7 +84,7 @@ impl DeelipApp {
             ctx,
             self_app,
             SETTINGS_VIEWPORT_NAME,
-            "DeeLip Settings",
+            format!("DeeLip {}", t("settings.window_title")),
             // Sized so every tab except Account (which scrolls internally
             // -- see its own `SettingsTab::Account` match arm's comment)
             // fits without scrolling at all -- confirmed live via Xvfb
@@ -93,7 +94,7 @@ impl DeelipApp {
             true,
             |app| app.settings_open,
             |app| app.settings_open = false,
-            |_app| "Settings".to_string(),
+            |_app| t("settings.window_title"),
             |app, ui| {
                 ui.separator();
                 app.show_settings(ui);
@@ -121,14 +122,14 @@ impl DeelipApp {
         // `ScrollArea` stacking all 12 sections in one column.
         ui.add_space(6.0);
         ui.horizontal_wrapped(|ui| {
-            ui.selectable_value(&mut self.settings_tab, SettingsTab::General, "General");
-            ui.selectable_value(&mut self.settings_tab, SettingsTab::Account, "Account");
-            ui.selectable_value(&mut self.settings_tab, SettingsTab::Audio, "Audio");
-            ui.selectable_value(&mut self.settings_tab, SettingsTab::Video, "Video");
-            ui.selectable_value(&mut self.settings_tab, SettingsTab::Network, "Network");
-            ui.selectable_value(&mut self.settings_tab, SettingsTab::Directory, "Directory");
-            ui.selectable_value(&mut self.settings_tab, SettingsTab::Hotkeys, "Hotkeys");
-            ui.selectable_value(&mut self.settings_tab, SettingsTab::Advanced, "Advanced");
+            ui.selectable_value(&mut self.settings_tab, SettingsTab::General, t("settings.tab_general"));
+            ui.selectable_value(&mut self.settings_tab, SettingsTab::Account, t("settings.tab_account"));
+            ui.selectable_value(&mut self.settings_tab, SettingsTab::Audio, t("settings.tab_audio"));
+            ui.selectable_value(&mut self.settings_tab, SettingsTab::Video, t("settings.tab_video"));
+            ui.selectable_value(&mut self.settings_tab, SettingsTab::Network, t("settings.tab_network"));
+            ui.selectable_value(&mut self.settings_tab, SettingsTab::Directory, t("settings.tab_directory"));
+            ui.selectable_value(&mut self.settings_tab, SettingsTab::Hotkeys, t("settings.tab_hotkeys"));
+            ui.selectable_value(&mut self.settings_tab, SettingsTab::Advanced, t("settings.tab_advanced"));
         });
         ui.separator();
         ui.add_space(6.0);
@@ -144,7 +145,7 @@ impl DeelipApp {
         // excludes this panel's own height.
         egui::TopBottomPanel::bottom("settings_save_panel").show_inside(ui, |ui| {
             ui.add_space(8.0);
-            if ui.button("Save").clicked() {
+            if ui.button(t("common.save_button")).clicked() {
                 match self.config.save(&self.db) {
                     Ok(()) => self.settings_saved_notice = true,
                     Err(err) => {
@@ -155,7 +156,7 @@ impl DeelipApp {
             }
             if self.settings_saved_notice {
                 ui.label(
-                    RichText::new("Saved — restart DeeLip to apply changes.").color(palette.signal),
+                    RichText::new(t("settings.saved_restart_notice")).color(palette.signal),
                 );
             }
             ui.add_space(4.0);

@@ -6,6 +6,7 @@ use crate::helpers::{
     avatar, empty_state, format_timestamp, list_row_divider, resolve_caller, text_edit_scope,
     unix_now, window_icon,
 };
+use crate::strings::t;
 
 impl DeelipApp {
     /// Messages as a separate native OS window, same `Deferred`-viewport
@@ -42,7 +43,7 @@ impl DeelipApp {
         if ctx.embed_viewports() {
             let peers = self.message_peers();
             let mut open = true;
-            egui::Window::new("Messages")
+            egui::Window::new(t("messages.title"))
                 .id(egui::Id::new("messages_window_fallback"))
                 .open(&mut open)
                 .collapsible(false)
@@ -68,7 +69,7 @@ impl DeelipApp {
         ctx.show_viewport_deferred(
             viewport_id,
             egui::ViewportBuilder::default()
-                .with_title("DeeLip Messages")
+                .with_title(format!("DeeLip {}", t("messages.title")))
                 .with_inner_size([640.0, 520.0])
                 .with_min_inner_size([480.0, 360.0])
                 .with_icon(window_icon()),
@@ -85,7 +86,7 @@ impl DeelipApp {
 
                 egui::TopBottomPanel::top("messages_window_titlebar").show(child_ctx, |ui| {
                     ui.add_space(4.0);
-                    ui.label(RichText::new("Messages").font(crate::theme::font_heading(16.0)));
+                    ui.label(RichText::new(t("messages.title")).font(crate::theme::font_heading(16.0)));
                     ui.add_space(4.0);
                 });
 
@@ -126,7 +127,7 @@ impl DeelipApp {
     fn show_messages_peer_list(&mut self, ui: &mut Ui, peers: &[String]) {
         let palette = self.palette;
         if peers.is_empty() {
-            empty_state(ui, &palette, "No conversations yet.");
+            empty_state(ui, &palette, &t("messages.no_conversations"));
             return;
         }
         egui::ScrollArea::vertical()
@@ -172,7 +173,7 @@ impl DeelipApp {
     /// height or thread length.
     fn show_messages_thread_and_compose(&mut self, ui: &mut Ui) {
         let Some(peer) = self.messages_window_peer.clone() else {
-            empty_state(ui, &self.palette, "Select a conversation");
+            empty_state(ui, &self.palette, &t("messages.select_conversation"));
             return;
         };
 
@@ -190,7 +191,7 @@ impl DeelipApp {
             text_edit_scope(ui, &palette, |ui| ui.add(
                 egui::TextEdit::multiline(&mut self.message_body)
                     .desired_rows(3)
-                    .hint_text(RichText::new("Message text").color(palette.ink_muted))
+                    .hint_text(RichText::new(t("messages.compose_hint")).color(palette.ink_muted))
                     .desired_width(f32::INFINITY),
             ));
             ui.add_space(4.0);
@@ -198,7 +199,7 @@ impl DeelipApp {
                 && self.reg_ok
                 && self.selected_account_idx().is_some();
             if ui
-                .add_enabled(can_send, egui::Button::new("Send"))
+                .add_enabled(can_send, egui::Button::new(t("common.send_button")))
                 .clicked()
             {
                 self.do_send_message(peer.clone());

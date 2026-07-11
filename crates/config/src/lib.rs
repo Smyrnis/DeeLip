@@ -11,8 +11,8 @@ mod history;
 mod messages;
 
 pub use account::{
-    AppConfig, AudioConfig, DefaultListAction, DtmfMode, MediaEncryption, RecordingFormat,
-    SipAccount, TransportProtocol, UpdateCheckFrequency,
+    AppConfig, AudioConfig, DefaultListAction, DtmfMode, Language, MediaEncryption,
+    RecordingFormat, SipAccount, TransportProtocol, UpdateCheckFrequency,
 };
 pub use autostart::{is_autostart_enabled, set_autostart};
 pub use contacts::{Contact, ContactBook};

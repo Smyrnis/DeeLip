@@ -1,6 +1,7 @@
 use deelip_config::{CallStatus, ContactBook, SipAccount};
 use deelip_sip::AudioCodec;
 
+use crate::strings::t;
 use crate::theme::Palette;
 
 /// Display label for an account picker — `display_name` if set, else `user@server`.
@@ -16,25 +17,40 @@ pub(crate) fn account_label(account: &SipAccount) -> String {
     }
 }
 
-/// Short display label for a `CallStatus` -- single source of truth for the
-/// History status filter dropdown and CSV export's status column (as
-/// `.to_lowercase()`). History's own per-row label is the one exception:
-/// it shows the call duration instead of the word "Answered" (a `CallRecord`
-/// field this function doesn't have access to), so that one call site
-/// special-cases `Answered` itself rather than using this label directly --
-/// see its own comment.
-pub(crate) fn call_status_label(status: &CallStatus) -> &'static str {
+/// Localized display label for a `CallStatus` -- single source of truth for
+/// the History status filter dropdown and its per-row label. History's own
+/// per-row label is the one exception: it shows the call duration instead
+/// of the word "Answered" (a `CallRecord` field this function doesn't have
+/// access to), so that one call site special-cases `Answered` itself
+/// rather than using this label directly -- see its own comment. For CSV
+/// export's status column, use `call_status_csv_label` instead -- a
+/// machine-readable value should stay a fixed English word regardless of
+/// the UI's current language, the same reasoning that keeps file
+/// extensions/format names (`"csv"`, `"wav"`) untranslated elsewhere.
+pub(crate) fn call_status_label(status: &CallStatus) -> String {
     match status {
-        CallStatus::Answered => "Answered",
-        CallStatus::Missed => "Missed",
-        CallStatus::Rejected => "Rejected",
-        CallStatus::Failed => "Failed",
+        CallStatus::Answered => crate::strings::t("history.status_answered"),
+        CallStatus::Missed => crate::strings::t("history.status_missed"),
+        CallStatus::Rejected => crate::strings::t("history.status_rejected"),
+        CallStatus::Failed => crate::strings::t("history.status_failed"),
     }
 }
 
-pub(crate) fn status_filter_label(filter: &Option<CallStatus>) -> &'static str {
+/// Fixed (non-localized) lowercase status word for CSV export -- see
+/// `call_status_label`'s own doc comment for why this is kept separate
+/// from the localized display label.
+pub(crate) fn call_status_csv_label(status: &CallStatus) -> &'static str {
+    match status {
+        CallStatus::Answered => "answered",
+        CallStatus::Missed => "missed",
+        CallStatus::Rejected => "rejected",
+        CallStatus::Failed => "failed",
+    }
+}
+
+pub(crate) fn status_filter_label(filter: &Option<CallStatus>) -> String {
     match filter {
-        None => "All",
+        None => crate::strings::t("history.status_all"),
         Some(status) => call_status_label(status),
     }
 }
@@ -92,7 +108,7 @@ pub(crate) fn friendly_uri(uri: &str) -> String {
             .nth(1)
             .is_some_and(|host| host.eq_ignore_ascii_case("anonymous.invalid"))
     {
-        "Unknown caller".to_string()
+        t("common.unknown_caller")
     } else {
         user.to_string()
     }

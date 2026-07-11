@@ -3,47 +3,48 @@ use egui::{RichText, Ui};
 
 use crate::app::DeelipApp;
 use crate::helpers::{
-    call_status_icon_color, call_status_label, csv_escape, double_clickable_label, empty_state,
-    extract_user_part, format_duration, format_timestamp, list_row_menu, resolve_caller,
-    search_field, status_filter_label,
+    call_status_csv_label, call_status_icon_color, call_status_label, csv_escape,
+    double_clickable_label, empty_state, extract_user_part, format_duration, format_timestamp,
+    list_row_menu, resolve_caller, search_field, status_filter_label,
 };
+use crate::strings::t;
 
 impl DeelipApp {
     pub(crate) fn show_history(&mut self, ui: &mut Ui, _ctx: &egui::Context) {
         ui.add_space(8.0);
         if self.history.records.is_empty() {
-            empty_state(ui, &self.palette, "No call history yet.");
+            empty_state(ui, &self.palette, &t("history.no_history"));
             return;
         }
 
         // ── Search / filter / export bar ─────────────────────────────────────
         let palette = self.palette;
         ui.horizontal(|ui| {
-            search_field(ui, &palette, &mut self.history_search, "name or number", 140.0);
-            ui.label("Status:");
+            search_field(ui, &palette, &mut self.history_search, &t("common.search_hint_name_or_number"), 140.0);
+            ui.label(t("history.status_label"));
             egui::ComboBox::from_id_source("history_status_filter")
                 .selected_text(status_filter_label(&self.history_status_filter))
                 .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut self.history_status_filter, None, "All");
+                    ui.selectable_value(&mut self.history_status_filter, None, t("history.status_all"));
                     ui.selectable_value(
                         &mut self.history_status_filter,
                         Some(CallStatus::Answered),
-                        "Answered",
+                        call_status_label(&CallStatus::Answered),
                     );
                     ui.selectable_value(
                         &mut self.history_status_filter,
                         Some(CallStatus::Missed),
-                        "Missed",
+                        call_status_label(&CallStatus::Missed),
                     );
                     ui.selectable_value(
                         &mut self.history_status_filter,
                         Some(CallStatus::Rejected),
-                        "Rejected",
+                        call_status_label(&CallStatus::Rejected),
                     );
                     ui.selectable_value(
                         &mut self.history_status_filter,
                         Some(CallStatus::Failed),
-                        "Failed",
+                        call_status_label(&CallStatus::Failed),
                     );
                 });
         });
@@ -88,7 +89,7 @@ impl DeelipApp {
         let mut add_contact_target: Option<(String, String)> = None;
 
         if self.history_filtered.is_empty() {
-            empty_state(ui, &self.palette, "No matching calls.");
+            empty_state(ui, &self.palette, &t("history.no_matching_calls"));
         } else {
             // `show_rows` only lays out the rows actually scrolled into view
             // instead of all of them every frame -- with up to 200 records
@@ -133,7 +134,7 @@ impl DeelipApp {
                         let status_str = if record.status == CallStatus::Answered {
                             format_duration(record.duration_secs)
                         } else {
-                            call_status_label(&record.status).to_string()
+                            call_status_label(&record.status)
                         };
                         let (display_name, is_name) =
                             resolve_caller(&self.contacts, &record.remote_uri);
@@ -180,19 +181,19 @@ impl DeelipApp {
                                 );
                             },
                             |ui| {
-                                if ui.button("Call").clicked() {
+                                if ui.button(t("common.call_button")).clicked() {
                                     call_target = Some(remote_uri.clone());
                                     ui.close_menu();
                                 }
-                                if ui.button("Message").clicked() {
+                                if ui.button(t("common.message_button")).clicked() {
                                     message_target = Some(remote_uri.clone());
                                     ui.close_menu();
                                 }
-                                if ui.button("Copy").clicked() {
+                                if ui.button(t("common.copy_button")).clicked() {
                                     copy_target = Some(remote_uri.clone());
                                     ui.close_menu();
                                 }
-                                if ui.button("Block").clicked() {
+                                if ui.button(t("history.block_button")).clicked() {
                                     block_target = Some(remote_uri.clone());
                                     ui.close_menu();
                                 }
@@ -201,9 +202,9 @@ impl DeelipApp {
                                 if ui
                                     .add_enabled(
                                         !already_contact,
-                                        egui::Button::new("Add to Contacts"),
+                                        egui::Button::new(t("directory.add_to_contacts")),
                                     )
-                                    .on_disabled_hover_text("Already in Contacts")
+                                    .on_disabled_hover_text(t("history.already_in_contacts"))
                                     .clicked()
                                 {
                                     add_contact_target =
@@ -212,7 +213,7 @@ impl DeelipApp {
                                 }
                                 ui.separator();
                                 if ui
-                                    .button(RichText::new("Delete").color(palette.danger))
+                                    .button(RichText::new(t("common.delete_button")).color(palette.danger))
                                     .clicked()
                                 {
                                     delete_idx = Some(real_idx);
@@ -294,7 +295,7 @@ impl DeelipApp {
                 CallDirection::Inbound => "inbound",
                 CallDirection::Outbound => "outbound",
             };
-            let status = call_status_label(&r.status).to_lowercase();
+            let status = call_status_csv_label(&r.status);
             csv.push_str(&format!(
                 "{},{},{},{},{}\n",
                 r.timestamp,

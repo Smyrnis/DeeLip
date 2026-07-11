@@ -9,6 +9,7 @@ use egui::{RichText, Ui};
 
 use crate::app::DeelipApp;
 use crate::helpers::{empty_state, list_row, search_field};
+use crate::strings::{t, tf};
 
 /// One directory search result -- just enough to call/message/save it.
 pub(crate) struct DirectoryEntry {
@@ -219,20 +220,16 @@ impl DeelipApp {
             .filter(|s| !s.trim().is_empty())
             .is_none()
         {
-            empty_state(
-                ui,
-                &self.palette,
-                "Configure an LDAP server in Settings to use the Directory.",
-            );
+            empty_state(ui, &self.palette, &t("directory.configure_ldap"));
             return;
         }
 
         let palette = self.palette;
         ui.horizontal(|ui| {
-            let resp = search_field(ui, &palette, &mut self.directory_query, "name, phone, or email", 200.0);
+            let resp = search_field(ui, &palette, &mut self.directory_query, &t("directory.search_hint"), 200.0);
             let enter_pressed =
                 resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            let search_clicked = ui.button("Search").clicked();
+            let search_clicked = ui.button(t("directory.search_button")).clicked();
             if search_clicked || enter_pressed {
                 self.start_directory_search();
             }
@@ -245,20 +242,23 @@ impl DeelipApp {
 
         match &self.directory_state {
             DirectoryState::Idle => {
-                empty_state(ui, &self.palette, "Search the directory above.");
+                empty_state(ui, &self.palette, &t("directory.search_above"));
             }
             DirectoryState::Searching => {
                 ui.horizontal(|ui| {
                     ui.spinner();
-                    ui.label("Searching…");
+                    ui.label(t("directory.searching"));
                 });
             }
             DirectoryState::Failed(reason) => {
-                ui.colored_label(self.palette.danger, format!("Search failed: {reason}"));
+                ui.colored_label(
+                    self.palette.danger,
+                    tf("directory.search_failed", &[("reason", reason)]),
+                );
             }
             DirectoryState::Results(entries) => {
                 if entries.is_empty() {
-                    empty_state(ui, &self.palette, "No matches.");
+                    empty_state(ui, &self.palette, &t("directory.no_matches"));
                 }
                 egui::ScrollArea::vertical()
                     .max_height(300.0)
@@ -284,7 +284,7 @@ impl DeelipApp {
                                         }
                                         if ui
                                             .small_button(egui_phosphor::regular::USER_PLUS)
-                                            .on_hover_text("Add to Contacts")
+                                            .on_hover_text(t("directory.add_to_contacts"))
                                             .clicked()
                                         {
                                             add_contact =

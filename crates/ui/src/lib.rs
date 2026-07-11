@@ -5,6 +5,7 @@ mod frame;
 mod helpers;
 mod media;
 mod platform;
+mod strings;
 mod theme;
 mod update;
 mod views;

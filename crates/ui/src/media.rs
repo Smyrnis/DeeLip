@@ -9,6 +9,7 @@ use deelip_sip::zrtp::Role;
 use deelip_sip::VideoMediaReady;
 
 use crate::app::{DeelipApp, VideoCallState};
+use crate::strings::t;
 
 /// Hardcoded video call parameters -- SDP negotiates codec/SRTP/ICE only,
 /// never resolution/framerate/bitrate; no per-account Settings surface for
@@ -236,7 +237,7 @@ impl DeelipApp {
                 self.calls[1].is_held = false;
                 self.in_conference = true;
                 self.attended_transfer_original = None;
-                self.status_line = "In conference".into();
+                self.status_line = t("status.in_conference_line");
             }
             Err(e) => tracing::error!("Conference MediaEngine failed: {e}"),
         }

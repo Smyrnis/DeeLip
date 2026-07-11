@@ -2,6 +2,7 @@ use egui::{RichText, Ui};
 
 use crate::app::DeelipApp;
 use crate::helpers::{device_picker, empty_state, info_hint};
+use crate::strings::t;
 use crate::theme::{self, Palette};
 
 use super::SETTINGS_VIEWPORT_NAME;
@@ -29,7 +30,7 @@ impl DeelipApp {
     /// Restart required -- returns whether anything changed.
     pub(super) fn show_video_section(&mut self, ui: &mut Ui, palette: &Palette) -> bool {
         let mut edited = false;
-        ui.label(RichText::new("Video").font(theme::font_heading(13.5)));
+        ui.label(RichText::new(t("settings.tab_video")).font(theme::font_heading(13.5)));
         theme::full_width_card(ui, *palette, |ui| {
             if let Some(rx) = &self.camera_device_rx {
                 if let Ok(result) = rx.try_recv() {
@@ -43,23 +44,20 @@ impl DeelipApp {
             let cameras = self.camera_device_cache.clone().unwrap_or_default();
 
             ui.horizontal(|ui| {
-                if ui.button("Refresh camera list").clicked() {
+                if ui.button(t("settings.video.refresh_cameras_button")).clicked() {
                     self.spawn_camera_device_scan();
                 }
                 if self.camera_device_rx.is_some() {
-                    ui.label(RichText::new("Scanning…").color(palette.ink_muted).small());
+                    ui.label(RichText::new(t("settings.audio.scanning")).color(palette.ink_muted).small());
                 }
             });
 
             ui.horizontal(|ui| {
-                edited |= device_picker(ui, "settings_camera_device", "Camera:", &mut self.config.audio.camera_device, &cameras);
-                info_hint(ui, palette, "Only affects outgoing video -- receiving and displaying \
-                    the other party's video works with no camera at all. Has no effect unless \
-                    Enable video (H.264) is also on for the account placing/answering the call.");
+                edited |= device_picker(ui, "settings_camera_device", &t("settings.video.camera_label"), &mut self.config.audio.camera_device, &cameras);
+                info_hint(ui, palette, &t("settings.video.camera_hint"));
             });
             if cameras.is_empty() {
-                empty_state(ui, palette, "No cameras detected -- video calls will still \
-                    receive and display the other party's video without one.");
+                empty_state(ui, palette, &t("settings.video.no_cameras"));
             }
         });
         edited

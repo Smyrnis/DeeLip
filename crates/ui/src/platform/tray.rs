@@ -35,6 +35,8 @@ use tokio::sync::mpsc::UnboundedSender;
 use tray_icon::menu::{Menu, MenuId, MenuItem};
 use tray_icon::{Icon, TrayIconBuilder};
 
+use crate::strings::{t, tf};
+
 const ICON_BYTES: &[u8] = include_bytes!("../../../../assets/Deelip-tray.png");
 
 /// Sends an updated missed-call/unread count to the tray icon's badge —
@@ -173,8 +175,8 @@ pub fn spawn_tray_icon() -> anyhow::Result<(TrayMenuIds, BadgeSender)> {
             }
         };
 
-        let show_item = MenuItem::new("Show DeeLip", true, None);
-        let quit_item = MenuItem::new("Quit", true, None);
+        let show_item = MenuItem::new(t("tray.show_item"), true, None);
+        let quit_item = MenuItem::new(t("tray.quit_item"), true, None);
         let _ = ids_tx.send(TrayMenuIds {
             show: show_item.id().clone(),
             quit: quit_item.id().clone(),
@@ -209,12 +211,14 @@ pub fn spawn_tray_icon() -> anyhow::Result<(TrayMenuIds, BadgeSender)> {
                         tracing::warn!("Tray: failed to update badge icon: {e}");
                     }
                     let tooltip = if count > 0 {
-                        format!(
-                            "DeeLip — {count} missed call{}",
-                            if count == 1 { "" } else { "s" }
-                        )
+                        // Pluralization rules are out of scope for now (see
+                        // `ARCHITECTURE_GAPS.md` item 6) -- the English
+                        // singular/plural branch stays in Rust, with each
+                        // branch's fixed text as its own locale key.
+                        let key = if count == 1 { "tray.tooltip_missed_singular" } else { "tray.tooltip_missed_plural" };
+                        tf(key, &[("count", &count.to_string())])
                     } else {
-                        "DeeLip".to_string()
+                        t("tray.tooltip_default")
                     };
                     if let Err(e) = tray.borrow().set_tooltip(Some(&tooltip)) {
                         tracing::warn!("Tray: failed to update tooltip: {e}");

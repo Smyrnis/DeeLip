@@ -6,6 +6,7 @@ use crate::app::{DeelipApp, SharedApp};
 use crate::platform::hotkeys::HotkeyAction;
 use crate::platform::notify;
 use crate::platform::ringtone::{RingKind, Ringtone};
+use crate::strings::{t, tf};
 use crate::theme;
 
 /// Random-position counterpart to `egui::ViewportCommand::center_on_screen`
@@ -299,14 +300,15 @@ impl DeelipApp {
                 self.unseen_missed_calls,
                 if self.unseen_missed_calls > 0 {
                     format!(
-                        "{}  History ({})",
+                        "{}  {}",
                         egui_phosphor::regular::CLOCK_COUNTER_CLOCKWISE,
-                        self.unseen_missed_calls
+                        tf("nav.history_tab_with_count", &[("count", &self.unseen_missed_calls.to_string())])
                     )
                 } else {
                     format!(
-                        "{}  History",
-                        egui_phosphor::regular::CLOCK_COUNTER_CLOCKWISE
+                        "{}  {}",
+                        egui_phosphor::regular::CLOCK_COUNTER_CLOCKWISE,
+                        t("nav.history_tab")
                     )
                 },
             );
@@ -316,7 +318,7 @@ impl DeelipApp {
                 ui.selectable_value(
                     &mut self.tab,
                     crate::app::Tab::Dialer,
-                    format!("{}  Dialer", egui_phosphor::regular::PHONE),
+                    format!("{}  {}", egui_phosphor::regular::PHONE, t("nav.dialer_tab")),
                 );
                 ui.selectable_value(
                     &mut self.tab,
@@ -326,12 +328,12 @@ impl DeelipApp {
                 ui.selectable_value(
                     &mut self.tab,
                     crate::app::Tab::Contacts,
-                    format!("{}  Contacts", egui_phosphor::regular::ADDRESS_BOOK),
+                    format!("{}  {}", egui_phosphor::regular::ADDRESS_BOOK, t("nav.contacts_tab")),
                 );
                 ui.selectable_value(
                     &mut self.tab,
                     crate::app::Tab::Directory,
-                    format!("{}  Directory", egui_phosphor::regular::BUILDINGS),
+                    format!("{}  {}", egui_phosphor::regular::BUILDINGS, t("nav.directory_tab")),
                 );
                 // Settings lives in its own modal dialog (MicroSIP-style),
                 // not a tab -- opened via this gear button, right-aligned
@@ -341,7 +343,7 @@ impl DeelipApp {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui
                         .button(egui_phosphor::regular::GEAR)
-                        .on_hover_text("Settings")
+                        .on_hover_text(t("settings.window_title"))
                         .clicked()
                     {
                         self.settings_open = true;
@@ -395,9 +397,9 @@ impl DeelipApp {
                         if ui
                             .small_button(egui::RichText::new(icon).color(color))
                             .on_hover_text(if dnd {
-                                "DND on -- click to disable"
+                                t("nav.dnd_on_hover")
                             } else {
-                                "DND off -- click to enable"
+                                t("nav.dnd_off_hover")
                             })
                             .clicked()
                         {
