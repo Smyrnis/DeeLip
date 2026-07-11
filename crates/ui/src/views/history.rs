@@ -3,8 +3,9 @@ use egui::{RichText, Ui};
 
 use crate::app::DeelipApp;
 use crate::helpers::{
-    csv_escape, double_clickable_label, empty_state, extract_user_part, format_duration,
-    format_timestamp, list_row_menu, resolve_caller, status_filter_label, text_edit_scope,
+    call_status_icon_color, call_status_label, csv_escape, double_clickable_label, empty_state,
+    extract_user_part, format_duration, format_timestamp, list_row_menu, resolve_caller,
+    search_field, status_filter_label,
 };
 
 impl DeelipApp {
@@ -18,12 +19,7 @@ impl DeelipApp {
         // ── Search / filter / export bar ─────────────────────────────────────
         let palette = self.palette;
         ui.horizontal(|ui| {
-            ui.label("Search:");
-            text_edit_scope(ui, &palette, |ui| ui.add(
-                egui::TextEdit::singleline(&mut self.history_search)
-                    .desired_width(140.0)
-                    .hint_text(RichText::new("name or number").color(palette.ink_muted)),
-            ));
+            search_field(ui, &palette, &mut self.history_search, "name or number", 140.0);
             ui.label("Status:");
             egui::ComboBox::from_id_source("history_status_filter")
                 .selected_text(status_filter_label(&self.history_status_filter))
@@ -128,25 +124,16 @@ impl DeelipApp {
                                 (egui_phosphor::regular::PHONE_OUTGOING, self.palette.signal)
                             }
                         };
-                        let (status_icon, status_color) = match record.status {
-                            CallStatus::Answered => {
-                                (egui_phosphor::regular::CHECK_CIRCLE, self.palette.signal)
-                            }
-                            CallStatus::Missed => {
-                                (egui_phosphor::regular::PHONE_X, self.palette.ringing)
-                            }
-                            CallStatus::Rejected => {
-                                (egui_phosphor::regular::X_CIRCLE, self.palette.danger)
-                            }
-                            CallStatus::Failed => {
-                                (egui_phosphor::regular::WARNING_CIRCLE, self.palette.danger)
-                            }
-                        };
-                        let status_str = match record.status {
-                            CallStatus::Answered => format_duration(record.duration_secs),
-                            CallStatus::Missed => "Missed".into(),
-                            CallStatus::Rejected => "Rejected".into(),
-                            CallStatus::Failed => "Failed".into(),
+                        let (status_icon, status_color) =
+                            call_status_icon_color(&record.status, &self.palette);
+                        // `Answered` shows the call duration instead of the
+                        // word "Answered" -- see `call_status_label`'s own
+                        // doc comment for why that one case is special-cased
+                        // here rather than folded into the shared helper.
+                        let status_str = if record.status == CallStatus::Answered {
+                            format_duration(record.duration_secs)
+                        } else {
+                            call_status_label(&record.status).to_string()
                         };
                         let (display_name, is_name) =
                             resolve_caller(&self.contacts, &record.remote_uri);
@@ -307,12 +294,7 @@ impl DeelipApp {
                 CallDirection::Inbound => "inbound",
                 CallDirection::Outbound => "outbound",
             };
-            let status = match r.status {
-                CallStatus::Answered => "answered",
-                CallStatus::Missed => "missed",
-                CallStatus::Rejected => "rejected",
-                CallStatus::Failed => "failed",
-            };
+            let status = call_status_label(&r.status).to_lowercase();
             csv.push_str(&format!(
                 "{},{},{},{},{}\n",
                 r.timestamp,

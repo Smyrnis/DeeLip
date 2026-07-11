@@ -8,7 +8,7 @@ use anyhow::Context as _;
 use egui::{RichText, Ui};
 
 use crate::app::DeelipApp;
-use crate::helpers::{empty_state, list_row, text_edit_scope};
+use crate::helpers::{empty_state, list_row, search_field};
 
 /// One directory search result -- just enough to call/message/save it.
 pub(crate) struct DirectoryEntry {
@@ -229,12 +229,7 @@ impl DeelipApp {
 
         let palette = self.palette;
         ui.horizontal(|ui| {
-            ui.label("Search:");
-            let resp = text_edit_scope(ui, &palette, |ui| ui.add(
-                egui::TextEdit::singleline(&mut self.directory_query)
-                    .desired_width(200.0)
-                    .hint_text(RichText::new("name, phone, or email").color(palette.ink_muted)),
-            ));
+            let resp = search_field(ui, &palette, &mut self.directory_query, "name, phone, or email", 200.0);
             let enter_pressed =
                 resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             let search_clicked = ui.button("Search").clicked();

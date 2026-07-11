@@ -2,7 +2,7 @@ use egui::{RichText, Ui};
 
 use crate::app::{DeelipApp, SharedApp};
 use crate::helpers::{phone_keypad, show_pop_out_window, text_edit_scope};
-use crate::theme::Palette;
+use crate::theme::{self, Palette};
 
 impl DeelipApp {
     /// Transfer/Attended as a real separate OS window, same `Deferred`-
@@ -106,7 +106,7 @@ fn transfer_target_editor(ui: &mut Ui, palette: Palette, target: &mut String) {
         ui.add(
             egui::TextEdit::singleline(target)
                 .hint_text(RichText::new("e.g. 1234567").color(palette.ink_muted))
-                .font(egui::FontId::new(13.0, egui::FontFamily::Monospace))
+                .font(theme::font_address())
                 .desired_width(f32::INFINITY),
         )
     });

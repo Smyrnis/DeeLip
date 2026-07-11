@@ -1,6 +1,6 @@
-/// G.711 μ-law (PCMU, payload type 0) and A-law (PCMA, payload type 8).
-/// Both operate at 8000 Hz, 1 byte per sample.
-/// Reference: ITU-T G.711, Sun Microsystems / FreeSWITCH implementation.
+//! G.711 μ-law (PCMU, payload type 0) and A-law (PCMA, payload type 8).
+//! Both operate at 8000 Hz, 1 byte per sample.
+//! Reference: ITU-T G.711, Sun Microsystems / FreeSWITCH implementation.
 
 // ── PCMU (μ-law) ──────────────────────────────────────────────────────────────
 

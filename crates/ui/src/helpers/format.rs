@@ -1,6 +1,8 @@
 use deelip_config::{CallStatus, ContactBook, SipAccount};
 use deelip_sip::AudioCodec;
 
+use crate::theme::Palette;
+
 /// Display label for an account picker — `display_name` if set, else `user@server`.
 pub(crate) fn account_label(account: &SipAccount) -> String {
     match account
@@ -14,13 +16,40 @@ pub(crate) fn account_label(account: &SipAccount) -> String {
     }
 }
 
+/// Short display label for a `CallStatus` -- single source of truth for the
+/// History status filter dropdown and CSV export's status column (as
+/// `.to_lowercase()`). History's own per-row label is the one exception:
+/// it shows the call duration instead of the word "Answered" (a `CallRecord`
+/// field this function doesn't have access to), so that one call site
+/// special-cases `Answered` itself rather than using this label directly --
+/// see its own comment.
+pub(crate) fn call_status_label(status: &CallStatus) -> &'static str {
+    match status {
+        CallStatus::Answered => "Answered",
+        CallStatus::Missed => "Missed",
+        CallStatus::Rejected => "Rejected",
+        CallStatus::Failed => "Failed",
+    }
+}
+
 pub(crate) fn status_filter_label(filter: &Option<CallStatus>) -> &'static str {
     match filter {
         None => "All",
-        Some(CallStatus::Answered) => "Answered",
-        Some(CallStatus::Missed) => "Missed",
-        Some(CallStatus::Rejected) => "Rejected",
-        Some(CallStatus::Failed) => "Failed",
+        Some(status) => call_status_label(status),
+    }
+}
+
+/// Icon + palette color for a `CallStatus` -- History's per-row status
+/// glyph, the other half of the icon/color/label triad that used to be
+/// three independently-maintained match arms (this one, plus the label
+/// above, replace what was previously duplicated across
+/// `helpers/format.rs` and two separate spots in `views/history.rs`).
+pub(crate) fn call_status_icon_color(status: &CallStatus, palette: &Palette) -> (&'static str, egui::Color32) {
+    match status {
+        CallStatus::Answered => (egui_phosphor::regular::CHECK_CIRCLE, palette.signal),
+        CallStatus::Missed => (egui_phosphor::regular::PHONE_X, palette.ringing),
+        CallStatus::Rejected => (egui_phosphor::regular::X_CIRCLE, palette.danger),
+        CallStatus::Failed => (egui_phosphor::regular::WARNING_CIRCLE, palette.danger),
     }
 }
 

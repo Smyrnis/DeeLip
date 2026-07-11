@@ -202,6 +202,29 @@ pub(crate) fn field_label(ui: &mut Ui, palette: &Palette, text: &str) {
     ui.label(RichText::new(text).color(palette.ink_muted));
 }
 
+/// A "Search:" label + single-line text field with a muted hint -- the
+/// near-identical search bar Contacts/History/Directory each hand-rolled
+/// (only the hint text and field width differed). Returns the field's own
+/// `Response` so a caller that needs Enter-to-search (Directory, which
+/// searches on demand rather than filtering live) can still wire that up
+/// itself; Contacts/History filter on every keystroke and just ignore it.
+pub(crate) fn search_field(
+    ui: &mut Ui,
+    palette: &Palette,
+    text: &mut String,
+    hint: &str,
+    width: f32,
+) -> egui::Response {
+    ui.label("Search:");
+    text_edit_scope(ui, palette, |ui| {
+        ui.add(
+            egui::TextEdit::singleline(text)
+                .desired_width(width)
+                .hint_text(RichText::new(hint).color(palette.ink_muted)),
+        )
+    })
+}
+
 /// A small "(i)" marker that reveals `text` as a tooltip on hover --
 /// Settings' replacement for always-visible small-gray-text footnotes
 /// ("Applies immediately -- no restart needed.", etc.), so each

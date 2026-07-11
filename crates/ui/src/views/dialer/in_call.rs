@@ -232,10 +232,7 @@ impl DeelipApp {
                         if is_name {
                             ui.label(RichText::new(&name).font(theme::font_medium(14.0)));
                         } else {
-                            ui.label(
-                                RichText::new(&name)
-                                    .font(egui::FontId::new(13.0, egui::FontFamily::Monospace)),
-                            );
+                            ui.label(RichText::new(&name).font(theme::font_address()));
                         }
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             let hang_up = format!("{}  Hang Up", egui_phosphor::regular::PHONE_X);

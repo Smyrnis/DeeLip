@@ -1,5 +1,5 @@
-/// Minimal RTP packet implementation (RFC 3550).
-/// Handles fixed 12-byte header; no CSRC, no extension.
+//! Minimal RTP packet implementation (RFC 3550).
+//! Handles fixed 12-byte header; no CSRC, no extension.
 
 pub const RTP_VERSION: u8 = 2;
 pub const RTP_HEADER_SIZE: usize = 12;

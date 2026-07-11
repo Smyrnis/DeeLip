@@ -4,9 +4,10 @@ use egui::{RichText, Ui};
 
 use crate::app::{DeelipApp, SharedApp};
 use crate::helpers::{
-    account_status_label, avatar, double_clickable_label, empty_state, list_row_menu,
-    save_text_file, show_pop_out_window, text_edit_scope,
+    account_status_label, avatar, double_clickable_label, empty_state, field_label, list_row_menu,
+    save_text_file, search_field, show_pop_out_window, text_edit_scope,
 };
+use crate::theme;
 
 impl DeelipApp {
     pub(crate) fn show_contacts(&mut self, ui: &mut Ui, _ctx: &egui::Context) {
@@ -15,12 +16,7 @@ impl DeelipApp {
         // Search bar -- import/export moved to Settings' Advanced tab.
         let palette = self.palette;
         ui.horizontal(|ui| {
-            ui.label("Search:");
-            text_edit_scope(ui, &palette, |ui| ui.add(
-                egui::TextEdit::singleline(&mut self.contact_search)
-                    .desired_width(200.0)
-                    .hint_text(RichText::new("name or number").color(palette.ink_muted)),
-            ));
+            search_field(ui, &palette, &mut self.contact_search, "name or number", 200.0);
         });
         ui.add_space(4.0);
 
@@ -55,7 +51,7 @@ impl DeelipApp {
                             avatar(ui, name, uri);
                             ui.add_space(6.0);
                             let name_text = RichText::new(name)
-                                .font(crate::theme::font_medium(13.0));
+                                .font(theme::font_medium(13.0));
                             if double_clickable_label(ui, name_text) {
                                 default_action_target = Some(*idx);
                             }
@@ -235,19 +231,19 @@ impl DeelipApp {
         let (mut save_clicked, mut cancel_clicked) = (false, false);
         let palette = self.palette;
         ui.horizontal(|ui| {
-            ui.label("Name:");
+            field_label(ui, &palette, "Name:");
             text_edit_scope(ui, &palette, |ui| {
                 ui.add(egui::TextEdit::singleline(&mut self.new_contact.name).desired_width(160.0))
             });
         });
         ui.add_space(4.0);
         ui.horizontal(|ui| {
-            ui.label("Number:");
+            field_label(ui, &palette, "Number:");
             text_edit_scope(ui, &palette, |ui| {
                 ui.add(
                     egui::TextEdit::singleline(&mut self.new_contact.sip_uri)
                         .hint_text(RichText::new("e.g. 1234567").color(palette.ink_muted))
-                        .font(egui::FontId::new(13.0, egui::FontFamily::Monospace))
+                        .font(theme::font_address())
                         .desired_width(220.0),
                 )
             });
@@ -257,7 +253,7 @@ impl DeelipApp {
         if self.accounts.len() > 1 {
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                ui.label("via:");
+                field_label(ui, &palette, "via:");
                 let (current_reg_ok, current_text) = match &self.new_contact.presence_account {
                     Some(username) => self
                         .accounts

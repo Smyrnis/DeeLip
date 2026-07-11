@@ -113,7 +113,7 @@ impl DeelipApp {
 
                     field_label(ui, palette, "Server:");
                     edited |= text_edit_scope(ui, palette, |ui| ui.add(egui::TextEdit::singleline(&mut account.server)
-                        .font(egui::FontId::new(13.0, egui::FontFamily::Monospace))
+                        .font(theme::font_address())
                         .desired_width(f32::INFINITY)).changed());
                     ui.end_row();
 

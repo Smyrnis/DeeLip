@@ -161,6 +161,15 @@ pub fn font_mono_medium(size: f32) -> egui::FontId {
     egui::FontId::new(size, egui::FontFamily::Name("jbmono-medium".into()))
 }
 
+/// "This field holds something SIP-address-shaped" -- a plain (non-medium)
+/// 13px monospace, for a directly-editable/displayed SIP URI/host field
+/// (Settings' Server field, the Transfer/Contact-dialog number entry, a
+/// bare-address fallback label). Named here since it was previously
+/// copy-pasted at 4 call sites as a raw `FontId::new(13.0, Monospace)`.
+pub fn font_address() -> egui::FontId {
+    egui::FontId::new(13.0, egui::FontFamily::Monospace)
+}
+
 /// Apply the palette across `Visuals` (backgrounds, selection highlight,
 /// hyperlinks, widget fills/strokes) and set the Inter/JetBrains Mono type
 /// scale. Called once per frame alongside `ctx.set_visuals`, since
