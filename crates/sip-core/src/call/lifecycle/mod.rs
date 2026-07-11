@@ -25,12 +25,9 @@ use crate::{call::dialog::Dialog, client::SipStack, wire::sdp::VideoCodec};
 const VIDEO_CODECS: [VideoCodec; 1] = [VideoCodec::H264];
 
 /// Fields derived from `&self` alone (account/identity), independent of any
-/// particular dialog. Built once via `SipStack::stack_identity()` --
-/// *before* taking a `self.dialogs.get_mut(...)` borrow, since calling a
-/// `&self` method afterward would conflict with that outstanding `&mut
-/// self.dialogs` borrow (the same class of borrow-splitting issue this
-/// codebase has hit before -- see `media_setup::resolve_rtp_endpoint`,
-/// which became an associated fn for the same reason).
+/// particular dialog. Built once via `SipStack::stack_identity()` -- *before*
+/// taking a `self.dialogs.get_mut(...)` borrow (see docs/crates/sip-core.md's
+/// "StackIdentity/DialogRequestContext" section for why the ordering matters).
 pub(super) struct StackIdentity {
     pub(super) server: String,
     pub(super) username: String,
@@ -61,12 +58,9 @@ impl SipStack {
     }
 }
 
-/// Everything needed to interpolate a mid-dialog SIP message (a fresh
-/// request like a re-INVITE/INFO/BYE, or a response like a 200 OK/486) for
-/// one `Dialog` -- built from a `StackIdentity` (already owned, no `self`
-/// involved) + `&Dialog`, so it's callable while a `&mut Dialog` borrowed
-/// from `self.dialogs` is still alive. Replaces what used to be ~10 lines
-/// of hand-repeated `.clone()`s at 6 separate call sites.
+/// Everything needed to interpolate a mid-dialog SIP message for one
+/// `Dialog` -- built from a `StackIdentity` + `&Dialog`, so it's callable
+/// while a `&mut Dialog` borrowed from `self.dialogs` is still alive.
 pub(super) struct DialogRequestContext {
     pub(super) server: String,
     pub(super) username: String,

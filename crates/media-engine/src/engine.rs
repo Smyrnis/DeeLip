@@ -30,12 +30,10 @@ use crate::rtp::{RtpPacket, RtpSender};
 use crate::vad::{synthesize_comfort_noise, ComfortNoiseState, VadDecision, VoiceActivityDetector};
 use crate::zrtp_session::{client_id as zrtp_client_id, ZrtpOutcome, ZrtpParams, ZrtpRuntime};
 
-/// One live encoder for whichever `AudioCodec` a leg negotiated -- replaces
-/// 5 separate `Option<XEncoder>` locals plus a 7-arm `match codec { ... }`
-/// repeated at every call site with a single value and one `.encode()`
-/// call. `leg_label` is `""` for leg 1 or `" (leg2)"` for leg 2, threaded
-/// through so construction-failure messages read exactly as they did
-/// before this was consolidated (only Opus/iLBC can actually fail here).
+/// One live encoder for whichever `AudioCodec` a leg negotiated -- see
+/// `docs/crates/media-engine.md` for the full enum-dispatch rationale. `leg_label`
+/// is `""` for leg 1 or `" (leg2)"` for leg 2, used in construction-failure
+/// messages (only Opus/iLBC can actually fail here).
 enum AudioEncoder {
     Opus(OpusEncoder),
     // Boxed: G.722/G.729's encoder structs are far larger than the other
@@ -139,12 +137,10 @@ fn ts_increment_for(codec: AudioCodec) -> u32 {
     }
 }
 
-/// Act on whatever `ZrtpRuntime::handle_incoming`/`tick` just produced:
-/// send any outgoing handshake bytes on the same RTP socket, publish a
-/// freshly-computed SAS, or -- once the handshake completes -- swap the
-/// recv task's own `decrypt_ctx` in-place and hand the encrypt side's key
-/// material to the send task over `encrypt_tx` (the two tasks each own
-/// their own `SrtpContext`, so this is the only way to update both).
+/// Act on whatever `ZrtpRuntime::handle_incoming`/`tick` just produced --
+/// see `docs/crates/media-engine.md`'s ZRTP section. The two tasks each own their
+/// own `SrtpContext`, so `encrypt_tx` is how a completed handshake's key
+/// material reaches the send task from here (the recv task).
 async fn handle_zrtp_outcomes(
     outcomes: Vec<ZrtpOutcome>, sock: &RtpSocket, remote_rtp: SocketAddr, decrypt_ctx: &mut Option<SrtpContext>,
     encrypt_tx: &mpsc::UnboundedSender<([u8; 16], [u8; 14])>, sas: &Arc<Mutex<Option<String>>>,
@@ -323,11 +319,8 @@ pub struct MediaEngine {
     dtmf_tx: mpsc::UnboundedSender<char>,
     inband_dtmf_tx: mpsc::UnboundedSender<char>,
     muted: Arc<AtomicBool>,
-    /// Owned by `MediaEngine` itself (not just captured by the send task's
-    /// closure) so `stop()` can finalize it deterministically from the
-    /// synchronous caller side — `stop()` aborts both tasks without awaiting
-    /// them, so anything only reachable from inside a task would be subject
-    /// to a cancellation race and might never run its cleanup.
+    /// Owned by `MediaEngine` itself, not just the send task's closure, so
+    /// `stop()` can finalize it deterministically -- see `docs/crates/media-engine.md`.
     recorder: Arc<Mutex<Option<RecordingWriter>>>,
     /// Kept so `set_recording(true)` can lazily open a `RecordingWriter`
     /// on demand (manual per-call Record button) using the same
@@ -347,10 +340,8 @@ pub struct MediaEngine {
 }
 
 /// Parameters for `MediaEngine::start` -- a named-field struct instead of a
-/// 15-argument positional list, so a call site reads its own intent (and a
-/// newly-added field can't silently shift the meaning of the ones after it,
-/// the same risk the `ARCHITECTURE_GAPS.md` audit flagged for `config`'s
-/// positional SQL column mapping).
+/// 15-argument positional list, so a call site reads its own intent and a
+/// newly-added field can't silently shift the meaning of the ones after it.
 pub struct MediaEngineOptions<'a> {
     /// Local UDP port for RTP.
     pub local_rtp_port: u16,
@@ -628,13 +619,8 @@ impl MediaEngine {
                                 Some(agc) => agc.process(&pcm),
                                 None => pcm,
                             };
-                            // Scale in place rather than collecting into a
-                            // fresh Vec -- `pcm` is already an owned buffer
-                            // here, so there's no allocation-free way to
-                            // avoid this that's actually cheaper than just
-                            // mutating what we already own. This is the
-                            // common case once a user touches the input
-                            // gain slider (default is unity, skipped below).
+                            // Scale in place (pcm is already owned) rather
+                            // than collecting into a fresh Vec.
                             let g = crate::audio::load_gain(&send_input_gain);
                             if g != 1.0 {
                                 for s in pcm.iter_mut() {
@@ -1049,15 +1035,10 @@ impl MediaEngine {
         crate::audio::load_gain(&self.input_gain)
     }
 
-    /// Async so callers can actually wait for the send/recv tasks to finish,
-    /// not just be scheduled for cancellation -- `abort()` alone doesn't
-    /// guarantee the task (and whatever it holds, e.g. a TURN relay `Conn`)
-    /// is really gone by the time this returns. That matters once a caller
-    /// can immediately reuse the *same* relay `Conn` in a brand new engine
-    /// (conference merge does exactly this): if the old task's `recv_from`
-    /// is still alive even momentarily, it races the new engine's recv task
-    /// for the same incoming packets and can "steal" them, silently
-    /// starving the new one. Awaiting here closes that window.
+    /// Async so callers can wait for the send/recv tasks to actually finish,
+    /// not just be scheduled for cancellation -- a real relay-`Conn`-reuse
+    /// race (conference merge) depends on this; see `docs/crates/media-engine.md`
+    /// before changing this to a fire-and-forget shape.
     pub async fn stop(self) {
         let _ = self.stop_tx.send(true);
         self.send_task.abort();

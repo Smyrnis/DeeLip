@@ -1,22 +1,16 @@
-//! Acoustic echo cancellation, bridging the mismatch between DeeLip's fixed
-//! 160-sample (20ms @ 8kHz) RTP framing and `fdaf-aec`'s power-of-two frame
-//! size requirement. Runs non-realtime (in `MediaEngine`'s send task, not the
-//! cpal capture callback) since it does FFT + allocation work per frame.
+//! Acoustic echo cancellation. Runs non-realtime (in `MediaEngine`'s send
+//! task, not the cpal capture callback) since it does FFT + allocation work
+//! per frame. Full picture, including the frame-size/step-size tuning
+//! rationale: `docs/crates/media-engine.md`.
 
 use std::collections::VecDeque;
 
 use crate::audio::EchoRefBuf;
 
 /// fdaf-aec requires a power-of-two FFT size; frame_size = fft_size / 2.
-/// 128 samples (16ms @ 8kHz) doesn't evenly divide our 160-sample RTP frame,
-/// but LCM(160, 128) = 640 — every 4 RTP frames align exactly with 5 AEC
-/// hops, so steady state has no drift, just a small fixed buffering delay.
 const AEC_FFT_SIZE: usize = 256;
 const AEC_FRAME_SAMPLES: usize = AEC_FFT_SIZE / 2;
-/// Deliberately conservative: empirically, step sizes above ~0.1 cause a large
-/// transient energy blow-up (verified with a standalone repeated-tone test —
-/// e.g. mu=0.5 spikes to ~150x the input energy before eventually recovering)
-/// before eventually converging. 0.05 converges smoothly with no overshoot.
+/// Empirically tuned -- see `docs/crates/media-engine.md`.
 const AEC_STEP_SIZE: f32 = 0.05;
 
 pub struct EchoCanceller {

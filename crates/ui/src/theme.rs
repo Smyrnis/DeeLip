@@ -9,11 +9,10 @@
 //! borrows them. Everything else is drawn from the neutral canvas/surface/
 //! border/ink scale.
 //!
-//! Palette revision history (v3 Darcula pass, v3.1 chrome-vs-signal split,
-//! v4 IntelliJ Light switch) and the list of confirmed-broken icon
-//! glyphs in the bundled Phosphor font are documented in `docs/theming.md`
-//! rather than here -- see that file before changing any hex value or
-//! reaching for a new icon constant.
+//! Palette revision history and the list of confirmed-broken icon glyphs in
+//! the bundled Phosphor font are documented in `docs/crates/ui.md`'s Theming
+//! section -- see that before changing any hex value or reaching for a new
+//! icon constant.
 
 use egui::Color32;
 
@@ -49,9 +48,9 @@ pub struct Palette {
 }
 
 impl Palette {
-    /// The app's one and only theme -- see this module's own v4-revision
-    /// doc comment for the real IntelliJ Light values used here and why
-    /// there's still no `dark()`/`for_theme()` counterpart.
+    /// The app's one and only theme -- see `docs/crates/ui.md`'s Theming section
+    /// for the real IntelliJ Light values used here and why there's still
+    /// no `dark()`/`for_theme()` counterpart.
     pub fn light() -> Self {
         Self {
             canvas: Color32::from_rgb(0xF7, 0xF8, 0xFA),

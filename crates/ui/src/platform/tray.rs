@@ -1,29 +1,7 @@
-//! System tray icon with hide-to-tray behavior.
-//!
-//! On Linux, `tray-icon` needs a GTK event loop running on the same thread
-//! that created the tray icon (not winit's own loop, which is what eframe
-//! uses) — so this spawns a dedicated OS thread that runs `gtk::main()` for
-//! the lifetime of the process.
-//!
-//! Tray/menu click handling deliberately does NOT poll from inside
-//! `DeelipApp::update()`: eframe/winit pause the render/update loop while
-//! the window is hidden (a normal optimization), which means anything
-//! that only runs inside `update()` simply never fires while hidden —
-//! including "restore" and "quit" clicks, the two actions you most need
-//! while hidden. Instead, `spawn_tray_event_handlers` runs dedicated
-//! background threads that block on `tray_icon`'s own process-wide event
-//! channels and act independently of whether any frame is being drawn:
-//! `egui::Context` is thread-safe by design specifically for this
-//! (`send_viewport_cmd`/`request_repaint` from any thread), and Quit's
-//! hangup logic works off a small piece of state mirrored from `DeelipApp`
-//! once per frame while the window is visible (nothing changes it while
-//! hidden, so a stale-by-one-frame copy is always correct at hide time).
-//!
-//! Hiding/restoring uses `ViewportCommand::Visible`, not `Minimized`: window
-//! mapping (`Visible`) is baseline ICCCM behavior every X11 window manager
-//! gets right, whereas GNOME Shell/Mutter's handling of the WM-level iconify
-//! state (`_NET_WM_STATE_HIDDEN`) for an XWayland-forced client is unreliable
-//! and could leave "Show DeeLip" doing nothing at all.
+//! System tray icon with hide-to-tray behavior. Full picture (why this can't
+//! poll from inside `update()`, the GTK-thread requirement, the
+//! `Visible`-not-`Minimized` choice): `docs/crates/ui.md`'s "Platform integration"
+//! section.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -124,12 +102,8 @@ pub fn spawn_tray_event_handlers(tray_ids: TrayMenuIds, ctx_slot: CtxSlot, quit_
     });
 }
 
-/// Restore the window via `Visible(true)`, not `Minimized(false)`. Window
-/// mapping (`Visible`) is baseline ICCCM behavior every X11 window manager
-/// implements correctly; GNOME Shell/Mutter's handling of the WM-level
-/// iconify state (`_NET_WM_STATE_HIDDEN`) for an XWayland-forced client (see
-/// `main.rs`'s `WAYLAND_DISPLAY` removal) is unreliable and could leave
-/// "Show DeeLip" doing nothing at all.
+/// Restore via `Visible(true)`, not `Minimized(false)` -- see `docs/crates/ui.md`'s
+/// "Platform integration" section for why.
 fn restore_window(ctx_slot: &CtxSlot) {
     if let Some(ctx) = ctx_slot.lock().unwrap().as_ref() {
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
@@ -137,19 +111,11 @@ fn restore_window(ctx_slot: &CtxSlot) {
     }
 }
 
-/// Spawn the tray icon on a dedicated GTK event-loop thread. Blocks briefly
-/// (a channel round-trip, not real work) until the menu items exist so their
-/// IDs can be returned — `MenuItem`/`Menu` use `Rc`, so they must be built
-/// *on* the GTK thread, not constructed here and moved in. Build failures
-/// past that point are logged rather than propagated, matching this
-/// codebase's existing pattern for non-fatal background failures (e.g. STUN
-/// discovery in `main.rs`).
-///
-/// Also returns a `BadgeSender` for updating the missed-call/unread count
-/// overlay — `TrayIcon::set_icon` (like `MenuItem`/`Menu` construction) must
-/// run on this same GTK thread, so a `glib::MainContext` channel is set up
-/// and attached *before* `gtk::main()` starts, and the returned sender is the
-/// only thread-safe way in from the outside.
+/// Spawn the tray icon on a dedicated GTK event-loop thread -- see
+/// `docs/crates/ui.md`'s "Platform integration" section for why menu/icon
+/// construction and the badge channel both have to happen on this thread.
+/// Build failures past the initial channel round-trip are logged, not
+/// propagated (the app works fine without a tray icon).
 #[allow(deprecated)] // `MainContext::channel` -- the suggested async-channel + spawn_future_local
                      // replacement doesn't fit this thread's plain `gtk::main()` loop; this is
                      // still the documented way to feed a synchronous cross-thread channel into

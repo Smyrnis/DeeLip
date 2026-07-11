@@ -1,7 +1,7 @@
 //! ZRTP crypto: hash chain, KDF, DH/EC key agreement, SRTP/SAS/MAC key
 //! derivation, and Confirm-message encryption. Which formulas are quoted
 //! directly from RFC 6189 vs. reconstructed, and the crypto backends used:
-//! `docs/zrtp.md`.
+//! docs/crates/sip-core.md's "ZRTP" section.
 
 use ring::{agreement, digest, hmac, rand::SecureRandom};
 

@@ -103,10 +103,9 @@ impl DeelipApp {
 
         // Floating "+" FAB -- opens the shared dialog in add mode. Anchored
         // to this tab's own content rect (`ui.max_rect()`), not `ctx`'s full
-        // screen -- `Area::anchor` positions relative to the whole window,
-        // which overlapped the bottom status bar (a separate
-        // `TopBottomPanel` outside this `CentralPanel`'s content) since that
-        // panel's height was never accounted for.
+        // screen -- `Area::anchor` is window-relative and overlapped the
+        // bottom status bar; use `fixed_pos` for anything scoped to one
+        // tab's content instead.
         let palette = self.palette;
         let fab_size = 40.0;
         let content_rect = ui.max_rect();
@@ -164,24 +163,12 @@ impl DeelipApp {
     }
 
     /// Shared create/edit contact dialog -- opened from Contacts' "+" FAB
-    /// (add mode, `editing_contact_idx == None`) or from Contacts' row-menu
-    /// "Edit" / History's right-click "Add to Contacts" (edit/prefilled
-    /// mode). Rendered from `frame.rs::update()`, not from inside
-    /// `show_contacts`, since History needs to trigger it while the
-    /// History tab -- not Contacts -- is the active one. Real separate OS
-    /// window via the shared `show_pop_out_window` scaffolding (see its own
-    /// doc comment) -- previously an in-canvas `egui::Window` nested in the
-    /// main viewport's own tick, promoted so it behaves like every other
-    /// modal in this app (Settings, Messages, Transfer).
-    ///
-    /// The window's own Close decoration and its Save/Cancel buttons are
-    /// two different closure params here (`on_close` vs. `content`) rather
-    /// than one shared local like the pre-extraction code used -- `content`
-    /// already calls `finish_contact_dialog` itself for the Save/Cancel
-    /// case, and `on_close` calls it again for the "cancel" case; calling
-    /// it with `(false, false)` (neither button clicked) is already a
-    /// harmless no-op today, so splitting this across two call paths
-    /// changes nothing observable.
+    /// (add mode) or Contacts'/History's "Edit"/"Add to Contacts" actions
+    /// (edit/prefilled mode). Rendered from `frame.rs::update()`, not from
+    /// inside `show_contacts`, since History needs to trigger it while
+    /// History -- not Contacts -- is the active tab. `on_close` and
+    /// `content` both end up calling `finish_contact_dialog`, harmlessly
+    /// even if neither button was actually clicked.
     pub(crate) fn show_contact_dialog(&mut self, ctx: &egui::Context, self_app: SharedApp) {
         show_pop_out_window(
             self,

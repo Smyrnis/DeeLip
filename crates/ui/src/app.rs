@@ -25,11 +25,8 @@ pub(crate) enum Tab {
     Directory,
 }
 
-/// Which Settings tab is currently shown -- MicroSIP-style tabbed dialog
-/// (one section visible at a time, sized to fit without scrolling) rather
-/// than the earlier single long scrolling stack of 12 sections. Grouped
-/// down from those 12 section methods to 8 tabs -- some sections (a lone
-/// checkbox) weren't worth their own tab.
+/// Which Settings tab is currently shown -- see `docs/crates/ui.md`'s Settings
+/// section for the tabbed-dialog design this replaced.
 #[derive(PartialEq, Eq, Clone, Copy, Default, Debug)]
 pub(crate) enum SettingsTab {
     #[default]
@@ -95,13 +92,10 @@ pub struct DeelipApp {
     /// in the UI, not in this struct).
     pub(crate) pending_call: Option<PendingCall>,
     /// An incoming call we've sent `AcceptCall` for but haven't yet gotten
-    /// `SipEvent::CallConnected` back on -- media negotiation (codec/SRTP/
-    /// ICE/TURN) now happens inside `SipStack` itself, so there's a real gap
-    /// between "we told it to accept" and "media is ready to start". Kept
-    /// separate from `pending_outbound` (rather than reusing one slot for
-    /// both directions) since an inbound ring can in principle arrive while
-    /// an outbound dial is still in flight, and both would then be waiting
-    /// on their own `CallConnected` simultaneously.
+    /// `SipEvent::CallConnected` back on -- a real gap since media
+    /// negotiation now happens inside `SipStack`. Separate from
+    /// `pending_outbound`: an inbound ring can arrive mid-outbound-dial, so
+    /// both can be waiting on their own `CallConnected` at once.
     pub(crate) pending_accept: Option<PendingAccept>,
 
     /// Inline blind-transfer box state for the focused call.
@@ -166,15 +160,10 @@ pub struct DeelipApp {
     /// (egui repaints continuously) hammered every ALSA/jack backend dozens
     /// of times a second, producing log spam and a real UI slowdown.
     pub(crate) audio_device_cache: Option<(Vec<String>, Vec<String>)>,
-    /// Set while a background enumeration kicked off by `show_audio_section`
-    /// is in flight -- drained (like `event_rx` elsewhere) on the next frame
-    /// it resolves. Needed because cpal enumeration itself -- not just
-    /// running it every frame -- can block the calling thread for hundreds
-    /// of ms on some backends (measured ~620ms on first Audio-tab visit,
-    /// live via PulseAudio), and that thread is the same one driving both
-    /// the main window and the Settings viewport, so a synchronous call
-    /// here froze the whole app for that long right as the user switched
-    /// tabs. Runs once, not every frame -- see `audio_device_cache`.
+    /// Set while a background device-enumeration scan kicked off by
+    /// `show_audio_section` is in flight -- drained on the next frame it
+    /// resolves. See `docs/crates/ui.md`'s Settings section for why this runs on a
+    /// background thread instead of inline.
     pub(crate) audio_device_rx: Option<std::sync::mpsc::Receiver<(Vec<String>, Vec<String>)>>,
     /// Same idiom as `audio_device_cache`, for the Settings tab's camera
     /// picker -- `nokhwa` enumeration is likewise too expensive to run
@@ -202,14 +191,9 @@ pub struct DeelipApp {
     /// `tray` module docs) — `None` degrades to normal close-quits-the-app
     /// behavior if the tray icon failed to start.
     pub(crate) tray: Option<(CtxSlot, QuitState, tray::BadgeSender)>,
-    /// Slot every background producer that isn't already covered by
-    /// `tray`'s own copy (SIP events, global hotkeys, desktop-notification
-    /// actions, the update checker, LDAP directory search, Settings'
-    /// audio/camera device scans) uses to call `request_repaint()` the
-    /// instant it has something, instead of DeeLip's idle repaint tick
-    /// having to poll for it. Refreshed every frame in `update()`, same as
-    /// `tray`'s copy was before this existed -- see `docs/windowing.md` for
-    /// why this matters (the Settings-window slowdown it was added to fix).
+    /// Slot every background producer uses to call `request_repaint()` the
+    /// instant it has something, instead of the idle tick polling for it --
+    /// see `docs/crates/ui.md`'s "Repaint plumbing" section.
     pub(crate) ctx_slot: CtxSlot,
     /// Missed calls not yet acknowledged by opening the History tab —
     /// mirrored to the tray icon's badge (see `sync_tray_badge`) whenever
@@ -302,30 +286,21 @@ pub struct DeelipApp {
 }
 
 /// Wraps `DeelipApp` behind a lock so Settings/Messages/etc. can render as
-/// real independent (`Deferred`-class) viewports instead of ones nested
-/// inside the main window's own per-tick callback (`Immediate`-class).
-/// `eframe::App` can't be implemented directly on `Arc<Mutex<DeelipApp>>`
-/// (neither side is local to this crate), hence this thin newtype --
-/// `update`/`on_exit` just lock and delegate to
-/// `DeelipApp::update_inner`/`on_exit_inner`. Full rationale for the
+/// real independent (`Deferred`-class) viewports. Full rationale for the
 /// `Deferred` migration and why locking here is sound despite `DeelipApp`
-/// being `!Send`: `docs/windowing.md`.
+/// being `!Send`: `docs/crates/ui.md`'s "Pop-out windows" section.
 #[derive(Clone)]
 pub struct SharedApp(pub Arc<Mutex<DeelipApp>>);
 
-// SAFETY: see docs/windowing.md -- the Mutex is a borrow-checker/orphan-rule
+// SAFETY: see docs/crates/ui.md -- the Mutex is a borrow-checker/orphan-rule
 // necessity here, not a real cross-thread concurrency mechanism.
 unsafe impl Send for SharedApp {}
 unsafe impl Sync for SharedApp {}
 
 impl SharedApp {
-    /// A method (not a bare `.0.lock()` at the call site) so that a `move`
-    /// closure calling this captures the whole `SharedApp` -- which carries
-    /// the `unsafe impl Send`/`Sync` above -- rather than reaching straight
-    /// through to the inner `Arc<Mutex<DeelipApp>>` field. Rust's 2021
-    /// disjoint-closure-capture captures the minimal path actually used,
-    /// so `self_app.0.lock()` inside a closure captures just that `!Send`
-    /// field, silently missing this wrapper's unsafe impl.
+    /// A method, not a bare `.0.lock()` at the call site -- see
+    /// `docs/crates/ui.md`'s closure-capture pitfall note for why that distinction
+    /// matters for a `move` closure calling this.
     pub(crate) fn lock(&self) -> std::sync::MutexGuard<'_, DeelipApp> {
         self.0.lock().unwrap()
     }
@@ -380,25 +355,20 @@ pub(crate) struct CallSlot {
     pub(crate) start_time: u64,
     pub(crate) is_held: bool,
     /// Whether `start_media` should start this call's `MediaEngine` with
-    /// recording on -- seeded from the global `config.recording_enabled`
-    /// when the call connects, but then tracks the user's own manual
-    /// Record/Stop-recording toggle (`do_record_toggle`) from then on. A
-    /// hold tears down and resume rebuilds a fresh `MediaEngine` (see
-    /// `do_hold_slot`/`do_swap_to`), which used to mean `start_media` only
-    /// ever consulted the global config again on resume -- silently
-    /// re-enabling recording after the user had explicitly turned it off
-    /// for this call, since nothing remembered that per-call override.
+    /// recording on -- seeded from the global `config.recording_enabled`,
+    /// then tracks the user's own manual toggle (`do_record_toggle`)
+    /// afterward, so a hold/resume cycle (which rebuilds the engine) can't
+    /// silently re-enable recording the user explicitly turned off.
     pub(crate) recording_enabled: bool,
     pub(crate) media: CallMediaReady,
 }
 
-/// Live video state for the focused call, mirroring `MediaEngine`/`self.media`'s
-/// placement -- only the focused call has a running `VideoEngine`. Bundles
-/// the engine, an optional camera capture handle (`None` if no camera was
-/// available -- video still receives/displays the remote side in that
-/// case, see `media.rs::start_video`), and per-side cached-frame+texture
-/// state so `views/dialer/in_call.rs`'s per-repaint render doesn't
-/// reconvert/re-upload a YUV420 frame that hasn't changed since the last one.
+/// Live video state for the focused call -- only the focused call has a
+/// running `VideoEngine`. `camera` is `None` if no camera was available
+/// (video still receives/displays the remote side, see
+/// `media.rs::start_video`); `remote`/`local` cache each side's decoded
+/// frame + uploaded texture so `views/dialer/in_call.rs` doesn't
+/// re-upload an unchanged frame every repaint.
 pub(crate) struct VideoCallState {
     pub(crate) engine: deelip_media::video_engine::VideoEngine,
     pub(crate) camera: Option<deelip_media::video_capture::CaptureHandle>,

@@ -1,13 +1,7 @@
 //! Minimal hand-rolled DNS client for the optional custom-nameserver
 //! override and SRV-record (RFC 3263) service discovery -- see
-//! `NetworkConfig::{custom_nameserver, dns_srv_enabled}`. Hand-rolled rather
-//! than pulling in a full resolver crate (e.g. hickory-resolver), matching
-//! this crate's existing style for simple/fixed wire formats (see
-//! `sdp.rs`/`message.rs`/`auth.rs`). Only supports what SIP actually needs:
-//! one A/AAAA or SRV question per query, sent to a single server expected to
-//! do its own recursive resolution (the user's configured nameserver, or the
-//! system resolver read from `/etc/resolv.conf`) -- this module does no
-//! recursion of its own.
+//! `NetworkConfig::{custom_nameserver, dns_srv_enabled}` and docs/crates/sip-core.md's
+//! "Wire layer" section.
 
 use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;

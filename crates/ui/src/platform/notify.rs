@@ -1,13 +1,6 @@
 //! Desktop notifications (via D-Bus, using the pure-Rust `notify-rust` +
-//! `zbus` stack — no native libdbus/libnotify dependency needed).
-//!
-//! Incoming-call notifications carry Accept/Reject action buttons. Waiting
-//! for a button press blocks on `notify_rust::NotificationHandle::wait_for_action`
-//! (synchronous even on the zbus backend, which runs its own internal
-//! `block_on`), so each notification gets its own short-lived background
-//! thread — same "spawn a thread, forward the result through a process-wide
-//! channel polled once per frame" idiom already used for the tray icon and
-//! global hotkeys.
+//! `zbus` stack). See `docs/crates/ui.md`'s "Platform integration" section for why
+//! each notification gets its own background thread.
 
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Mutex, OnceLock};

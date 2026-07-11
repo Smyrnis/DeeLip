@@ -6,16 +6,8 @@ use crate::strings::t;
 use crate::theme::{self, Palette};
 
 impl DeelipApp {
-    /// Transfer/Attended as a real separate OS window, built on the shared
-    /// `show_pop_out_window` (see `docs/windowing.md` for the general
-    /// pattern). One shared window covers both blind and attended transfer
-    /// via a mode switch, rather than two near-identical windows -- they're
-    /// one workflow, not two unrelated features.
-    /// `do_transfer`/`do_attended_transfer_dial` already flip
-    /// `showing_transfer`/`showing_attended` back to `false` on success
-    /// (see their own doc comments), which is this window's open
-    /// condition -- so firing either one closes this window as a side
-    /// effect, no separate "close" bookkeeping needed for the happy path.
+    /// Transfer/Attended as a real separate OS window -- see `docs/crates/ui.md`'s
+    /// "Why Transfer is one window, not two" for the design rationale.
     pub(crate) fn show_transfer_window(&mut self, ctx: &egui::Context, self_app: SharedApp) {
         show_pop_out_window(
             self,
@@ -37,11 +29,8 @@ impl DeelipApp {
     }
 
     fn show_transfer_window_content(&mut self, ui: &mut Ui) {
-        // `ScrollArea`, same reasoning as `show_dialer_in_call`'s -- the
-        // mode switch + separator + field + full keypad + backspace/clear
-        // + action button is taller than this window's own default size at
-        // some window heights (confirmed live), so this is a no-op safety
-        // net once it fits, not a design choice to always scroll.
+        // A no-op safety net once content fits, not a design choice to
+        // always scroll -- same reasoning as `show_dialer_in_call`'s.
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| self.show_transfer_window_content_inner(ui));

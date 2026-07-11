@@ -1,7 +1,5 @@
 //! Energy-threshold voice activity detection driving RFC 3389 comfort-noise
-//! generation. Full design (why this non-realtime placement is fine, the
-//! disclosed "no continuous receive-side synthesis" simplification):
-//! `docs/media-pipeline.md`.
+//! generation. Full picture: `docs/crates/media-engine.md`.
 
 /// ~ -32 dBFS RMS -- quieter than this is treated as silence. Well below
 /// the AGC's ~ -14 dBFS target level, so the two don't fight (AGC only

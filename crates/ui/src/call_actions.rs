@@ -7,15 +7,13 @@ use crate::strings::t;
 impl DeelipApp {
     // ── Call actions ─────────────────────────────────────────────────────────
 
-    /// Domain to resolve a bare (non-"@", non-URI) dial-box/transfer/message
-    /// target against -- this account's own identity domain, or empty for a
-    /// `SipAccount::local_account`. A serverless account has no
-    /// local-extension concept: every bare target dialed from one *is* the
-    /// destination itself (see `normalize_target_with_prefix`'s empty-domain
-    /// case), not a number to resolve against some PBX domain -- unlike
-    /// `SipHandle.domain`, which is never empty (it falls back to
-    /// `local_ip:local_port` precisely so headers stay valid), so that
-    /// fallback alone can't be used to detect this.
+    /// Domain to resolve a bare dial-box/transfer/message target against --
+    /// this account's identity domain, or empty for a `SipAccount::local_account`
+    /// (every bare target dialed from one *is* the destination itself, not a
+    /// PBX extension -- see `normalize_target_with_prefix`'s empty-domain
+    /// case). `SipHandle.domain` itself is never empty (it falls back to
+    /// `local_ip:local_port` for valid headers), so that alone can't detect
+    /// the serverless case.
     pub(crate) fn dial_domain(&self, acc: usize) -> String {
         if self.accounts[acc].account.local_account {
             String::new()
@@ -25,16 +23,12 @@ impl DeelipApp {
     }
 
     /// Core dialing mechanics shared by ordinary dialing and the attended-
-    /// transfer consultation call -- no gating here; callers check their
-    /// own preconditions before calling this, mirroring this codebase's
-    /// existing per-call-site `can_dial` convention rather than
-    /// centralizing it. Takes an explicit account so the consultation call
-    /// can be placed from the *same* account as the call being
-    /// transferred, rather than whichever account the Dialer tab happens
-    /// to have selected. `attempt_ice` is false for the attended-transfer
-    /// consultation call -- ICE is scoped to ordinary calls for now (see
-    /// `try_gather_ice`'s doc comment), conference/transfer legs keep the
-    /// plain STUN/TURN-fallback path unchanged.
+    /// transfer consultation call -- no gating here, callers check their own
+    /// preconditions first. Takes an explicit account so the consultation
+    /// call is placed from the *same* account as the call being
+    /// transferred, not whichever the Dialer tab has selected. `attempt_ice`
+    /// is false for the consultation call -- ICE is scoped to ordinary calls
+    /// for now (see `try_gather_ice`'s doc comment).
     pub(crate) fn place_call(&mut self, acc: usize, target: &str, attempt_ice: bool) {
         let domain = self.dial_domain(acc);
         let prefix = self.accounts[acc].account.dialing_prefix.clone().unwrap_or_default();
@@ -130,15 +124,9 @@ impl DeelipApp {
     }
 
     pub(crate) fn do_accept(&mut self) {
-        // `pending_accept` is a single slot, tracking one in-flight accept
-        // at a time -- accepting a 2nd call before the first's
-        // `CallConnected` arrives would silently overwrite it, orphaning
-        // the first as a connected-but-invisible call the moment its event
-        // finally lands (see `CallConnected`'s `pending_accept` matching in
-        // `event_handling.rs`). Deliberately a no-op rather than an error:
-        // `pending_call` (and its "incoming"/"call waiting" banner) is left
-        // untouched, so the user can just try Accept again once the first
-        // call visibly connects.
+        // `pending_accept` is a single slot -- see its doc comment on
+        // `DeelipApp` for why a 2nd accept before the first's
+        // `CallConnected` lands must no-op here rather than overwrite it.
         if self.pending_accept.is_some() {
             return;
         }
@@ -146,17 +134,11 @@ impl DeelipApp {
             return;
         };
         let acc = pending.account;
-        // Codec negotiation / RTP port / ICE / TURN all happen inside
-        // `SipStack` now -- if any of that fails, it declines on our behalf
-        // and reports back via `SipEvent::CallFailed` (see
-        // `on_call_terminated`'s `pending_accept` handling), not here.
-        // Deliberately *not* holding/freeing the currently-focused call's
-        // media here anymore: that used to happen eagerly, before this
-        // could ever fail, so a decline (no compatible codec, RTP port
-        // allocation failure) would needlessly put an already-active call
-        // on hold with nothing to auto-resume it. Deferred to the
-        // `CallConnected` handler (`event_handling.rs`), which only runs
-        // once accept has actually succeeded.
+        // Codec/RTP/ICE/TURN negotiation happens inside `SipStack` now; a
+        // failure there declines on our behalf via `SipEvent::CallFailed`.
+        // The focused call's media is deliberately *not* held/freed here --
+        // deferred to the `CallConnected` handler so a decline can't
+        // needlessly leave an already-active call on hold.
         self.accounts[acc].handle.accept_call(&pending.call_id);
         self.pending_accept =
             Some(PendingAccept { call_id: pending.call_id, remote_uri: pending.from, start_time: pending.start_time });

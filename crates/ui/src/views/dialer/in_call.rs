@@ -15,16 +15,9 @@ impl DeelipApp {
     // ringing/dialing/connected, instead of stacking status boxes above it ──
 
     pub(super) fn show_dialer_in_call(&mut self, ui: &mut Ui) {
-        // A focused call's controls (Mute/Record/Transfer/Attended/Keypad,
-        // their expanded sub-panels, gain sliders, DTMF pad, Call
-        // statistics) can add up to more vertical space than the window's
-        // own fixed default height -- unlike the idle dial pad, this
-        // content is open-ended (any combination of those sub-panels can be
-        // showing at once), so it's wrapped in a `ScrollArea` rather than
-        // assumed to always fit. A `ScrollArea` with content shorter than
-        // the viewport doesn't scroll or look any different, so this is a
-        // no-op for the common case and only kicks in once something
-        // actually doesn't fit.
+        // Wrapped in a `ScrollArea` since this content is open-ended (any
+        // combination of sub-panels can be showing at once) -- a no-op for
+        // the common case, only kicks in once something doesn't fit.
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| self.show_dialer_in_call_content(ui));
     }
 
@@ -187,13 +180,7 @@ impl DeelipApp {
                     }
                     ui.add_space(16.0);
                     // `vertical_centered` only centers a single fixed-size
-                    // child -- a nested `ui.horizontal` row reports its own
-                    // min_rect flush against the left edge instead (the
-                    // same footgun `show_dialer_idle`'s `STAGE_WIDTH` margin
-                    // and `phone_keypad`'s per-row centering already work
-                    // around) -- so this row centers itself explicitly via a
-                    // leading `add_space` sized to its own known width,
-                    // rather than trusting the parent to do it.
+                    // child -- see docs/crates/ui.md's "centering nested rows" note.
                     let row_width = if self.in_conference { 64.0 } else { 64.0 + 10.0 + 56.0 };
                     ui.horizontal(|ui| {
                         ui.add_space(((ui.available_width() - row_width) / 2.0).max(0.0));
@@ -273,14 +260,9 @@ impl DeelipApp {
         }
     }
 
-    /// Renders the focused call's video panel (self-view + remote), if this
-    /// call negotiated a video leg. Reads the latest camera/decoded frames
-    /// first (a short immutable borrow of `self.video`), updates each
-    /// side's cached egui texture only if the frame actually changed (a
-    /// separate short mutable borrow -- can't hold both borrows in one
-    /// closure), then draws them from a final immutable borrow. Avoids
-    /// re-uploading an unchanged GPU texture on every repaint (egui
-    /// repaints far faster than either camera or decode framerate).
+    /// Renders the focused call's video panel, if this call negotiated a
+    /// video leg -- see docs/crates/ui.md's "Video panel" note for the
+    /// borrow-splitting shape this needs.
     fn show_video_panel(&mut self, ui: &mut Ui) {
         if self.video.is_none() {
             return;
@@ -343,14 +325,9 @@ impl DeelipApp {
                 if icon_toggle_button(
                     ui,
                     &palette,
-                    // Not the plain "↱" this codebase otherwise uses as its
-                    // broken-`ARROW_BEND_UP_RIGHT` workaround -- confirmed
-                    // live in Xvfb that "↱" itself renders as "?" in this
-                    // exact spot (a smaller/differently-weighted context
-                    // than wherever it was last checked), so per `theme.rs`'s
-                    // own "always verify, don't assume" rule this uses
-                    // `EXPORT` instead, one of the icons that file already
-                    // lists as confirmed-rendering-correctly.
+                    // `EXPORT`, not "↱" -- confirmed broken in this exact
+                    // spot despite working elsewhere; see docs/crates/ui.md's
+                    // Theming section's "verify, don't assume" rule.
                     egui_phosphor::regular::EXPORT,
                     &xfer_caption,
                     transfer_open,
@@ -443,11 +420,9 @@ impl DeelipApp {
     }
 }
 
-/// Which state `call_avatar`/`state_badge` reflect -- `Pending`
-/// (ringing/dialing/hold) gets a softly pulsing amber status dot since it
-/// wants attention; `Connected` settles to a static `signal`-colored dot,
-/// since a live call is a stable state, not an urgent one. Design history
-/// (this replaced an earlier animated dual-ring pulse): `docs/dialer-ui.md`.
+/// Which state `call_avatar`/`state_badge` reflect -- design history (this
+/// replaced an earlier animated dual-ring pulse): `docs/crates/ui.md`'s "status-dot
+/// redesign" note.
 #[derive(Clone, Copy, PartialEq)]
 enum RingState {
     Pending,
@@ -455,8 +430,7 @@ enum RingState {
 }
 
 /// A caller initial on a small surface circle, with a state-colored status
-/// dot at its corner -- see the `RingState` doc comment for why this
-/// replaced the original pass's big pulse-ring animation.
+/// dot at its corner.
 fn call_avatar(ui: &mut Ui, palette: &Palette, display_name: &str, state: RingState) {
     let avatar_d = 68.0;
     let pad = 8.0; // room for the status dot to sit outside the avatar's own edge
@@ -481,10 +455,9 @@ fn call_avatar(ui: &mut Ui, palette: &Palette, display_name: &str, state: RingSt
     };
     let dot_alpha = match state {
         RingState::Pending => {
-            // A slow opacity fade, not a bounce -- see the `RingState` doc
-            // comment. No extra `request_repaint()` here -- `frame.rs`'s
-            // own `request_repaint_after(50ms)` cadence already redraws
-            // this often enough for a slow fade to read as smooth.
+            // A slow opacity fade, not a bounce. No extra `request_repaint()`
+            // -- `frame.rs`'s own 50ms cadence already redraws this often
+            // enough to read as smooth.
             let t = ui.input(|i| i.time) as f32;
             let phase = (t * 1.6).sin() * 0.5 + 0.5;
             (110.0 + phase * 145.0) as u8
@@ -562,7 +535,7 @@ const ICON_TOGGLE_COL_WIDTH: f32 = 60.0;
 /// Deliberately built from raw `ui.painter()` calls on one
 /// `ui.allocate_exact_size` rect, not `egui::Button` + a layout container --
 /// two layout-based approaches were tried first and both had a real,
-/// live-desktop-only box-position bug. Full writeup: `docs/dialer-ui.md`.
+/// live-desktop-only box-position bug. Full writeup: `docs/crates/ui.md`.
 fn icon_toggle_button(ui: &mut Ui, palette: &Palette, icon: &str, caption: &str, active: bool, danger: bool) -> bool {
     const BTN: f32 = 48.0;
     let icon_color = if danger { palette.danger } else { palette.ink };

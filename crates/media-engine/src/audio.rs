@@ -40,15 +40,10 @@ pub fn store_gain(gain: &SharedGain, value: f32) {
     gain.store(value.to_bits(), Ordering::Relaxed);
 }
 
-/// Open input + output devices at 8 kHz mono — `input_device`/`output_device`
-/// name a specific cpal device to use (falling back to the system default if
-/// unset or not found); pass `None` for both to always use the defaults.
-/// Returns the streams (keep alive), a receiver for captured audio, a shared
-/// jitter buffer to push playback audio into, a shared output-gain knob
-/// (see `SharedGain`) applied directly in the output callback below, and —
-/// when `echo_cancellation` is true — a far-end reference buffer mirroring
-/// everything written to the output device, for echo cancellation to
-/// compare against the mic capture.
+/// Open input + output devices at 8 kHz mono -- `input_device`/`output_device`
+/// name a specific cpal device to use, falling back to the system default if
+/// unset or not found. See `docs/crates/media-engine.md` for the full audio data
+/// flow this feeds into.
 pub fn open_streams(
     input_device: Option<&str>, output_device: Option<&str>, echo_cancellation: bool,
 ) -> anyhow::Result<(AudioStreams, CaptureRx, PlaybackTx, Option<EchoRefBuf>, SharedGain)> {

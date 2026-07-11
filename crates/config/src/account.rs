@@ -57,12 +57,10 @@ pub enum MediaEncryption {
     /// -- e.g. encrypted media over a plain UDP/TCP signaling path.
     Enabled,
     /// RFC 6189 ZRTP key agreement instead of SDES -- negotiated entirely
-    /// in-band over the RTP socket, so no `a=crypto`/SDP involvement at
-    /// all (see `SipAccount::wants_srtp`, which returns `false` for this
-    /// variant on purpose). A from-scratch implementation
-    /// (`deelip_sip::zrtp`) -- see its module docs for verification scope
-    /// and caveats before relying on it for anything that actually
-    /// matters.
+    /// in-band over the RTP socket, so no `a=crypto`/SDP involvement at all
+    /// (see `SipAccount::wants_srtp`, which returns `false` for this variant
+    /// on purpose). Full picture, including verification scope/caveats:
+    /// `docs/crates/sip-core.md`.
     Zrtp,
 }
 
@@ -317,27 +315,15 @@ pub struct SipAccount {
     /// editor.
     #[serde(default = "default_true")]
     pub session_timers_enabled: bool,
-    /// MicroSIP's "Local Account"/serverless mode: place and receive direct
-    /// SIP calls to/from an IP address with no registrar at all -- no
-    /// `REGISTER` is ever sent, `server`/`password`/`auth_username` are
-    /// ignored (there's nothing to authenticate to), and `username`/
-    /// `display_name` are still used as this account's caller-ID identity.
-    /// Forced to UDP regardless of `transport`: TCP/TLS need a real
-    /// persistent connection to a live peer at socket-creation time, which
-    /// doesn't exist without a fixed server (see
-    /// `SipStack::connect_local`). Outgoing calls resolve their destination
-    /// straight from the dialed target (an IP or hostname, with an optional
-    /// `:port`) instead of an outbound proxy. Off by default.
+    /// MicroSIP's "Local Account"/serverless mode. Off by default. Full
+    /// picture (why UDP-only, how outgoing calls resolve a destination):
+    /// `docs/crates/config.md`.
     #[serde(default)]
     pub local_account: bool,
-    /// Attempt to negotiate a video leg (H.264, `deelip_sip::VideoCodec`)
-    /// alongside audio on this account's calls. **Negotiation only as of
-    /// this field's introduction** -- no camera capture/encode/decode is
-    /// wired into `media-engine` yet, so turning this on gets a real
-    /// `m=video` SDP section negotiated (visible via debug logging) but no
-    /// actual video happens. Deliberately not yet exposed in the Settings
-    /// UI for that reason -- there's nothing for a user to see turning it
-    /// on. Off by default like every other opt-in toggle here.
+    /// Attempt to negotiate a video leg (H.264) alongside audio on this
+    /// account's calls, and (once negotiated) actually capture/encode/send/
+    /// decode/render it -- see `docs/crates/media-engine.md` for the full video
+    /// pipeline. Off by default like every other opt-in toggle here.
     #[serde(default)]
     pub video_enabled: bool,
 }
@@ -576,10 +562,7 @@ fn recording_format_from_str(s: &str) -> RecordingFormat {
 // ── Language ───────────────────────────────────────────────────────────────────
 
 /// UI display language -- infrastructure for `deelip_ui::strings`' locale
-/// loading. English-only for now (see `ARCHITECTURE_GAPS.md` item 6): a
-/// single variant so the load/save plumbing and the `assets/locales/*.json`
-/// lookup path both exist and are exercised, without a second translated
-/// locale to maintain yet.
+/// loading. English-only for now, see `docs/crates/i18n.md`.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Language {

@@ -1,9 +1,6 @@
 //! Checks the project's GitHub Releases for a newer DeeLip version and,
-//! when the running binary is user-writable (the portable tar.gz/
-//! `install.sh` path), replaces it in place. System package installs
-//! (.deb/.rpm) are deliberately never touched here -- see
-//! [`can_self_replace`]'s doc comment -- those are left to the user's
-//! package manager, same as `install.sh` itself does.
+//! when the running binary is user-writable, replaces it in place. Full
+//! picture: `docs/crates/updater.md`.
 
 use std::path::{Path, PathBuf};
 
@@ -24,13 +21,8 @@ pub struct ReleaseInfo {
     pub version: String,
     pub html_url: String,
     tar_gz_url: Option<String>,
-    /// Expected SHA-256 of the `.tar.gz` asset, parsed from this release's
-    /// `SHA256SUMS.txt` asset -- `None` if that asset is missing (e.g. a
-    /// release published before this checksum step existed) or didn't
-    /// contain a line matching the tar.gz's filename. `download_and_replace`
-    /// treats `None` as "nothing to verify against" and warns rather than
-    /// refusing to update, so an older release doesn't get permanently
-    /// stuck unable to self-update.
+    /// Expected SHA-256 of the `.tar.gz` asset, or `None` if unavailable --
+    /// warn-not-block on `None`, full picture: `docs/crates/updater.md`.
     tar_gz_sha256: Option<String>,
 }
 
@@ -120,18 +112,8 @@ fn newer_version(tag: &str, current: &str) -> Option<String> {
 }
 
 /// Whether the running binary can be updated in place without elevated
-/// privileges -- true for a `~/.local/bin`-style user install (what
-/// `install.sh`'s tar.gz fallback produces), false for a system package.
-/// `.deb`/`.rpm` installs put the binary under `/usr/bin`, owned by (and not
-/// writable outside of) dpkg/rpm's package database -- overwriting it
-/// directly would desync that database from what's actually on disk, so
-/// those installs are only ever offered a link to the release page instead.
-///
-/// Only the *directory*'s write permission matters here, not the exe file's
-/// own: `download_and_replace` never opens the running binary for writing
-/// (Linux refuses that with ETXTBSY while it's executing) -- it stages the
-/// new binary alongside it and `rename()`s over it, which is a directory
-/// operation and works on a currently-running executable just fine.
+/// privileges -- true for a user install, false for a system package
+/// (.deb/.rpm). Full picture: `docs/crates/updater.md`.
 pub fn can_self_replace() -> bool {
     let Ok(exe) = std::env::current_exe() else {
         return false;
@@ -153,18 +135,13 @@ fn dir_is_writable(dir: &Path) -> bool {
     }
 }
 
-/// Downloads `release`'s `.tar.gz` asset, verifies its checksum (if one was
-/// published -- see `ReleaseInfo::tar_gz_sha256`), extracts the `deelip`
-/// binary from it, and atomically swaps it in for the currently running
-/// executable. Only meaningful (and only ever called) when
-/// `can_self_replace()` is true.
-///
-/// Linux allows replacing/unlinking the file backing an already-running
-/// process -- this process keeps executing fine off its old (now-unlinked)
-/// inode until it next exits, so there's no need to stop anything first;
-/// the *next* launch is what actually picks up the new binary. Callers are
-/// expected to prompt the user to restart rather than doing it
-/// automatically (an in-progress call would otherwise be dropped).
+/// Downloads `release`'s `.tar.gz` asset, verifies its checksum, extracts
+/// the `deelip` binary, and atomically swaps it in for the currently
+/// running executable -- safe to do while running, full picture:
+/// `docs/crates/updater.md`. Only meaningful (and only ever called) when
+/// `can_self_replace()` is true. Callers are expected to prompt the user to
+/// restart rather than doing it automatically (an in-progress call would
+/// otherwise be dropped).
 pub fn download_and_replace(release: &ReleaseInfo) -> anyhow::Result<()> {
     let url =
         release.tar_gz_url.as_deref().ok_or_else(|| anyhow::anyhow!("Release {} has no .tar.gz asset", release.tag))?;
@@ -189,11 +166,8 @@ pub fn download_and_replace(release: &ReleaseInfo) -> anyhow::Result<()> {
 }
 
 /// Verifies `archive_path`'s SHA-256 matches `expected` before anything
-/// gets extracted/installed from it -- the actual integrity check guarding
-/// against a corrupted download or a tampered release asset. `expected ==
-/// None` (no checksum was published for this release) only warns and lets
-/// the install proceed, rather than hard-failing -- see
-/// `ReleaseInfo::tar_gz_sha256`'s doc comment for why.
+/// gets extracted/installed -- warn-and-proceed on `expected == None`, full
+/// picture: `docs/crates/updater.md`.
 fn verify_checksum(archive_path: &Path, expected: Option<&str>) -> anyhow::Result<()> {
     let Some(expected) = expected else {
         tracing::warn!("No published checksum for this release -- installing unverified");

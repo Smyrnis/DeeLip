@@ -15,18 +15,11 @@ pub use platform::tray;
 
 /// Embedded JetBrains Mono, SIL OFL 1.1 -- see
 /// `assets/fonts/OFL-JetBrainsMono.txt` -- replacing egui's built-in
-/// defaults for every text style, not just numeric/data content; plus the
-/// Phosphor icon font for a coherent icon set instead of ad hoc
-/// Unicode/emoji glyphs. Call once from the `eframe` creation callback,
-/// before the app's first frame.
-///
-/// The Darcula pass's typographic rule (v3, replacing the Inter/JetBrains
-/// split from the earlier "Signal" redesign): JetBrains Mono is the *only*
-/// typeface, everywhere -- both `Proportional` and `Monospace` resolve to
-/// it, so there's no longer a body/data distinction to maintain at call
-/// sites. `jbmono-medium` is still registered as a named family for the
-/// selective emphasis call sites (headings, the in-call timer) that need a
-/// heavier weight than Regular.
+/// defaults for every text style, plus the Phosphor icon font. Call once
+/// from the `eframe` creation callback, before the app's first frame.
+/// JetBrains Mono is the *only* typeface anywhere in this app (both
+/// `Proportional` and `Monospace` resolve to it) -- see `docs/crates/ui.md`'s
+/// Theming section for why.
 pub fn install_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
 

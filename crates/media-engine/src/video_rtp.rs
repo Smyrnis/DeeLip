@@ -1,10 +1,9 @@
 //! RFC 6184 H.264 RTP payload format -- fragmenting an Annex-B NAL
 //! bitstream (as produced by `video_codec::H264Encoder`) into MTU-sized RTP
 //! payloads, and the inverse. Operates one level below `rtp::RtpSender`:
-//! this produces plain `Vec<u8>` RTP *payloads*; wiring each one into an
-//! actual `RtpPacket` (one shared timestamp per video frame, marker bit on
-//! the last packet) is a future phase's job (`engine.rs`), not this
-//! module's -- see this crate's module doc.
+//! this produces plain `Vec<u8>` RTP *payloads*; `video_engine.rs` wires
+//! each one into an actual `RtpPacket` (one shared timestamp per video
+//! frame, marker bit on the last packet). Full picture: `docs/crates/media-engine.md`.
 
 /// RFC 6184 §5.8: the NAL-unit-type value (5 low bits of the first byte)
 /// that marks a packet as an FU-A fragment rather than a plain NAL unit.

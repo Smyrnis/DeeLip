@@ -114,13 +114,7 @@ pub fn decode_pcma(raw: &[u8]) -> Vec<i16> {
     raw.iter().map(|&b| alaw_to_pcm(b)).collect()
 }
 
-// ── Opus ──────────────────────────────────────────────────────────────────────
-//
-// The audio pipeline captures/plays at 8 kHz mono (`audio::SAMPLE_RATE`), and the
-// Opus encoder/decoder are configured to match — narrowband, no resampling needed.
-// Per RFC 7587 the RTP clock rate for Opus is always signalled as 48000/2 in SDP
-// regardless of the codec's internal sample rate; `rtp::RtpSender` is given a
-// matching timestamp increment by the caller (see `engine.rs`).
+// ── Opus (narrowband, matching the 8kHz pipeline -- see docs/crates/media-engine.md) ────
 
 use audiopus::coder::{Decoder as RawOpusDecoder, Encoder as RawOpusEncoder};
 use audiopus::{Application, Channels, SampleRate};
@@ -168,18 +162,7 @@ impl OpusDecoder {
     }
 }
 
-// ── G.722 (interop-only) ────────────────────────────────────────────────────
-//
-// G.722 operates natively at 16kHz, but this pipeline is fixed at 8kHz
-// throughout (mic/speaker/jitter buffer/AEC/mixing/recording), same
-// constraint that keeps Opus running narrowband above. Rather than thread a
-// second sample rate through the whole engine, these wrappers resample at
-// the codec boundary using the `audio-codec` crate's own polyphase
-// resampler (kept stateful across calls, not reconstructed per-frame, so
-// there's no discontinuity at each 20ms frame boundary). This buys SDP/RTP
-// interop with phones or PBXes that prefer or require G.722 -- it does not
-// make DeeLip's own captured voice objectively clearer, since the source
-// audio is 8kHz either way.
+// ── G.722 (interop-only, resampled at the boundary -- see docs/crates/media-engine.md) ──
 
 use audio_codec::g722::{G722Decoder as RawG722Decoder, G722Encoder as RawG722Encoder};
 use audio_codec::{Decoder as _, Encoder as _, Resampler};
@@ -231,15 +214,7 @@ impl G722Decoder {
     }
 }
 
-// ── G.729 ─────────────────────────────────────────────────────────────────────
-//
-// Native 8kHz, same as this pipeline throughout -- no resampling needed
-// (unlike G.722 above). `audio-codec`'s own `g729` module already handles
-// the 160-sample RTP frame <-> two 80-sample (10ms) G.729 frames looping
-// internally (160 samples in / 20 encoded bytes out, and back), so these
-// wrappers are just the same thin encode/decode-per-frame shape as every
-// other codec here. Its `g729-sys` dependency is a pure-Rust G.729
-// implementation, not an FFI wrapper around ITU reference C code.
+// ── G.729 (native 8kHz, pure-Rust g729-sys -- see docs/crates/media-engine.md) ──────────
 
 use audio_codec::g729::{G729Decoder as RawG729Decoder, G729Encoder as RawG729Encoder};
 
@@ -279,15 +254,7 @@ impl G729Decoder {
     }
 }
 
-// ── GSM 06.10 ─────────────────────────────────────────────────────────────────
-//
-// No usable pure-Rust crate exists for this (the only one published,
-// `oxideav-gsm`, has every version yanked) -- `gsm-sys` instead vendors and
-// compiles the classic reference implementation (Jutta Degener/Carsten
-// Bormann, TU Berlin, 1992-2009 -- the same code Asterisk/FFmpeg/SoX have
-// used for decades) from C source via the `cc` crate at build time, no
-// system package needed. It's a raw `extern "C"` binding; these wrappers
-// give it the same safe encode/decode-per-frame shape as every codec above.
+// ── GSM 06.10 (vendored reference C impl -- see docs/crates/media-engine.md) ───────────
 // 160 samples (20ms @ 8kHz) <-> one 33-byte GSM full-rate frame.
 
 pub struct GsmEncoder(gsm_sys::Gsm);
@@ -375,14 +342,7 @@ impl Drop for GsmDecoder {
     }
 }
 
-// ── iLBC ──────────────────────────────────────────────────────────────────────
-//
-// 20ms mode (304 bits/38 bytes per frame) matches DeeLip's fixed 20ms RTP
-// framing directly -- no resampling needed, unlike G.722. `oxideav-ilbc`
-// exposes a generic streaming `Encoder`/`Decoder` trait pair (built for a
-// broader multi-codec framework, with `Frame`/`Packet` wrapper types); these
-// wrappers hide that machinery behind the same simple encode/decode-per-
-// frame shape as every codec above.
+// ── iLBC (20ms mode matches our framing directly -- see docs/crates/media-engine.md) ────
 
 use oxideav_core::{AudioFrame, CodecId, CodecParameters, Frame, Packet, SampleFormat, TimeBase};
 use oxideav_core::{Decoder as OxDecoder, Encoder as OxEncoder};

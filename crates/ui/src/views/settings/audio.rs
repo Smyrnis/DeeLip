@@ -9,19 +9,10 @@ use crate::theme::{self, Palette};
 use super::SETTINGS_VIEWPORT_NAME;
 
 impl DeelipApp {
-    /// Kicks off cpal device enumeration on a background thread instead of
-    /// blocking the render thread -- measured ~620ms on first Audio-tab
-    /// visit live (PulseAudio backend), which froze the whole app (main
-    /// window included -- both it and the Settings viewport are driven by
-    /// this same thread) for that long right as the tab was switched. See
-    /// `audio_device_rx`'s doc comment.
-    ///
-    /// Wakes both `ROOT` and the Settings viewport specifically: this scan
-    /// only ever runs while Settings is open (see the two call sites in
-    /// `show_audio_section`), and `ROOT` alone doesn't repaint a `Deferred`
-    /// child viewport -- confirmed live, this left the "Scanning..." label
-    /// stuck showing stale text after the scan had already finished, until
-    /// the user happened to move the mouse over the Settings window.
+    /// Kicks off cpal device enumeration on a background thread -- see
+    /// `docs/crates/ui.md`'s Settings section for why (blocks the render thread
+    /// for hundreds of ms) and why it wakes both `ROOT` and the Settings
+    /// viewport by name.
     fn spawn_audio_device_scan(&mut self) {
         let (tx, rx) = std::sync::mpsc::channel();
         let ctx_slot = self.ctx_slot.clone();

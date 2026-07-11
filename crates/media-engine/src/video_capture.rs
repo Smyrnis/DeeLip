@@ -1,7 +1,6 @@
 //! Camera capture + RGB→I420 conversion, feeding `video_codec::Yuv420Frame`
-//! (which `H264Encoder` already consumes -- see that module). Not wired
-//! into any live call path yet. Hardware-verification status and the
-//! capture-thread design: `docs/media-pipeline.md`.
+//! into `video_engine::VideoEngine` for a live call. Hardware-verification
+//! status and the capture-thread design: `docs/crates/media-engine.md`.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -61,12 +60,7 @@ pub fn rgb8_to_yuv420(rgb: &[u8], width: u32, height: u32) -> anyhow::Result<Yuv
 }
 
 /// Handle to a running capture thread -- holds only the freshest captured
-/// frame, not a queue: a raw video frame is large enough (unlike audio's
-/// tiny 20ms PCM frames) that letting a slow consumer fall behind and
-/// accumulate a backlog is worse for a live call than simply dropping
-/// stale frames and always encoding whatever's newest. Mirrors the same
-/// "cheap-to-poll `Arc<Mutex<latest value>>`" idiom `MediaEngine::stats()`
-/// already uses (`engine.rs`), not a channel.
+/// frame, not a queue (see `docs/crates/media-engine.md` for why).
 pub struct CaptureHandle {
     latest_frame: Arc<Mutex<Option<Yuv420Frame>>>,
     stop: Arc<AtomicBool>,
@@ -107,20 +101,11 @@ impl Drop for CaptureHandle {
     }
 }
 
-/// Open `index` and start capturing on a dedicated OS thread (`nokhwa`'s
-/// `Camera::frame()` is a blocking pull call, not tokio-async -- same
-/// non-async-capture shape `cpal` audio already has in this crate, needing
-/// the same thread-based bridge as `audio.rs`). Fails fast with a real
-/// error if the camera can't be opened -- the expected outcome whenever no
-/// camera is plugged in/available, which is unconditionally true in this
-/// development sandbox.
-///
-/// `nokhwa::Camera` is not `Send` (its internal backend trait object
-/// isn't), so it cannot be constructed here and then moved into the
-/// spawned thread -- it must be created *on* that thread instead. To keep
-/// this function's own "fail fast, synchronously" contract despite that, a
-/// one-shot channel reports the open/stream-start result back before this
-/// function returns.
+/// Open `index` and start capturing on a dedicated OS thread. Fails fast
+/// with a real error if the camera can't be opened -- the expected outcome
+/// whenever no camera is plugged in/available, which is unconditionally
+/// true in this development sandbox. See `docs/crates/media-engine.md` for why
+/// this needs a thread (not tokio-async) and a one-shot readiness channel.
 pub fn start_capture(index: CameraIndex, width: u32, height: u32, fps: u32) -> anyhow::Result<CaptureHandle> {
     let latest_frame = Arc::new(Mutex::new(None));
     let stop = Arc::new(AtomicBool::new(false));

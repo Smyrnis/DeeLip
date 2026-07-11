@@ -212,10 +212,8 @@ impl DeelipApp {
                     );
                     list_frame.show(ui, |ui| {
                         // `set_width`, not just `set_min_size` -- a bare
-                        // minimum lets a *nested* `right_to_left` layout in
-                        // the Enabled column below (see its own comment)
-                        // expand to claim the rest of the whole Settings
-                        // panel's width instead of staying a tidy column.
+                        // minimum lets the Enabled column's nested
+                        // `right_to_left` layout claim the rest of the panel.
                         ui.set_width(150.0);
                         ui.set_min_height(120.0);
                         for name in ["opus", "g722", "pcmu", "pcma", "gsm", "ilbc", "g729"] {
@@ -236,12 +234,8 @@ impl DeelipApp {
                         RichText::new(t("settings.account.codecs_enabled_label")).color(palette.ink_muted).small(),
                     );
                     list_frame.show(ui, |ui| {
-                        // Fixed width, not just a minimum -- see the
-                        // Available column's comment above; without this,
-                        // the `right_to_left` group below expands to the
-                        // whole remaining Settings-panel width instead of
-                        // staying right next to the codec name, pushing the
-                        // ↑/↓ buttons off past the edge of this column.
+                        // Fixed width, same reasoning as the Available
+                        // column above.
                         ui.set_width(290.0);
                         ui.set_min_height(120.0);
                         for (i, name) in account.codec_order.iter().enumerate() {

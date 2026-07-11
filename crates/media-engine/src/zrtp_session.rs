@@ -1,9 +1,6 @@
 //! Media-engine side of ZRTP (RFC 6189): drives `deelip_sip::zrtp::ZrtpEngine`
-//! for one call's RTP socket -- retransmitting our own last-sent handshake
-//! message on packet loss, persisting retained secrets in the same SQLite
-//! database as the rest of DeeLip's config, and translating engine events
-//! into what `engine.rs`'s RTP loop needs to act on (send bytes, swap in
-//! SRTP keys, surface the SAS). Full picture: `docs/zrtp.md`.
+//! for one call's RTP socket. Full picture: `docs/crates/media-engine.md`'s "ZRTP
+//! session driving" section (protocol/wire/crypto half: `docs/crates/sip-core.md`).
 
 use std::path::Path;
 use std::time::{Duration, Instant};

@@ -1,13 +1,6 @@
-//! Global (system-wide) hotkeys for Answer/Hangup/Mute.
-//!
-//! Linux support in the underlying `global-hotkey` crate is X11-only --
-//! fine here since `main.rs` already forces DeeLip's main window onto
-//! X11/XWayland for unrelated tray-restore reasons (native Wayland gives
-//! clients no way to reliably restore their own window). Unlike the tray
-//! icon, this crate's Linux backend spawns and owns its own dedicated X11
-//! connection/event-loop thread internally (see its `platform_impl/x11`
-//! module) -- no GTK-style setup-ordering constraint to worry about here,
-//! it can be created at any point once an X server is reachable.
+//! Global (system-wide) hotkeys for Answer/Hangup/Mute. See `docs/crates/ui.md`'s
+//! "Platform integration" section for the X11-only/tray-restore context and
+//! why this needs no GTK-style setup ordering.
 
 use global_hotkey::hotkey::{Code, HotKey};
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
@@ -38,33 +31,18 @@ pub struct Hotkeys {
     /// without the other.
     custom_ids: Option<(u32, u32, u32)>,
     media_hook_id: Option<u32>,
-    /// Fed by a forwarding thread (spawned in `spawn`) that blocks on
-    /// `GlobalHotKeyEvent::receiver()` -- that receiver is process-wide and
-    /// owned by the `global-hotkey` crate itself, so we can't hook a repaint
-    /// request into its send side directly. Forwarding through our own
-    /// channel lets that thread call `ctx.request_repaint()` right after
-    /// each event, the same "wake the UI thread instead of making it poll"
-    /// idiom `platform::tray`'s event threads already use, instead of
-    /// `poll` only ever noticing a press whenever the idle repaint timer
-    /// next happens to fire.
+    /// Fed by a forwarding thread (see `docs/crates/ui.md`'s "Platform integration"
+    /// section for the shared background-thread-plus-channel idiom).
     event_rx: std::sync::mpsc::Receiver<GlobalHotKeyEvent>,
 }
 
 impl Hotkeys {
-    /// Parse and register the three custom bindings (e.g. "Ctrl+Alt+A"
-    /// syntax) if `custom` is given, plus, if `media_buttons` is set, a
-    /// bare (no-modifier) grab of the hardware media "Play/Pause" key --
-    /// `global-hotkey`'s X11 backend maps `Code::MediaPlayPause` straight
-    /// to the `XF86AudioPlay` keysym, so this needs no separate MPRIS/evdev
-    /// mechanism, just a second registration on the same manager. Both are
-    /// independent -- either, both, or (return `Ok` with nothing
-    /// registered, harmless) neither may be requested.
-    ///
-    /// Fails closed -- if the manager itself can't be created, or a
-    /// binding fails to parse/register, no hotkeys are left
-    /// half-registered; the caller should log the error and continue
-    /// without hotkeys rather than fail the whole app over a misconfigured
-    /// binding.
+    /// Parse and register the three custom bindings if `custom` is given,
+    /// plus a bare grab of the hardware media "Play/Pause" key if
+    /// `media_buttons` is set -- independent of each other, either/both/
+    /// neither may be requested. Fails closed: if the manager can't be
+    /// created or any binding fails to parse/register, nothing is left
+    /// half-registered.
     pub fn spawn(custom: Option<(&str, &str, &str)>, media_buttons: bool, ctx_slot: CtxSlot) -> anyhow::Result<Self> {
         let manager = GlobalHotKeyManager::new()?;
 

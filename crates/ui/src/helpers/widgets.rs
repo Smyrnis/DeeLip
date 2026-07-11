@@ -73,19 +73,9 @@ pub(crate) fn list_row_divider(ui: &Ui, palette: &Palette, row_rect: egui::Rect)
 
 /// Render one list row: `add_contents` inside a single `ui.horizontal`, with
 /// a hover-highlight background and a bottom divider -- shared by
-/// History/Contacts/Messages so hovering any list row gives the same
-/// feedback everywhere. The highlight uses egui's standard "reserve a shape
-/// slot before the content, fill it in once the row's rect/hover state are
-/// known" trick, since otherwise a background painted *after* the row's own
-/// widgets would draw on top of them instead of behind.
-///
-/// `id_source` must be unique per row (e.g. the row's index): egui derives
-/// `ui.horizontal()`'s child id purely from the *parent* ui's id plus the
-/// fixed literal "child", so every row rendered from the same virtualized
-/// `show_rows` loop would otherwise get the exact same id. `Response::hovered`
-/// is a lookup by that id into a per-frame hovered-id set, so with colliding
-/// ids, hovering one row marked *every* row hovered simultaneously. Wrapping
-/// in `ui.push_id` salts the id per row so only the actual hovered row lights up.
+/// History/Contacts/Messages. See `docs/crates/ui.md`'s "List views" section for
+/// why `id_source` must be unique per row (a real bug this fixed: colliding
+/// ids lit up every row's hover highlight at once).
 pub(crate) fn list_row(
     ui: &mut Ui, palette: &Palette, id_source: impl std::hash::Hash, add_contents: impl FnOnce(&mut Ui),
 ) {
@@ -110,18 +100,10 @@ pub(crate) fn list_row(
 }
 
 /// Same as `list_row`, but also attaches a right-click context menu to the
-/// row background -- History/Contacts use this instead of `list_row` now
-/// that their per-row actions (Call/Message/Copy/Delete/etc.) live behind a
-/// right-click menu (MicroSIP-style) rather than always-visible inline
-/// buttons. `row.interact(Sense::click())` upgrades the row's default
-/// hover-only sense so `context_menu` can detect a right click on it, per
-/// egui's own documented pattern (`Response::interact`'s doc example) --
-/// this doesn't steal clicks from child widgets like the name label, since
-/// those sense clicks independently by their own id/rect.
-///
-/// `menu_contents` must not capture anything `add_contents` also mutably
-/// captures -- the two closures are constructed together at the call site
-/// but only one runs per frame (the menu only opens on right-click), so
+/// row background -- History/Contacts use this for their per-row actions
+/// (MicroSIP-style, not always-visible inline buttons). `menu_contents` must
+/// not capture anything `add_contents` also mutably captures -- both
+/// closures are constructed together but only one runs per frame, so
 /// borrowing the same `&mut` from both won't compile.
 pub(crate) fn list_row_menu(
     ui: &mut Ui, palette: &Palette, id_source: impl std::hash::Hash, add_contents: impl FnOnce(&mut Ui),
@@ -318,20 +300,10 @@ pub(crate) fn account_status_label(ui: &Ui, palette: &Palette, reg_ok: bool, lab
 /// plain-square-button loops.
 pub(crate) fn phone_keypad(ui: &mut Ui, palette: Palette, mut on_press: impl FnMut(char)) {
     const ROWS: [[char; 3]; 4] = [['1', '2', '3'], ['4', '5', '6'], ['7', '8', '9'], ['*', '0', '#']];
-    // v2: a rounded-square calculator-style key, not a circle -- one of
-    // the concrete "less playful" changes -- and smaller, for the denser
-    // v2 layout. Bumped back up in v4 (2026-07-11) -- user feedback that
-    // the keys read too small to comfortably tap. Bumped again same day --
-    // "make the dialer bigger" -- shared by the idle dial pad, the in-call
-    // DTMF window, and the Transfer window's keypad, so all three grow
-    // together.
+    // Shared by the idle dial pad, in-call DTMF window, and Transfer
+    // window's keypad, so all three grow together.
     const BUTTON: f32 = 64.0;
-    // `ui.vertical_centered` only centers single fixed-size children -- a
-    // nested `ui.horizontal` row reports its own min_rect starting flush at
-    // the container's left edge, so relying on it left every row jammed
-    // against the left edge instead of centered. Centering each row's
-    // exact known width (3 buttons + 2 gaps) via an explicit leading
-    // `add_space` is the robust way to center a *group* of widgets.
+    // See docs/crates/ui.md's "centering nested rows" note.
     let row_width = 3.0 * BUTTON + 2.0 * ui.spacing().item_spacing.x;
     for row in ROWS {
         ui.horizontal(|ui| {

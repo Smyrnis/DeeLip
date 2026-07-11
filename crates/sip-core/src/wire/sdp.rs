@@ -496,15 +496,13 @@ pub fn parse_sdp_forcing(sdp: &str, allowed: &[AudioCodec], force: Option<AudioC
     })
 }
 
-// ── Video (Phase 1: additive primitives only) ───────────────────────────────
+// ── Video ────────────────────────────────────────────────────────────────────
 //
-// These build/parse a `m=video` media section in isolation -- they are not
-// yet wired into `build_offer`/`build_answer`/`ParsedSdp`/`parse_sdp_forcing`
-// or anywhere in the live call path (`media_setup.rs`, `call/lifecycle.rs`,
-// `media-engine`'s `engine.rs`). That integration, plus camera capture and
-// H.264 encode/decode, is future work. This section exists so it can be
-// developed and tested in isolation with zero risk of regressing the
-// audio-only call path every existing call still uses exclusively.
+// These build/parse a `m=video` media section in isolation from `build_offer`/
+// `build_answer`/`ParsedSdp`/`parse_sdp_forcing` -- a separate, parallel path
+// through the whole call-setup pipeline, not folded into the audio types.
+// Full picture (why it's kept separate, how the call/lifecycle/* call sites
+// use these): docs/crates/sip-core.md's "Video negotiation" section.
 
 /// Negotiated video codec. H.264 only for now (via the `openh264` crate,
 /// self-compiled from Cisco's BSD-2-licensed source -- a deliberate choice
@@ -602,19 +600,12 @@ pub fn build_video_media_section(
 /// `m=` line or EOF)` groups -- a pure line-classifier, one group per media
 /// section, that doesn't interpret any line's meaning itself. Lines before
 /// the first `m=` line (the session-level `v=`/`o=`/`s=`/`c=`/`t=` header)
-/// are not included in any group.
-///
-/// This is the direct fix for the bug class a naive second `m=video` line
-/// would hit today: `parse_sdp_forcing` folds *every* `a=rtpmap`/
-/// `a=candidate`/`a=crypto` line in the whole SDP into one flat accumulator
-/// regardless of which `m=` section it's actually under, so appending a
-/// video section as-is would silently corrupt audio parsing (e.g. a video
-/// `a=rtpmap:100 H264/90000` line would land in the same accumulator as
-/// audio's rtpmaps). `parse_sdp_forcing` itself isn't touched here --
-/// nothing in the live call path produces a two-`m=`-line SDP yet, so the
-/// latent issue is dormant until Phase 2 actually wires video negotiation
-/// in, at which point `parse_sdp_forcing` needs to become section-aware
-/// too (likely by using this function internally).
+/// are not included in any group. Used by the video call sites in
+/// `call/lifecycle/{incoming,response}.rs` to isolate the video `m=`
+/// section's own attribute lines before parsing them with
+/// `parse_video_section` -- `parse_sdp_forcing` itself stays audio-only and
+/// section-unaware; see docs/crates/sip-core.md's "Video negotiation" section for
+/// why the two parses are kept deliberately separate.
 pub fn split_media_sections(sdp: &str) -> Vec<(&str, Vec<&str>)> {
     let mut sections: Vec<(&str, Vec<&str>)> = Vec::new();
     for line in sdp.lines() {

@@ -1,10 +1,5 @@
 //! SDP construction combined with STUN/TURN/ICE endpoint resolution for one
-//! call leg -- the actual call-setup "business logic" that used to live in
-//! the `ui` crate (`ui/src/media.rs`), moved here so it runs inside
-//! `SipStack`'s own async task instead of being `rt.block_on`'d from the
-//! egui UI thread. That mattered: ICE gathering alone has a multi-second
-//! timeout, so doing STUN/TURN/ICE synchronously on the UI thread froze the
-//! whole window for the duration on every call.
+//! call leg. Full picture: docs/crates/sip-core.md's "call::media_setup" section.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -142,23 +137,13 @@ pub async fn try_gather_ice(network: &NetworkConfig, enabled: bool, is_controlli
     }
 }
 
-/// Finish an in-progress ICE negotiation once the remote's parsed SDP
-/// (offer or answer, whichever direction) is known, running connectivity
-/// checks and returning the winning connection. Only used for the *first*
-/// SDP exchange of a new call -- `None` if `gathered` is `None` (ICE wasn't
-/// attempted) or the remote's SDP didn't itself signal ICE support.
-///
-/// Note this is a *different* failure mode than `try_gather_ice` returning
-/// `None`: by the time this runs, our own offer/answer has already been sent
-/// committing the far end to our gathered default candidate's address
-/// (that's the whole point of RFC 8445's mandated default-candidate-in-c=/m=
-/// backwards-compatibility rule). If connectivity checks then fail here,
-/// there's no clean way back to the plain `resolve_rtp_endpoint` path
-/// post-commitment (it would bind a different socket than the address
-/// already promised in the sent SDP) -- this is an inherent structural limit
-/// of ICE's gather-then-commit shape, not a bug, and the call is simply left
-/// without working media in that case, same as any other NAT-traversal
-/// failure this codebase never protected against pre-ICE either.
+/// Finish an in-progress ICE negotiation once the remote's parsed SDP is
+/// known, running connectivity checks and returning the winning connection.
+/// `None` if ICE wasn't attempted or connectivity checks fail -- by this
+/// point our own offer/answer already committed the far end to our gathered
+/// candidate's address, so a failure here has no clean fallback (an
+/// inherent limit of ICE's gather-then-commit shape, not a bug); the call is
+/// simply left without working media in that case.
 pub async fn finish_ice_connect(
     gathered: Option<IceGathered>, is_controlling: bool, parsed: &ParsedSdp,
 ) -> Option<IceConnection> {

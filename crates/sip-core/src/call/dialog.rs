@@ -32,10 +32,8 @@ pub struct CallMedia {
     /// Comfort-noise PT the remote signaled, if any -- see `ParsedSdp::cn_type`.
     pub cn_type: Option<u8>,
     /// Negotiated video leg, if `SipAccount::video_enabled` and the remote
-    /// both offered/accepted one -- `None` for every audio-only call (i.e.
-    /// every call today, since this field's introduction). Negotiation
-    /// only as of this field's introduction: nothing in `media-engine` yet
-    /// reads this to actually capture/encode/send/receive/decode video.
+    /// both offered/accepted one -- `None` for an audio-only call. See
+    /// docs/crates/sip-core.md's "Video negotiation" section.
     pub video: Option<VideoMedia>,
 }
 

@@ -41,15 +41,9 @@ impl DeelipApp {
             ui.add_space(6.0);
         }
 
-        // A centered fixed-width column, not `ui.vertical_centered` -- that
-        // only centers single fixed-size children; a nested `ui.horizontal`
-        // row (the keypad, the backspace/clear row) reports its own
-        // min_rect starting flush at the container's left edge, so it
-        // doesn't get centered by the parent layout at all (see
-        // `phone_keypad`'s doc comment). Fixing this column's width once
-        // and centering *it* means everything inside -- including
-        // `phone_keypad`'s own internal row-centering -- lines up
-        // consistently against the same `STAGE_WIDTH`.
+        // A centered fixed-width column, not `ui.vertical_centered` -- see
+        // docs/crates/ui.md's "centering nested rows" note for why that alone
+        // doesn't center the keypad/backspace rows inside it.
         let margin = ((ui.available_width() - STAGE_WIDTH) / 2.0).max(0.0);
         ui.horizontal(|ui| {
             ui.add_space(margin);
@@ -92,9 +86,7 @@ impl DeelipApp {
                 });
                 ui.add_space(16.0);
 
-                // Grey chrome, not the `signal` accent -- see theme.rs's
-                // v3.1 doc note. `signal` is reserved for actual call-state
-                // signals now, not generic buttons.
+                // Grey chrome, not `signal` -- see docs/crates/ui.md's Theming section.
                 let call_text =
                     RichText::new(format!("{}  {}", egui_phosphor::regular::PHONE, t("common.call_button")))
                         .font(theme::font_medium(15.0))

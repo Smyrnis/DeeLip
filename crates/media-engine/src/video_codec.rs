@@ -1,8 +1,7 @@
 //! H.264 encode/decode wrapper around `openh264` (self-compiled from
-//! Cisco's BSD-2-licensed source -- see `MICROSIP_GAPS.md`'s video-calling
-//! entry for the licensing decision record). Used by `video_rtp.rs`'s RTP
-//! packetization; not wired into any live call path yet (that's a future
-//! phase, alongside camera capture) -- see this crate's module doc.
+//! Cisco's BSD-2-licensed source). Used by `video_engine::VideoEngine` for
+//! a live call's video leg via `video_rtp.rs`'s RTP packetization. Full
+//! picture: `docs/crates/media-engine.md`.
 
 use openh264::decoder::Decoder as OpenH264Decoder;
 use openh264::encoder::{BitRate, Encoder as OpenH264Encoder, EncoderConfig};
@@ -23,11 +22,10 @@ pub struct Yuv420Frame {
 
 impl Yuv420Frame {
     /// A flat solid-color synthetic frame -- used by this module's and
-    /// `video_rtp.rs`'s tests in place of a real camera frame (this
-    /// sandbox has no camera device at all: no `/dev/video*`, no
-    /// `uvcvideo` kernel module). Real capture (a future phase, via the
-    /// `nokhwa` crate) will build `Yuv420Frame`s from actual camera output
-    /// instead -- the encoder/decoder here don't care which.
+    /// `video_rtp.rs`'s tests in place of a real camera frame (this sandbox
+    /// has no camera device at all: no `/dev/video*`, no `uvcvideo` kernel
+    /// module). Real capture is `video_capture.rs`; the encoder/decoder
+    /// here don't care which source a `Yuv420Frame` came from.
     pub fn solid_color(width: u32, height: u32, y_val: u8, u_val: u8, v_val: u8) -> Self {
         let (cw, ch) = (width as usize / 2, height as usize / 2);
         Self {

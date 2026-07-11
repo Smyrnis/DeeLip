@@ -65,12 +65,8 @@ impl DeelipApp {
     }
 
     /// Raise/focus the main window once per incoming call -- deliberately
-    /// not gated on `notifications_enabled` (a user who disabled desktop
-    /// notifications may still want the window to come to front), so this
-    /// tracks its own rising edge rather than reusing `sync_notifications`'s.
-    /// Reuses the exact `ViewportCommand` pair the tray icon's own
-    /// restore-from-tray path already uses (`platform::tray::restore_window`).
-    /// Called once per frame.
+    /// not gated on `notifications_enabled`, so this tracks its own rising
+    /// edge rather than reusing `sync_notifications`'s. Called once per frame.
     pub(crate) fn sync_window_raise(&mut self, ctx: &egui::Context) {
         match &self.pending_call {
             Some(p) if self.last_raised_call.as_deref() != Some(p.call_id.as_str()) => {
@@ -127,12 +123,9 @@ impl DeelipApp {
             return;
         };
 
-        // Only rebuild (clone Senders/call-ids, take the lock) when the set
-        // of live/pending calls actually changed since last frame -- this
-        // ran unconditionally every single frame before, regardless of
-        // whether `self.calls`/`self.pending_call` changed at all. The
-        // comparison itself borrows rather than allocates, so the common
-        // (unchanged) case costs nothing beyond a cheap scan.
+        // Only rebuild when the set of live/pending calls actually changed
+        // since last frame -- a borrow-only comparison, so the common
+        // (unchanged) case costs just a cheap scan, not a full rebuild.
         let calls_changed = self.calls.len() != self.tray_calls_key.len()
             || self.calls.iter().zip(&self.tray_calls_key).any(|(c, (acc, id))| c.account != *acc || c.call_id != *id);
         if calls_changed {
@@ -244,11 +237,8 @@ impl eframe::App for SharedApp {
 
 impl DeelipApp {
     fn update_inner(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame, self_arc: &SharedApp) {
-        // Refreshed unconditionally, every frame, regardless of tray/call
-        // state -- see `ctx_slot`'s doc comment on `DeelipApp`. Background
-        // producers (SIP, hotkeys, notifications, update-check, directory
-        // search, device scans) read this to call `request_repaint()` the
-        // instant they have something, rather than the UI having to poll.
+        // Refreshed every frame regardless of tray/call state -- see
+        // `docs/crates/ui.md`'s "Repaint plumbing" section.
         *self.ctx_slot.lock().unwrap() = Some(ctx.clone());
 
         if std::mem::take(&mut self.first_frame) && self.config.start_minimized {
@@ -276,16 +266,9 @@ impl DeelipApp {
         ctx.set_visuals(visuals);
 
         // ── Tab bar ──────────────────────────────────────────────────────────
-        // Selected tab gets an accent-tinted background for free, via
-        // `visuals.selection.bg_fill` (set to `palette.signal` in
-        // `theme::apply_style` above) -- the same highlight every other
-        // selectable widget in the app uses, not a one-off tab-bar special case.
-        //
-        // The History label is recomputed only when its unseen count
-        // actually changed since last frame, instead of `format!()`ing a
-        // fresh String every single frame regardless (this runs at ~20fps
-        // continuously) -- same cache-and-compare idiom as
-        // `history_filter_key`/`audio_device_cache`.
+        // History's label is recomputed only when its unseen count actually
+        // changed (see `docs/crates/ui.md`'s list-view caching note), not rebuilt
+        // every frame at this loop's ~20fps.
         if self.history_tab_label_cache.0 != self.unseen_missed_calls {
             self.history_tab_label_cache = (
                 self.unseen_missed_calls,
@@ -377,10 +360,7 @@ impl DeelipApp {
             });
         });
 
-        // Explicit margin, not egui's own default (`Style::window_margin`,
-        // 6px) -- too tight once lived with, part of the same "add
-        // breathing room everywhere" feedback `theme::apply_style`'s v3.1
-        // spacing bump addresses.
+        // Explicit margin -- egui's own default (6px) read as too tight.
         let central_frame = egui::Frame::central_panel(&ctx.style()).inner_margin(14.0);
         egui::CentralPanel::default().frame(central_frame).show(ctx, |ui| match self.tab {
             crate::app::Tab::Dialer => self.show_dialer(ui),
@@ -396,24 +376,11 @@ impl DeelipApp {
         self.show_update_popup(ctx);
         self.show_contact_dialog(ctx, self_arc.clone());
 
-        // The ~20fps cadence only actually matters while there's a call to
-        // animate/tick (the ringing dot's pulse, the connected-call duration
-        // counter) -- see `docs/dialer-ui.md`. Those are
-        // the only things left with no waker of their own: SIP/hotkey/tray/
-        // notification/update-check/directory-search/device-scan events all
-        // now push their own `request_repaint()` via `ctx_slot` the instant
-        // they have something (see that field's doc comment), instead of
-        // relying on this tick to notice them. So the idle branch below is
-        // now just a rare safety net, not the primary way anything gets
-        // noticed -- kept long on purpose: every tick also fully rebuilds
-        // whatever's in the Settings viewport (`show_settings_modal` above),
-        // and forcing that (plus the main window's own redraw) on a short
-        // fixed schedule while idle is what caused real lag: GNOME/Mutter
-        // throttles frame delivery for whichever of DeeLip's two windows
-        // *isn't* focused (confirmed live -- unrelated to whether it's
-        // visually occluded), and since both windows share one render
-        // thread, a throttled main-window redraw directly delayed Settings'
-        // own next frame whenever Settings had focus and the idle tick fired.
+        // The 50ms cadence only matters while there's a call to animate/tick
+        // (the ringing dot's pulse, the call timer) -- see `docs/crates/ui.md`'s
+        // "Repaint plumbing" section for why the idle branch below is now
+        // just a rare safety net, not the primary way anything gets noticed,
+        // and why it must stay long (2s) rather than short.
         let has_live_call = self.pending_call.is_some() || self.pending_outbound.is_some() || !self.calls.is_empty();
         let repaint_interval = if has_live_call { Duration::from_millis(50) } else { Duration::from_secs(2) };
         ctx.request_repaint_after(repaint_interval);

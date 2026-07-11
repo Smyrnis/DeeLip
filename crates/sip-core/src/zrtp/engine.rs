@@ -1,7 +1,7 @@
 //! ZRTP handshake state machine -- drives Hello/Commit/DHPart1/DHPart2/
 //! Confirm1/Confirm2/Conf2ACK to completion for one call, then hands back
 //! the derived SRTP keys. Hash-chain reveal sequence, provenance/
-//! verification status, and scope cuts: `docs/zrtp.md`.
+//! verification status, and scope cuts: docs/crates/sip-core.md's "ZRTP" section.
 
 use crate::zrtp::cache::{CacheEntry, RetainedSecrets, SharedSecretStore};
 use crate::zrtp::crypto::{

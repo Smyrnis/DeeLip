@@ -117,15 +117,9 @@ impl Db {
         Ok(db)
     }
 
-    /// `CREATE TABLE IF NOT EXISTS` above only creates the `accounts` table
-    /// the very first time this DB file exists -- an already-existing table
-    /// from before a column was added (e.g. `mailbox`, or the account-editor
-    /// fields added alongside this method) never gets that column, and every
-    /// `SELECT`/`INSERT` in `account.rs` would then fail with "no such
-    /// column". Idempotently `ALTER TABLE ADD COLUMN` anything `SCHEMA`
-    /// expects but an existing table predates; SQLite has no "IF NOT
-    /// EXISTS" for columns, so a "duplicate column name" error (already has
-    /// it) is swallowed and anything else propagates.
+    /// Idempotent `ALTER TABLE ADD COLUMN` for anything `SCHEMA` expects but
+    /// an existing `accounts` table predates -- adding a column here always
+    /// needs a matching entry in `SCHEMA` too. Full picture: `docs/crates/config.md`.
     fn migrate_accounts_columns(&self) -> anyhow::Result<()> {
         const COLUMNS: &[&str] = &[
             "account_name   TEXT",

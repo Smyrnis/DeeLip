@@ -29,8 +29,8 @@ pub struct CallMediaReady {
     /// if one is configured, else `None` (plain direct UDP).
     pub relay: Option<Arc<dyn Conn + Send + Sync>>,
     /// Negotiated video leg, if `SipAccount::video_enabled` and the remote
-    /// both offered/accepted one -- `None` for every call today. See
-    /// `VideoMediaReady`; nothing in `media-engine` reads this yet.
+    /// both offered/accepted one -- `None` for an audio-only call. See
+    /// `VideoMediaReady` and docs/crates/sip-core.md's "Video negotiation" section.
     pub video: Option<VideoMediaReady>,
 }
 

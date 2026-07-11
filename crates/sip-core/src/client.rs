@@ -44,16 +44,9 @@ pub(crate) const SESSION_MIN_SE: u32 = 90;
 
 // ── Background call-setup results ─────────────────────────────────────────────
 
-/// STUN/TURN/ICE resolution (`media_setup::try_gather_ice`/`try_answer_with_ice`/
-/// `resolve_rtp_endpoint`/`finish_ice_connect`) is real network I/O bounded by
-/// a multi-second timeout -- running it inline inside `initiate_call`/
-/// `accept_call`/`on_response` would block this account's *entire* event loop
-/// (every other call's BYE/hold-resume, incoming messages, re-registration)
-/// for that whole time, since `run()`'s `select!` fully awaits one branch
-/// before looping back. Each of those three call sites instead spawns the
-/// resolution as its own task and reports the result back here, so `run()`
-/// picks it up as just another `select!` branch (`internal_rx`) alongside
-/// everything else, instead of awaiting it inline.
+/// Completed background call-setup results, fed back into `run()`'s own
+/// `select!` loop via `internal_rx` -- see docs/crates/sip-core.md's "why call
+/// setup is split into a background task" section for the full reasoning.
 pub(crate) enum StackEvent {
     /// `initiate_call`'s offer is ready to send as the actual INVITE.
     OutgoingOfferReady {
@@ -125,14 +118,8 @@ pub(crate) struct OutgoingVideoConnected {
 }
 
 /// Wraps the raw event channel so every `event_tx.send(...)` call site in
-/// this crate (there are ~30, across `call/lifecycle/*.rs`,
-/// `subscription/handlers.rs`, `message_method.rs`) also wakes up whichever
-/// UI is consuming `SipEvent`s, without needing to touch any of those call
-/// sites individually -- `.send()`'s signature matches
-/// `mpsc::UnboundedSender::send` exactly, so this is a drop-in replacement
-/// for the field's type alone. `waker` is caller-supplied precisely so this
-/// crate doesn't need to depend on `egui`/`eframe` to know how to request a
-/// repaint -- the `ui` crate hands in a closure that does that.
+/// this crate also wakes up whichever UI is consuming `SipEvent`s. See
+/// docs/crates/sip-core.md's "EventSender" section.
 #[derive(Clone)]
 pub struct EventSender {
     inner: mpsc::UnboundedSender<SipEvent>,
@@ -282,15 +269,7 @@ impl SipStack {
     }
 
     /// `SipAccount::local_account` (MicroSIP's "Local Account"/serverless
-    /// mode): bind a plain UDP listener with no registrar to resolve or
-    /// connect to at all -- there's no fixed peer, so `server_addr` is a
-    /// never-sent-to placeholder (port 0); `initiate_call` resolves each
-    /// outgoing call's real destination straight from the dialed target
-    /// instead (see `lifecycle::resolve_local_call_target`). Always UDP,
-    /// regardless of `account.transport`: TCP/TLS need a real persistent
-    /// connection to a live peer at socket-creation time (see
-    /// `SipTransport::connect`'s Tcp/Tls arms), which doesn't exist without
-    /// a fixed server.
+    /// mode) -- see docs/crates/sip-core.md's "SipAccount::local_account" section.
     async fn connect_local(
         account: &SipAccount, local_port: u16, external_ip: &Option<String>,
     ) -> anyhow::Result<(Arc<SipTransport>, String, String, SocketAddr, TransportProtocol)> {
@@ -365,15 +344,9 @@ impl SipStack {
         Ok((transport, local_ip, advertised_ip, server_addr))
     }
 
-    /// `TransportProtocol::Auto`: try UDP, then TCP, then TLS in that order,
-    /// each bounded by `AUTO_PROBE_TIMEOUT` -- keeps the first candidate
-    /// that both connects *and* gets an actual response (any status code)
-    /// to a one-shot unauthenticated REGISTER probe, since UDP alone always
-    /// "connects" (it's just a local bind) and so can't be told apart from
-    /// a genuinely unreachable server without a real round-trip. Once one
-    /// candidate succeeds, the rest of the stack treats the connection
-    /// exactly as if that concrete transport had been configured directly
-    /// (see `resolved_transport`).
+    /// `TransportProtocol::Auto`: try UDP, then TCP, then TLS, each bounded
+    /// by `AUTO_PROBE_TIMEOUT`. See docs/crates/sip-core.md's "connect_transport_auto"
+    /// section for why a probe REGISTER is needed rather than just connecting.
     async fn connect_transport_auto(
         account: &SipAccount, network: &NetworkConfig, local_port: u16, external_ip: &Option<String>,
     ) -> anyhow::Result<(Arc<SipTransport>, String, String, SocketAddr, TransportProtocol)> {
@@ -403,16 +376,9 @@ impl SipStack {
     }
 
     /// Spawns the background task that runs this account's SIP stack for
-    /// the lifetime of the process. A transport failure (dropped TLS/TCP
-    /// connection, etc.) doesn't kill the account permanently -- `run()`
-    /// hands back the still-good `cmd_rx` on failure, and this loop
-    /// reconnects with the same exponential backoff shape already used for
-    /// registration retries, reusing the *same* `cmd_tx`/`event_rx` pair
-    /// `SipHandle` was constructed with so the reconnect is transparent to
-    /// callers (in-flight dialogs/subscriptions are necessarily lost across
-    /// a transport replacement, same as they always were the moment a
-    /// disconnect happened -- but the account itself now recovers instead
-    /// of staying dead until the whole process is restarted).
+    /// the lifetime of the process, reconnecting with exponential backoff on
+    /// transport failure. See docs/crates/sip-core.md's "SipStack::spawn's reconnect
+    /// loop" section.
     pub async fn spawn(
         account: SipAccount, network: NetworkConfig, local_port: u16, external_ip: Option<String>,
         waker: Arc<dyn Fn() + Send + Sync>,
@@ -764,16 +730,11 @@ fn contact_transport_param_str(proto: TransportProtocol) -> &'static str {
 
 const AUTO_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 
-/// One-shot, unauthenticated `REGISTER` (`Expires: 0`, so a compliant
-/// registrar treats it as a no-op rather than actually registering)
-/// used only to test whether a just-connected transport candidate in
-/// `connect_transport_auto` actually reaches a live server -- any response
-/// at all (2xx, 401/407 challenge, even a rejection) proves the path
-/// works; a timeout with nothing back means it doesn't. Deliberately
-/// free-standing rather than `self.register_once()`/`send_register()` in
-/// `registration.rs`, since those need a fully-constructed `SipStack`
-/// (`reg_call_id`/`reg_from_tag`/`reg_cseq` etc.) that doesn't exist yet
-/// this early in connection setup.
+/// One-shot, unauthenticated `REGISTER` used only to test whether a
+/// just-connected transport candidate in `connect_transport_auto` actually
+/// reaches a live server. Free-standing rather than `self.register_once()`
+/// since a fully-constructed `SipStack` doesn't exist yet this early in
+/// connection setup.
 async fn probe_register(
     transport: &SipTransport, proto: TransportProtocol, account: &SipAccount, local_ip: &str, advertised_ip: &str,
     local_port: u16, server_addr: SocketAddr,

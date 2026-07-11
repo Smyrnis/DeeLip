@@ -109,15 +109,12 @@ impl DeelipApp {
                     return;
                 }
                 let acc = &self.accounts[account].account;
-                // MicroSIP's "Deny Incoming (Control Button)"/"Auto Answer
-                // (Control Button)": both react to the same remote
-                // `Call-Info: ...;answer-after=N` signal (see
-                // `deelip_sip::wire::util::parse_call_info_answer_after`),
-                // ignored entirely unless the account opted into one of the
-                // two. Deny takes priority if both are somehow on, and (like
-                // the intercom/paging use case this exists for) both bypass
-                // DND/forwarding below -- only the blocklist above and the
-                // capacity check further down still apply.
+                // MicroSIP's "Deny/Auto Answer (Control Button)": both react
+                // to the same remote answer-after signal (see
+                // `deelip_sip::wire::util::parse_call_info_answer_after`).
+                // Deny wins if both are on; both bypass DND/forwarding below
+                // (the intercom/paging use case this exists for) -- only the
+                // blocklist above and the capacity check below still apply.
                 if remote_answer_after.is_some() && acc.deny_incoming_control_button {
                     tracing::debug!(call_id, %from, "Remote auto-answer signal + Deny Incoming (Control Button) active, rejecting");
                     self.accounts[account].handle.reject_call(&call_id);
@@ -161,17 +158,11 @@ impl DeelipApp {
                         return;
                     }
                 }
-                // `pending_accept` counts toward capacity too -- it's a call
-                // we've already told `SipStack` to accept and is about to
-                // occupy a `calls` slot once `CallConnected` arrives. Without
-                // this, a 2nd incoming call could slip in and itself get
-                // accepted while the first is still mid-accept, and since
-                // `pending_accept` is a single slot (not a list), the second
-                // accept would silently overwrite the first's tracking --
-                // orphaning it as a connected-but-invisible call the moment
-                // its own `CallConnected` finally arrives (see
-                // `on_call_terminated`'s and the `CallConnected` handler's
-                // `pending_accept` matching just above).
+                // `pending_accept` counts toward capacity too -- it's about
+                // to occupy a `calls` slot once `CallConnected` arrives, and
+                // being a single slot (not a list), a 2nd accept before then
+                // would silently overwrite its tracking, orphaning the first
+                // call once its own event lands.
                 let occupied = self.calls.len() + usize::from(self.pending_accept.is_some());
                 if occupied >= 2 || self.pending_call.is_some() {
                     // Already at capacity (2 concurrent + at most 1 ringing) — decline immediately.
@@ -414,16 +405,12 @@ impl DeelipApp {
         }
     }
 
-    /// Remove call `idx`, stopping its media first if it was the focused
-    /// one, and fixing up `focused_call` for the index shift. If a
-    /// conference was in progress, the shared engine is always stopped
-    /// (regardless of which leg is being removed) and, if one call
-    /// survives, ordinary single-leg media is restarted for it -- there's
-    /// no "drop one party but keep mixing" mode. This is the single
-    /// chokepoint both a local hangup (`do_hangup`) and a remote BYE/
-    /// failure (`on_call_terminated`) go through, so both get this
-    /// behavior identically. Returns the removed slot so the caller can
-    /// record history from it.
+    /// Remove call `idx`, stopping its media first if it was focused or a
+    /// conference leg (there's no "drop one party but keep mixing" mode --
+    /// a surviving conference call gets ordinary single-leg media
+    /// restarted). The single chokepoint both `do_hangup` and
+    /// `on_call_terminated` go through. Returns the removed slot so the
+    /// caller can record history from it.
     pub(crate) fn remove_call(&mut self, idx: usize) -> CallSlot {
         let was_conference = self.in_conference;
         if was_conference || self.focused_call == Some(idx) {

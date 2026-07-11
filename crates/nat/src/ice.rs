@@ -1,9 +1,5 @@
-//! Full ICE (RFC 8445) via the `webrtc-ice` crate — same `webrtc-rs` family
-//! (and exact version, 0.17.x) as `turn`/`webrtc-util` already used by
-//! `turn_relay.rs`. This is additive to, not a replacement for, the plain
-//! STUN-reflexive/TURN-unconditional path in `stun.rs`/`turn_relay.rs`: a
-//! call falls back to that existing path if gathering fails or times out
-//! (see `crates/ui/src/lib.rs`'s `try_gather_ice`).
+//! Full ICE (RFC 8445) via the `webrtc-ice` crate. Additive to, not a
+//! replacement for, `stun.rs`/`turn_relay.rs` -- full picture: `docs/crates/nat.md`.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -21,17 +17,9 @@ use webrtc_ice::rand::{generate_pwd, generate_ufrag};
 use webrtc_ice::url::{ProtoType, SchemeType, Url};
 use webrtc_util::{Conn, Error as UtilError};
 
-/// The `Conn` returned by ICE connectivity checks (`AgentConn`, private to
-/// `webrtc-ice`) only implements the "connected socket" half of `Conn` --
-/// `send`/`recv`, always talking to whichever candidate pair won.
-/// `send_to`/`recv_from` on `AgentConn` unconditionally return "Not
-/// applicable", since there's no per-call destination argument once a pair
-/// is selected. But `MediaEngine`'s `RtpSocket` abstraction (see
-/// `crates/media-engine/src/engine.rs`) is built around `send_to`/`recv_from`
-/// (shared with the TURN relay `Conn`, which *does* implement them properly)
-/// -- this adapter bridges the gap by delegating to `send`/`recv`+
-/// `remote_addr()`, so an ICE-selected `Conn` can be handed to
-/// `MediaEngine::start`'s `relay` parameter completely unchanged.
+/// Adapts `AgentConn`'s connected-socket-only `send`/`recv` to the
+/// `send_to`/`recv_from` shape `MediaEngine::start`'s `relay` parameter
+/// expects (shared with `TurnRelay`'s `Conn`). Full picture: `docs/crates/nat.md`.
 struct ConnectedConn(Arc<dyn Conn + Send + Sync>);
 
 #[async_trait]
@@ -176,12 +164,8 @@ pub async fn gather(
 }
 
 /// The winning `Conn` from a completed ICE connectivity check, plus the
-/// `Agent` that produced it. The `Agent` is kept alive alongside the `Conn`
-/// deliberately -- `AgentConn`'s own docs don't guarantee it keeps working
-/// independent of its parent `Agent`'s lifetime, so rather than assume
-/// independence, both are held together for as long as the call's media is
-/// active (mirrors `TurnRelay` keeping its `turn::client::Client` alive
-/// alongside its `conn` for the same reason).
+/// `Agent` that produced it -- kept alive together deliberately, full
+/// picture: `docs/crates/nat.md`.
 pub struct IceConnection {
     pub _agent: Arc<Agent>,
     pub conn: Arc<dyn Conn + Send + Sync>,

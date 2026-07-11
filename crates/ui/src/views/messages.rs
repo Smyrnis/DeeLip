@@ -9,24 +9,17 @@ use crate::strings::t;
 
 impl DeelipApp {
     /// Messages as a separate native OS window, same `Deferred`-viewport
-    /// pattern as Settings -- except there's no tab-bar entry point at all:
-    /// the only way `messages_window_open` becomes `true` is
-    /// `message_from_list` (a right-click "Message" action on a
-    /// History/Contacts/Directory row). No-op when closed, called every
-    /// frame otherwise. Deliberately **not** built on the shared
-    /// `helpers::show_pop_out_window` the other four pop-out windows use --
-    /// see `docs/windowing.md` for why its side-by-side `SidePanel`+
-    /// `CentralPanel` layout can't share that helper.
+    /// pattern as Settings -- except there's no tab-bar entry point at all
+    /// (see `message_from_list`). Deliberately **not** built on the shared
+    /// `show_pop_out_window` -- see `docs/crates/ui.md`'s "Why Messages is the one
+    /// exception".
     pub(crate) fn show_messages_window(&mut self, ctx: &egui::Context, self_app: SharedApp) {
         if !self.messages_window_open {
             return;
         }
 
-        // Checked up front rather than branched on from inside the deferred
-        // closure: on a backend that embeds, the closure runs synchronously
-        // right here, and locking `self_arc` there would deadlock against
-        // the lock this method's own caller already holds. See
-        // docs/windowing.md.
+        // Checked up front, not inside the deferred closure -- see
+        // docs/crates/ui.md's "Pop-out windows" section for the deadlock hazard.
         if ctx.embed_viewports() {
             let peers = self.message_peers();
             let mut open = true;
@@ -146,13 +139,10 @@ impl DeelipApp {
         }
     }
 
-    /// Right-pane thread + compose box for `messages_window_peer`. The
-    /// compose bar is reserved *before* the thread (same fix as this
-    /// window's prior tab-body incarnation had -- see its own history):
-    /// anchoring fixed-size chrome (header, compose bar) via
-    /// `TopBottomPanel`s first means the thread's `ScrollArea` in between
-    /// only ever fills whatever's actually left, regardless of window
-    /// height or thread length.
+    /// Right-pane thread + compose box for `messages_window_peer`. Compose
+    /// is reserved *before* the thread via `TopBottomPanel` (same fixed-
+    /// chrome-first ordering as Settings' Save button -- see docs/crates/ui.md's
+    /// Settings section).
     fn show_messages_thread_and_compose(&mut self, ui: &mut Ui) {
         let Some(peer) = self.messages_window_peer.clone() else {
             empty_state(ui, &self.palette, &t("messages.select_conversation"));

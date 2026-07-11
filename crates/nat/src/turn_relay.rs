@@ -1,8 +1,6 @@
-//! TURN relay client (RFC 5766) — an explicit, user-configured fallback for
-//! media when direct/STUN connectivity can't traverse the NAT. No ICE: this
-//! just allocates one relayed transport address and hands back a `Conn` that
-//! behaves like a normal socket (send_to/recv_from), used unconditionally for
-//! every call when a TURN server is configured (see `AppConfig::turn_server`).
+//! TURN relay client (RFC 5766), used unconditionally (no ICE) for every call
+//! when a TURN server is configured (`AppConfig::turn_server`). Full picture:
+//! `docs/crates/nat.md`.
 
 use std::net::SocketAddr;
 use std::sync::Arc;

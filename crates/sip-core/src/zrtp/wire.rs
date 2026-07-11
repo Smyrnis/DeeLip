@@ -1,7 +1,7 @@
 //! ZRTP (RFC 6189) packet/message wire format -- hand-rolled, matching this
 //! crate's existing style for `wire/sdp.rs`/`wire/message.rs`. Provenance of
 //! the framing constants below, verification status, and the scope cuts
-//! from the full RFC: `docs/zrtp.md`.
+//! from the full RFC: docs/crates/sip-core.md's "ZRTP" section.
 
 use crc::{Crc, CRC_32_ISO_HDLC};
 

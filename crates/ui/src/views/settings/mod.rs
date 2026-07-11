@@ -34,30 +34,20 @@ const SETTINGS_VIEWPORT_NAME: &str = "deelip_settings_window";
 
 impl DeelipApp {
     /// Settings as a separate, genuinely movable native OS window rather
-    /// than a tab (MicroSIP-style "phone window + separate settings window"
-    /// split). No-op when closed. Called every frame while `settings_open`
-    /// is true, same lifecycle as every other pop-out window in this app.
-    /// Full history (why this used to be a fake in-canvas modal, why
-    /// `Deferred` instead of `Immediate`, the GNOME/Mutter throttle bug it
-    /// fixed): `docs/windowing.md`.
+    /// than a tab. No-op when closed. Full history: `docs/crates/ui.md`'s
+    /// "Pop-out windows" section.
     pub(crate) fn show_settings_modal(&mut self, ctx: &egui::Context, self_app: SharedApp) {
-        // Shared "real separate OS window" scaffolding -- see
-        // docs/windowing.md for the full rationale (the `embed_viewports()`
-        // deadlock hazard, why the titlebar/content/close-handling shape is
-        // common to every pop-out window in this app). `SETTINGS_VIEWPORT_NAME`
-        // is passed as the `key` so its hash matches what the background
-        // device-scan spawns elsewhere in this module already wake via
-        // `request_repaint_of`.
+        // `SETTINGS_VIEWPORT_NAME` is passed as `key` so its hash matches
+        // what the background device-scan spawns elsewhere in this module
+        // already wake via `request_repaint_of`.
         show_pop_out_window(
             self,
             ctx,
             self_app,
             SETTINGS_VIEWPORT_NAME,
             format!("DeeLip {}", t("settings.window_title")),
-            // Sized so every tab except Account (which scrolls internally
-            // -- see its own `SettingsTab::Account` match arm's comment)
-            // fits without scrolling at all -- confirmed live via Xvfb
-            // across all 8 tabs, not guessed.
+            // Sized so every tab but Account/Advanced fits without scrolling
+            // -- see docs/crates/ui.md's Settings section.
             [950.0, 740.0],
             [580.0, 520.0],
             true,
@@ -101,15 +91,8 @@ impl DeelipApp {
         ui.separator();
         ui.add_space(6.0);
 
-        // Reserved *before* the tab content below -- `ScrollArea::vertical()`
-        // (used by the Account tab) greedily fills all remaining space in
-        // its parent, so a naive "content, then Save button" ordering left
-        // the Save button pushed below the visible window whenever a tab's
-        // content scrolled (caught live, not by reading the code: Account's
-        // Save button was simply gone from the screenshot). Anchoring Save
-        // to the bottom *first* means whatever's left for the tab content
-        // (and therefore the Account `ScrollArea` inside it) already
-        // excludes this panel's own height.
+        // Reserved *before* the tab content below -- see docs/crates/ui.md's
+        // Settings section for why a scrolling tab needs this ordering.
         egui::TopBottomPanel::bottom("settings_save_panel").show_inside(ui, |ui| {
             ui.add_space(8.0);
             if ui.button(t("common.save_button")).clicked() {
@@ -135,14 +118,8 @@ impl DeelipApp {
                 ui.add_space(14.0);
                 self.show_startup_section(ui, &palette)
             }
-            // The one exception to "no scrolling" -- confirmed live (this
-            // section's content still doesn't fit even at ~1400px tall,
-            // an unreasonable window height) that Account is too dense to
-            // ever fit a real dialog without one, even after pulling
-            // several stacked label+field rows into single rows above.
-            // Scrolling just this tab beats silently clipping its content,
-            // which is what removing the outer `ScrollArea` entirely would
-            // otherwise do.
+            // One of two tabs that scroll internally by necessity -- see
+            // docs/crates/ui.md's Settings section.
             SettingsTab::Account => {
                 let mut edited = false;
                 egui::ScrollArea::vertical().id_source("account_tab_scroll").show(ui, |ui| {
@@ -155,12 +132,8 @@ impl DeelipApp {
             SettingsTab::Network => self.show_network_section(ui, &palette),
             SettingsTab::Directory => self.show_directory_section(ui, &palette),
             SettingsTab::Hotkeys => self.show_global_hotkeys_section(ui, &palette),
-            // Same "doesn't fit, scroll just this tab" exception as Account
-            // above -- confirmed live that its 4 stacked sections (Updates/
-            // Blocklist/Call History/Contacts Import-Export, the latter two
-            // added in a later session than the comment above was written)
-            // overflow past the window's bottom, taking the Save button
-            // with them.
+            // Same exception as Account above -- its 4 stacked sections
+            // overflow past the window bottom.
             SettingsTab::Advanced => {
                 egui::ScrollArea::vertical().id_source("advanced_tab_scroll").show(ui, |ui| {
                     self.show_updates_section(ui, &palette);

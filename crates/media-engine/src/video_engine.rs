@@ -1,8 +1,7 @@
 //! Standalone video RTP engine: capture-frame → H.264 encode → RTP send,
 //! and RTP recv → H.264 decode → latest-decoded-frame -- its own
-//! independent construct, deliberately *not* part of `MediaEngine`. Why
-//! standalone, what it borrows from `ConferenceLeg`, and the disclosed
-//! no-jitter-buffering simplification: `docs/media-pipeline.md`.
+//! independent construct, deliberately *not* part of `MediaEngine`. Full
+//! picture: `docs/crates/media-engine.md`.
 
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
@@ -118,14 +117,8 @@ impl VideoEngine {
             }
         };
         let fps = target_fps.max(1);
-        // `ts_increment: 0` is deliberate -- see this module's own doc
-        // comment: video needs many packets (one frame's fragments)
-        // sharing one RTP timestamp, then a single clock jump per frame,
-        // which doesn't fit `next_packet`'s "one call = one packet = one
-        // timestamp step" model directly. A zero increment makes repeated
-        // `next_packet` calls within one frame correctly advance only
-        // `sequence`; the timestamp is bumped manually, once, after each
-        // frame's last fragment is sent.
+        // `ts_increment: 0` is deliberate -- see `docs/crates/media-engine.md`'s
+        // "Video RTP timestamping" section for why.
         let mut sender = RtpSender::new(H264_PAYLOAD_TYPE, 0);
         let ticks_per_frame = VIDEO_CLOCK_HZ / fps;
         let mut interval = tokio::time::interval(Duration::from_secs_f64(1.0 / fps as f64));

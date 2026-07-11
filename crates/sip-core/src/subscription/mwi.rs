@@ -1,16 +1,7 @@
 //! Voicemail message-waiting indication (RFC 3842, `Event: message-summary`)
-//! subscription state and `application/simple-message-summary` body parsing
-//! -- hand-rolled, matching this crate's existing style of not pulling in a
-//! parsing dependency for simple/fixed body shapes (see `sdp.rs`,
-//! `message.rs`, `auth.rs`, `presence.rs`).
-//!
-//! Kept as a separate module/map from `presence.rs` rather than generalizing
-//! that one -- the SUBSCRIBE/refresh/auth-retry mechanics are shared (see
-//! `SipStack::build_subscribe`'s `event_package`/`accept` params), but the
-//! NOTIFY body shape and the state each carries are different enough that a
-//! shared struct would just be a generic blob fighting two different call
-//! sites, mirroring the deliberate `dialogs`/`subscriptions` split already
-//! documented on `SipStack`.
+//! subscription state and `application/simple-message-summary` body parsing.
+//! Why this stays a separate module/map from `presence.rs`: docs/crates/sip-core.md's
+//! "Why MWI is a separate module" section.
 
 use tokio::time::Instant;
 

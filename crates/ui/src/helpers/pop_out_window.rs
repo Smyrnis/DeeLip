@@ -7,7 +7,8 @@ use crate::helpers::window_icon;
 /// used by Settings, Transfer Call, the DTMF Keypad, and the Contact
 /// dialog (Messages is the one exception). Full rationale (the
 /// `embed_viewports()` deadlock hazard, the `fn`-pointer-vs-closure design,
-/// why Messages can't share this) is in `docs/windowing.md`.
+/// why Messages can't share this) is in `docs/crates/ui.md`'s "Pop-out windows"
+/// section.
 #[allow(clippy::too_many_arguments)] // each param is a distinct, meaningfully-named
                                      // piece of this window's identity; bundling them
                                      // into a struct wouldn't reduce real complexity.
@@ -57,12 +58,8 @@ pub(crate) fn show_pop_out_window(
                 ui.add_space(4.0);
             });
 
-            // Explicit margin -- confirmed live (Settings, at its own real
-            // default width) that `CentralPanel::default()`'s bare default
-            // left content rendered flush against the window's right edge
-            // with zero breathing room. Applied to every pop-out window
-            // now, not just Settings, to preempt the same class of bug
-            // recurring in one of the others later.
+            // Explicit margin -- egui's own default left content flush
+            // against the window edge (see docs/crates/ui.md's pop-out section).
             let frame = egui::Frame::central_panel(&child_ctx.style()).inner_margin(14.0);
             egui::CentralPanel::default().frame(frame).show(child_ctx, |ui| content(&mut app, ui));
 
