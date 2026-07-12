@@ -17,9 +17,63 @@
 #                    system-wide via the package manager)
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=./helpers/lib.sh
-source "$SCRIPT_DIR/helpers/lib.sh"
+usage() {
+    cat <<'EOF'
+Detect the current Linux distro and install the matching prebuilt DeeLip
+package from the project's GitHub Releases (built by
+.github/workflows/package.yml) -- no local Rust toolchain or compiling
+required. Shared helpers live in helpers/lib.sh alongside this file, or are
+fetched over the network if run via curl | bash (see DEELIP_SCRIPTS_REF below).
+
+  apt-based (Debian/Ubuntu/...)   -> .deb, installed via apt-get
+  dnf/yum-based (Fedora/RHEL/...) -> .rpm, installed via dnf/yum
+  zypper-based (openSUSE)         -> .rpm, installed via zypper
+  anything else (Arch, Alpine...) -> .tar.gz, unpacked into --prefix
+
+Usage: scripts/install.sh [--version=TAG] [--prefix=PATH] [--system]
+  --version=TAG   install a specific release tag instead of the latest
+  --prefix=PATH   install prefix for the .tar.gz fallback (default: see below)
+  --system        for the .tar.gz fallback, install to /usr/local instead
+                   of ~/.local; ignored for .deb/.rpm (they always install
+                   system-wide via the package manager)
+
+Env:
+  DEELIP_SCRIPTS_REF  when run via curl | bash, which branch/tag to fetch
+                      helpers/lib.sh from (default: main)
+EOF
+}
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-}")" 2>/dev/null && pwd || true)"
+DEELIP_SCRIPTS_REF="${DEELIP_SCRIPTS_REF:-main}"
+
+if [[ -n "$SCRIPT_DIR" && -f "$SCRIPT_DIR/helpers/lib.sh" ]]; then
+    # shellcheck source=./helpers/lib.sh
+    source "$SCRIPT_DIR/helpers/lib.sh"
+else
+    # No local checkout/tarball alongside this file (curl | bash) -- fetch the
+    # same helpers over the network. Pin DEELIP_SCRIPTS_REF=<tag> if you
+    # fetched a specific release's script rather than main's.
+    #
+    # Also overwrite SCRIPT_DIR: bash leaves BASH_SOURCE[0]/$0 as a bare
+    # word (e.g. "bash") when a script comes from stdin rather than empty,
+    # so the `dirname`/`cd`/`pwd` above silently resolved to the *current
+    # working directory* instead of failing -- which could be some unrelated
+    # git checkout the user happened to be sitting in. Point lib_detect_repo
+    # (below) at a directory that can't possibly have its own git remote to
+    # accidentally sniff, so it reliably falls back to the hardcoded default.
+    SCRIPT_DIR="/nonexistent/deelip-curl-bash"
+    lib_url="https://raw.githubusercontent.com/Smyrnis/DeeLip/$DEELIP_SCRIPTS_REF/scripts/helpers/lib.sh"
+    if command -v curl >/dev/null 2>&1; then
+        lib_src="$(curl -fsSL "$lib_url")" || { echo "error: couldn't fetch $lib_url" >&2; exit 1; }
+    elif command -v wget >/dev/null 2>&1; then
+        lib_src="$(wget -qO- "$lib_url")" || { echo "error: couldn't fetch $lib_url" >&2; exit 1; }
+    else
+        echo "error: need curl or wget to fetch scripts/helpers/lib.sh" >&2
+        exit 1
+    fi
+    [[ -z "$lib_src" ]] && { echo "error: fetched empty content from $lib_url" >&2; exit 1; }
+    eval "$lib_src"
+fi
 
 REPO="$(lib_detect_repo "$SCRIPT_DIR")"
 
@@ -33,10 +87,7 @@ for arg in "$@"; do
         --prefix=*)  PREFIX="${arg#--prefix=}" ;;
         --system)    SYSTEM=1 ;;
         -h|--help)
-            # Prints just the leading comment block (the usage text above),
-            # not every "# ..." comment in the whole file -- stops at the
-            # first non-comment line rather than grepping the file broadly.
-            awk '/^#!/{next} /^# ?/{sub(/^# ?/,""); print; next} {exit}' "$0"
+            usage
             exit 0
             ;;
         *)

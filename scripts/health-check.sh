@@ -19,9 +19,65 @@
 #                  instead of the latest
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=./helpers/lib.sh
-source "$SCRIPT_DIR/helpers/lib.sh"
+usage() {
+    cat <<'EOF'
+Verifies the pieces install.sh may have placed are still intact, and (with
+--fix) repairs whichever ones aren't -- for when a user (or some cleanup
+tool) has deleted a file DeeLip depends on existing outside its own
+control: the binary, its desktop-launcher entry, its icon, or the XDG
+autostart entry if that's enabled. Deliberately does NOT check
+~/.config/deelip/ (the SQLite db, recordings, logs, crash reports) -- those
+are already self-healing (every table is created with
+`CREATE TABLE IF NOT EXISTS` on load), so there's nothing here to "fix."
+
+Usage: scripts/health-check.sh [--prefix=PATH] [--system] [--fix] [--version=TAG]
+  --prefix=PATH  where to look for a tar.gz-fallback install (default:
+                 same as install.sh's -- ~/.local, or /usr/local with
+                 --system)
+  --system       look under /usr/local instead of ~/.local
+  --fix          attempt to repair anything found broken (without it, this
+                 script only reports problems and changes nothing)
+  --version=TAG  when repairing a tar.gz install, fetch this release
+                 instead of the latest
+
+Env:
+  DEELIP_SCRIPTS_REF  when run via curl | bash, which branch/tag to fetch
+                      helpers/lib.sh from (default: main)
+EOF
+}
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-}")" 2>/dev/null && pwd || true)"
+DEELIP_SCRIPTS_REF="${DEELIP_SCRIPTS_REF:-main}"
+
+if [[ -n "$SCRIPT_DIR" && -f "$SCRIPT_DIR/helpers/lib.sh" ]]; then
+    # shellcheck source=./helpers/lib.sh
+    source "$SCRIPT_DIR/helpers/lib.sh"
+else
+    # No local checkout/tarball alongside this file (curl | bash) -- fetch the
+    # same helpers over the network. Pin DEELIP_SCRIPTS_REF=<tag> if you
+    # fetched a specific release's script rather than main's.
+    #
+    # Also overwrite SCRIPT_DIR: bash leaves BASH_SOURCE[0]/$0 as a bare word
+    # (e.g. "bash") when a script comes from stdin rather than empty, so the
+    # `dirname`/`cd`/`pwd` above silently resolved to the current working
+    # directory instead of failing -- point it somewhere that can't be
+    # mistaken for a real checkout (this script's own later
+    # `lib_detect_repo "$SCRIPT_DIR"` call, in the tar.gz repair path, relies
+    # on this not being some unrelated git checkout the user happened to be
+    # sitting in).
+    SCRIPT_DIR="/nonexistent/deelip-curl-bash"
+    lib_url="https://raw.githubusercontent.com/Smyrnis/DeeLip/$DEELIP_SCRIPTS_REF/scripts/helpers/lib.sh"
+    if command -v curl >/dev/null 2>&1; then
+        lib_src="$(curl -fsSL "$lib_url")" || { echo "error: couldn't fetch $lib_url" >&2; exit 1; }
+    elif command -v wget >/dev/null 2>&1; then
+        lib_src="$(wget -qO- "$lib_url")" || { echo "error: couldn't fetch $lib_url" >&2; exit 1; }
+    else
+        echo "error: need curl or wget to fetch scripts/helpers/lib.sh" >&2
+        exit 1
+    fi
+    [[ -z "$lib_src" ]] && { echo "error: fetched empty content from $lib_url" >&2; exit 1; }
+    eval "$lib_src"
+fi
 
 PREFIX=""
 SYSTEM=0
@@ -35,10 +91,7 @@ for arg in "$@"; do
         --fix)       FIX=1 ;;
         --version=*) VERSION="${arg#--version=}" ;;
         -h|--help)
-            # Prints just the leading comment block (the usage text above),
-            # not every "# ..." comment in the whole file -- stops at the
-            # first non-comment line rather than grepping the file broadly.
-            awk '/^#!/{next} /^# ?/{sub(/^# ?/,""); print; next} {exit}' "$0"
+            usage
             exit 0
             ;;
         *)

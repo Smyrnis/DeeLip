@@ -19,9 +19,66 @@
 #                  non-interactively)
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=./helpers/lib.sh
-source "$SCRIPT_DIR/helpers/lib.sh"
+usage() {
+    cat <<'EOF'
+Reverses whichever install path scripts/install.sh took -- package-manager
+remove for .deb/.rpm installs, or deleting the specific files the tar.gz
+fallback placed. Never touches ~/.config/deelip/ (db, recordings, logs,
+crash reports) unless --purge is given.
+
+Usage: scripts/uninstall.sh [--prefix=PATH] [--system] [--purge] [-y|--yes]
+  --prefix=PATH  prefix to remove the tar.gz fallback's files from
+                 (default: same as install.sh's -- ~/.local, or /usr/local
+                 with --system)
+  --system       look under /usr/local instead of ~/.local for the tar.gz
+                 fallback path; ignored for .deb/.rpm (removed via their
+                 own package manager regardless of this flag)
+  --purge        also remove ~/.config/deelip/ (real user data: accounts,
+                 contacts, history, recordings, logs, crash reports) and
+                 the XDG autostart entry -- prompts for confirmation
+                 unless -y/--yes is given
+  -y, --yes      don't prompt for confirmation (needed for --purge to run
+                 non-interactively -- also needed if you're piping this
+                 script via curl | bash, since a raw pipe leaves no stdin
+                 for the confirmation prompt to read; use
+                 `bash -c "$(curl -fsSL .../uninstall.sh)" -- --purge -y`
+                 or add -y explicitly)
+
+Env:
+  DEELIP_SCRIPTS_REF  when run via curl | bash, which branch/tag to fetch
+                      helpers/lib.sh from (default: main)
+EOF
+}
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-}")" 2>/dev/null && pwd || true)"
+DEELIP_SCRIPTS_REF="${DEELIP_SCRIPTS_REF:-main}"
+
+if [[ -n "$SCRIPT_DIR" && -f "$SCRIPT_DIR/helpers/lib.sh" ]]; then
+    # shellcheck source=./helpers/lib.sh
+    source "$SCRIPT_DIR/helpers/lib.sh"
+else
+    # No local checkout/tarball alongside this file (curl | bash) -- fetch the
+    # same helpers over the network. Pin DEELIP_SCRIPTS_REF=<tag> if you
+    # fetched a specific release's script rather than main's.
+    #
+    # Also overwrite SCRIPT_DIR: bash leaves BASH_SOURCE[0]/$0 as a bare word
+    # (e.g. "bash") when a script comes from stdin rather than empty, so the
+    # `dirname`/`cd`/`pwd` above silently resolved to the current working
+    # directory instead of failing -- point it somewhere that can't be
+    # mistaken for a real checkout.
+    SCRIPT_DIR="/nonexistent/deelip-curl-bash"
+    lib_url="https://raw.githubusercontent.com/Smyrnis/DeeLip/$DEELIP_SCRIPTS_REF/scripts/helpers/lib.sh"
+    if command -v curl >/dev/null 2>&1; then
+        lib_src="$(curl -fsSL "$lib_url")" || { echo "error: couldn't fetch $lib_url" >&2; exit 1; }
+    elif command -v wget >/dev/null 2>&1; then
+        lib_src="$(wget -qO- "$lib_url")" || { echo "error: couldn't fetch $lib_url" >&2; exit 1; }
+    else
+        echo "error: need curl or wget to fetch scripts/helpers/lib.sh" >&2
+        exit 1
+    fi
+    [[ -z "$lib_src" ]] && { echo "error: fetched empty content from $lib_url" >&2; exit 1; }
+    eval "$lib_src"
+fi
 
 PREFIX=""
 SYSTEM=0
@@ -35,10 +92,7 @@ for arg in "$@"; do
         --purge)    PURGE=1 ;;
         -y|--yes)   YES=1 ;;
         -h|--help)
-            # Prints just the leading comment block (the usage text above),
-            # not every "# ..." comment in the whole file -- stops at the
-            # first non-comment line rather than grepping the file broadly.
-            awk '/^#!/{next} /^# ?/{sub(/^# ?/,""); print; next} {exit}' "$0"
+            usage
             exit 0
             ;;
         *)
