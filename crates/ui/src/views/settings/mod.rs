@@ -93,7 +93,7 @@ impl DeelipApp {
 
         // Reserved *before* the tab content below -- see docs/crates/ui.md's
         // Settings section for why a scrolling tab needs this ordering.
-        egui::TopBottomPanel::bottom("settings_save_panel").show_inside(ui, |ui| {
+        egui::Panel::bottom("settings_save_panel").show_inside(ui, |ui| {
             ui.add_space(8.0);
             if ui.button(t("common.save_button")).clicked() {
                 match self.config.save(&self.db) {
@@ -122,7 +122,7 @@ impl DeelipApp {
             // docs/crates/ui.md's Settings section.
             SettingsTab::Account => {
                 let mut edited = false;
-                egui::ScrollArea::vertical().id_source("account_tab_scroll").show(ui, |ui| {
+                egui::ScrollArea::vertical().id_salt("account_tab_scroll").show(ui, |ui| {
                     edited = self.show_account_section(ui, &palette);
                 });
                 edited
@@ -135,7 +135,7 @@ impl DeelipApp {
             // Same exception as Account above -- its 4 stacked sections
             // overflow past the window bottom.
             SettingsTab::Advanced => {
-                egui::ScrollArea::vertical().id_source("advanced_tab_scroll").show(ui, |ui| {
+                egui::ScrollArea::vertical().id_salt("advanced_tab_scroll").show(ui, |ui| {
                     self.show_updates_section(ui, &palette);
                     ui.add_space(14.0);
                     self.show_blocklist_section(ui, &palette);

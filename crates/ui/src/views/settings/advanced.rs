@@ -22,7 +22,7 @@ impl DeelipApp {
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     field_label(ui, palette, &t("settings.advanced.check_for_updates_label"));
-                    egui::ComboBox::from_id_source("settings_update_check_frequency")
+                    egui::ComboBox::from_id_salt("settings_update_check_frequency")
                         .selected_text(match self.config.update_check_frequency {
                             UpdateCheckFrequency::Always => t("settings.advanced.freq_every_launch"),
                             UpdateCheckFrequency::Daily => t("settings.advanced.freq_daily"),

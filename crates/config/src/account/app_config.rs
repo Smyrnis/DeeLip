@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::enums::{DefaultListAction, Language, RecordingFormat, UpdateCheckFrequency};
-use super::sip_account::{default_sip_port, default_true, AudioConfig, SipAccount};
+use super::sip_account::{AudioConfig, SipAccount, default_sip_port, default_true};
 use crate::Db;
 
 pub(super) fn default_ldap_port() -> u16 {
@@ -303,10 +303,10 @@ impl AppConfig {
     /// one on first use if `zrtp_zid` is unset. Returns the raw 12 bytes;
     /// `db` is only touched when a fresh ZID actually needs saving.
     pub fn zrtp_zid_bytes(&mut self, db: &Db) -> anyhow::Result<[u8; 12]> {
-        if let Some(hex) = &self.zrtp_zid {
-            if let Some(bytes) = parse_zid_hex(hex) {
-                return Ok(bytes);
-            }
+        if let Some(hex) = &self.zrtp_zid
+            && let Some(bytes) = parse_zid_hex(hex)
+        {
+            return Ok(bytes);
         }
         let mut bytes = [0u8; 12];
         rand::Rng::fill(&mut rand::thread_rng(), &mut bytes);

@@ -153,11 +153,7 @@ pub(crate) fn unix_now() -> u64 {
 }
 
 pub(crate) fn format_duration(secs: u32) -> String {
-    if secs < 60 {
-        format!("{secs}s")
-    } else {
-        format!("{}m {:02}s", secs / 60, secs % 60)
-    }
+    if secs < 60 { format!("{secs}s") } else { format!("{}m {:02}s", secs / 60, secs % 60) }
 }
 
 /// `MM:SS` (or `H:MM:SS` past an hour) -- the focused-call screen's live
@@ -169,11 +165,7 @@ pub(crate) fn format_call_timer(secs: u64) -> String {
     let h = secs / 3600;
     let m = (secs % 3600) / 60;
     let s = secs % 60;
-    if h > 0 {
-        format!("{h}:{m:02}:{s:02}")
-    } else {
-        format!("{m:02}:{s:02}")
-    }
+    if h > 0 { format!("{h}:{m:02}:{s:02}") } else { format!("{m:02}:{s:02}") }
 }
 
 /// Local calendar date/time for a Unix timestamp, e.g. `"2026-07-09 14:32"`

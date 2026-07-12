@@ -5,11 +5,11 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+use nokhwa::Camera;
 use nokhwa::pixel_format::RgbFormat;
 use nokhwa::utils::{
     ApiBackend, CameraFormat, CameraIndex, FrameFormat, RequestedFormat, RequestedFormatType, Resolution,
 };
-use nokhwa::Camera;
 use openh264::formats::{RgbSliceU8, YUVBuffer, YUVSource};
 
 use crate::video_codec::Yuv420Frame;

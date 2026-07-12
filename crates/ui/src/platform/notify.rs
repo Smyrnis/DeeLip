@@ -2,7 +2,7 @@
 //! `zbus` stack). See `docs/crates/ui.md`'s "Platform integration" section for why
 //! each notification gets its own background thread.
 
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Mutex, OnceLock};
 
 use crate::platform::tray::CtxSlot;

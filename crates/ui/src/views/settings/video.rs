@@ -38,11 +38,11 @@ impl DeelipApp {
         let mut edited = false;
         ui.label(RichText::new(t("settings.tab_video")).font(theme::font_heading(13.5)));
         theme::full_width_card(ui, *palette, |ui| {
-            if let Some(rx) = &self.camera_device_rx {
-                if let Ok(result) = rx.try_recv() {
-                    self.camera_device_cache = Some(result);
-                    self.camera_device_rx = None;
-                }
+            if let Some(rx) = &self.camera_device_rx
+                && let Ok(result) = rx.try_recv()
+            {
+                self.camera_device_cache = Some(result);
+                self.camera_device_rx = None;
             }
             if self.camera_device_cache.is_none() && self.camera_device_rx.is_none() {
                 self.spawn_camera_device_scan();
@@ -78,41 +78,36 @@ impl DeelipApp {
                 let (w, h) = (self.config.audio.video_capture_width, self.config.audio.video_capture_height);
                 let selected =
                     RESOLUTION_PRESETS.iter().find(|(pw, ph, _)| (*pw, *ph) == (w, h)).map_or("", |(_, _, l)| l);
-                egui::ComboBox::from_id_source("settings_video_resolution").selected_text(selected).show_ui(
-                    ui,
-                    |ui| {
-                        for (pw, ph, label) in RESOLUTION_PRESETS {
-                            if ui.selectable_label(w == pw && h == ph, label).clicked() {
-                                self.config.audio.video_capture_width = pw;
-                                self.config.audio.video_capture_height = ph;
-                                edited = true;
-                            }
+                egui::ComboBox::from_id_salt("settings_video_resolution").selected_text(selected).show_ui(ui, |ui| {
+                    for (pw, ph, label) in RESOLUTION_PRESETS {
+                        if ui.selectable_label(w == pw && h == ph, label).clicked() {
+                            self.config.audio.video_capture_width = pw;
+                            self.config.audio.video_capture_height = ph;
+                            edited = true;
                         }
-                    },
-                );
+                    }
+                });
                 info_hint(ui, palette, &t("settings.restart_to_apply_hint"));
             });
 
             ui.horizontal(|ui| {
                 field_label(ui, palette, &t("settings.video.fps_label"));
                 let fps = self.config.audio.video_fps;
-                egui::ComboBox::from_id_source("settings_video_fps")
-                    .selected_text(fps.to_string())
-                    .show_ui(ui, |ui| {
-                        for preset in FPS_PRESETS {
-                            if ui.selectable_label(fps == preset, preset.to_string()).clicked() {
-                                self.config.audio.video_fps = preset;
-                                edited = true;
-                            }
+                egui::ComboBox::from_id_salt("settings_video_fps").selected_text(fps.to_string()).show_ui(ui, |ui| {
+                    for preset in FPS_PRESETS {
+                        if ui.selectable_label(fps == preset, preset.to_string()).clicked() {
+                            self.config.audio.video_fps = preset;
+                            edited = true;
                         }
-                    });
+                    }
+                });
             });
 
             ui.horizontal(|ui| {
                 field_label(ui, palette, &t("settings.video.bitrate_label"));
                 let bitrate = self.config.audio.video_bitrate_bps;
                 let selected = BITRATE_PRESETS.iter().find(|(v, _)| *v == bitrate).map_or("", |(_, l)| l);
-                egui::ComboBox::from_id_source("settings_video_bitrate").selected_text(selected).show_ui(ui, |ui| {
+                egui::ComboBox::from_id_salt("settings_video_bitrate").selected_text(selected).show_ui(ui, |ui| {
                     for (value, label) in BITRATE_PRESETS {
                         if ui.selectable_label(bitrate == value, label).clicked() {
                             self.config.audio.video_bitrate_bps = value;

@@ -11,7 +11,7 @@ use tokio::time::{Duration, Instant};
 use tracing::{debug, error};
 
 use crate::{
-    client::{SipStack, PRESENCE_EVENT},
+    client::{PRESENCE_EVENT, SipStack},
     wire::auth::build_challenge_response,
     wire::message::SipMessage,
     wire::util::{extract_expires, new_branch, new_call_id, new_tag},
@@ -87,8 +87,8 @@ impl SipStack {
     }
 
     #[allow(clippy::too_many_arguments)] // matches `build_subscribe`'s reasoning in
-                                         // `handlers.rs` -- each param is a distinct,
-                                         // meaningfully-named piece of the request.
+    // `handlers.rs` -- each param is a distinct,
+    // meaningfully-named piece of the request.
     fn build_publish(
         &self, entity: &str, call_id: &str, from_tag: &str, cseq: u32, etag: Option<&str>, auth: Option<&str>,
         body: &str,

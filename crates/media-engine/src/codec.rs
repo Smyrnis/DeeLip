@@ -41,11 +41,7 @@ pub fn ulaw_to_pcm(ulaw: u8) -> i16 {
     let exp = ((u >> 4) & 0x07) as i32;
     let mant = (u & 0x0F) as i32;
     let s = (((mant << 3) + ULAW_BIAS) << exp) - ULAW_BIAS;
-    if sign != 0 {
-        -(s as i16)
-    } else {
-        s as i16
-    }
+    if sign != 0 { -(s as i16) } else { s as i16 }
 }
 
 // ── PCMA (A-law) ──────────────────────────────────────────────────────────────
@@ -92,11 +88,7 @@ pub fn alaw_to_pcm(alaw: u8) -> i16 {
 
     // Scale back to 16-bit
     let s = (s << 3) as i16;
-    if a & 0x80 != 0 {
-        s
-    } else {
-        -s
-    }
+    if a & 0x80 != 0 { s } else { -s }
 }
 
 // ── Batch helpers ─────────────────────────────────────────────────────────────

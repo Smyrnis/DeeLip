@@ -56,7 +56,7 @@ pub(super) fn show(
     ui.add_space(6.0);
     ui.horizontal(|ui| {
         field_label(ui, palette, &t("settings.account.media_encryption_label"));
-        egui::ComboBox::from_id_source("settings_media_encryption")
+        egui::ComboBox::from_id_salt("settings_media_encryption")
             .selected_text(match account.media_encryption {
                 MediaEncryption::MatchTransport => t("settings.account.enc_match_transport"),
                 MediaEncryption::Disabled => t("settings.account.enc_disabled"),

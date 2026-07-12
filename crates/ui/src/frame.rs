@@ -71,10 +71,10 @@ impl DeelipApp {
         match &self.pending_call {
             Some(p) if self.last_raised_call.as_deref() != Some(p.call_id.as_str()) => {
                 self.last_raised_call = Some(p.call_id.clone());
-                if self.config.random_popup_position {
-                    if let Some(cmd) = random_position_on_screen(ctx) {
-                        ctx.send_viewport_cmd(cmd);
-                    }
+                if self.config.random_popup_position
+                    && let Some(cmd) = random_position_on_screen(ctx)
+                {
+                    ctx.send_viewport_cmd(cmd);
                 }
                 ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
                 ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
@@ -223,14 +223,9 @@ impl DeelipApp {
 }
 
 impl eframe::App for SharedApp {
-    /// eframe 0.34 replaced `update(&Context, ...)` with `ui(&mut egui::Ui,
-    /// ...)`; the rest of this app still panels against a bare `&egui::Context`
-    /// (own top/bottom/central panels for the root viewport), so this just
-    /// recovers that `Context` from the given `Ui` and defers to it unchanged.
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
-        let ctx = ui.ctx().clone();
         let self_arc = self.clone();
-        self.0.lock().unwrap().update_inner(&ctx, frame, &self_arc);
+        self.0.lock().unwrap().update_inner(ui, frame, &self_arc);
     }
 
     /// Hang up any in-progress call before the process exits, so the remote
@@ -241,7 +236,9 @@ impl eframe::App for SharedApp {
 }
 
 impl DeelipApp {
-    fn update_inner(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame, self_arc: &SharedApp) {
+    fn update_inner(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame, self_arc: &SharedApp) {
+        let ctx = ui.ctx().clone();
+        let ctx = &ctx;
         // Refreshed every frame regardless of tray/call state -- see
         // `docs/crates/ui.md`'s "Repaint plumbing" section.
         *self.ctx_slot.lock().unwrap() = Some(ctx.clone());
@@ -288,7 +285,7 @@ impl DeelipApp {
                 },
             );
         }
-        egui::TopBottomPanel::top("tabs").show(ctx, |ui| {
+        egui::Panel::top("tabs").show_inside(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.selectable_value(
                     &mut self.tab,
@@ -333,7 +330,7 @@ impl DeelipApp {
         let on_hold = self.focused_call.is_none() && !self.calls.is_empty();
         let new_voicemail: u32 =
             self.accounts.iter().filter_map(|a| a.mwi.as_ref()).filter(|m| m.waiting).map(|m| m.new_messages).sum();
-        egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
+        egui::Panel::bottom("status").show_inside(ui, |ui| {
             ui.horizontal(|ui| {
                 crate::helpers::status_bar(ui, &self.palette, &self.status_line, self.reg_ok, on_hold);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -366,8 +363,8 @@ impl DeelipApp {
         });
 
         // Explicit margin -- egui's own default (6px) read as too tight.
-        let central_frame = egui::Frame::central_panel(&ctx.style()).inner_margin(14.0);
-        egui::CentralPanel::default().frame(central_frame).show(ctx, |ui| match self.tab {
+        let central_frame = egui::Frame::central_panel(&ctx.global_style()).inner_margin(14.0);
+        egui::CentralPanel::default().frame(central_frame).show_inside(ui, |ui| match self.tab {
             crate::app::Tab::Dialer => self.show_dialer(ui),
             crate::app::Tab::History => self.show_history(ui, ctx),
             crate::app::Tab::Contacts => self.show_contacts(ui, ctx),

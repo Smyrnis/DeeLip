@@ -3,10 +3,10 @@
 //! a live call's video leg via `video_rtp.rs`'s RTP packetization. Full
 //! picture: `docs/crates/media-engine.md`.
 
+use openh264::OpenH264API;
 use openh264::decoder::Decoder as OpenH264Decoder;
 use openh264::encoder::{BitRate, Encoder as OpenH264Encoder, EncoderConfig};
 use openh264::formats::YUVSource;
-use openh264::OpenH264API;
 
 /// Owned I420 (planar YUV 4:2:0) frame -- the pixel format both the
 /// encoder and decoder operate on. `width`/`height` must be even (I420's

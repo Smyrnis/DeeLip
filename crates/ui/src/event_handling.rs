@@ -219,17 +219,17 @@ impl DeelipApp {
                 // both legs are done once the transferee re-INVITEs the
                 // target directly via Replaces, so hang up both ourselves
                 // rather than blind transfer's passive wait-for-BYE.
-                if let Some(original_idx) = self.attended_transfer_original.take() {
-                    if self.calls.len() == 2 {
-                        let consult_idx = 1 - original_idx;
-                        let (first, second) = if original_idx > consult_idx {
-                            (original_idx, consult_idx)
-                        } else {
-                            (consult_idx, original_idx)
-                        };
-                        self.do_hangup(first);
-                        self.do_hangup(second);
-                    }
+                if let Some(original_idx) = self.attended_transfer_original.take()
+                    && self.calls.len() == 2
+                {
+                    let consult_idx = 1 - original_idx;
+                    let (first, second) = if original_idx > consult_idx {
+                        (original_idx, consult_idx)
+                    } else {
+                        (consult_idx, original_idx)
+                    };
+                    self.do_hangup(first);
+                    self.do_hangup(second);
                 }
             }
             SipEvent::TransferFailed { call_id, reason } => {

@@ -133,11 +133,9 @@ pub fn reassemble_nal_units(rtp_payloads: &[Vec<u8>]) -> Vec<u8> {
                 continue;
             }
 
-            if is_end {
-                if let Some(buf) = fu_accum.take() {
-                    out.extend_from_slice(&START_CODE);
-                    out.extend_from_slice(&buf);
-                }
+            if is_end && let Some(buf) = fu_accum.take() {
+                out.extend_from_slice(&START_CODE);
+                out.extend_from_slice(&buf);
             }
         } else {
             out.extend_from_slice(&START_CODE);

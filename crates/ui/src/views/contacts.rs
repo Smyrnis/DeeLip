@@ -81,20 +81,20 @@ impl DeelipApp {
                     |ui| {
                         if ui.button(t("common.call_button")).clicked() {
                             call_target = Some(uri.clone());
-                            ui.close_menu();
+                            ui.close();
                         }
                         if ui.button(t("common.message_button")).clicked() {
                             message_target = Some(uri.clone());
-                            ui.close_menu();
+                            ui.close();
                         }
                         if ui.button(t("common.edit_button")).clicked() {
                             edit_idx = Some(*idx);
-                            ui.close_menu();
+                            ui.close();
                         }
                         ui.separator();
                         if ui.button(RichText::new(t("common.delete_button")).color(palette.danger)).clicked() {
                             delete_idx = Some(*idx);
-                            ui.close_menu();
+                            ui.close();
                         }
                     },
                 );
@@ -115,7 +115,7 @@ impl DeelipApp {
                 .fill(palette.surface_hover)
                 .stroke(egui::Stroke::new(1.0, palette.border))
                 .min_size(egui::vec2(fab_size, fab_size))
-                .rounding(egui::Rounding::same(20));
+                .corner_radius(egui::CornerRadius::same(20));
             if ui.add(button).on_hover_text(t("contacts.add_contact_hover")).clicked() {
                 self.editing_contact_idx = None;
                 self.new_contact = Contact::default();
@@ -244,18 +244,19 @@ impl DeelipApp {
                 };
                 let palette = self.palette;
                 let selected_label = account_status_label(ui, &palette, current_reg_ok, &current_text);
-                egui::ComboBox::from_id_source("contact_presence_account_picker")
-                    .selected_text(selected_label)
-                    .show_ui(ui, |ui| {
+                egui::ComboBox::from_id_salt("contact_presence_account_picker").selected_text(selected_label).show_ui(
+                    ui,
+                    |ui| {
                         for acc in &self.accounts {
                             let is_sel =
                                 self.new_contact.presence_account.as_deref() == Some(acc.account.username.as_str());
                             let label = account_status_label(ui, &palette, acc.reg_ok, &acc.label);
-                            if ui.add(egui::SelectableLabel::new(is_sel, label)).clicked() {
+                            if ui.add(egui::Button::selectable(is_sel, label)).clicked() {
                                 self.new_contact.presence_account = Some(acc.account.username.clone());
                             }
                         }
-                    });
+                    },
+                );
             });
         }
         ui.add_space(10.0);
@@ -303,10 +304,10 @@ impl DeelipApp {
     }
 
     pub(crate) fn unsubscribe_contact_presence(&mut self, contact: &Contact) {
-        if contact.watch_presence {
-            if let Some(idx) = self.resolve_presence_account(contact) {
-                self.accounts[idx].handle.unsubscribe_presence(contact.sip_uri.clone());
-            }
+        if contact.watch_presence
+            && let Some(idx) = self.resolve_presence_account(contact)
+        {
+            self.accounts[idx].handle.unsubscribe_presence(contact.sip_uri.clone());
         }
         self.presence.remove(&contact.sip_uri);
     }

@@ -47,7 +47,7 @@ impl DeelipApp {
             if ui
                 .add_enabled(
                     self.calls.len() == 1,
-                    egui::SelectableLabel::new(self.showing_attended, t("dialer.attended_transfer")),
+                    egui::Button::selectable(self.showing_attended, t("dialer.attended_transfer")),
                 )
                 .clicked()
             {

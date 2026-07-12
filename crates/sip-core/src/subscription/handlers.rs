@@ -4,10 +4,10 @@ use tokio::time::Instant;
 use tracing::{debug, error};
 
 use crate::{
-    client::{SipStack, MWI_ACCEPT, MWI_EVENT, PRESENCE_ACCEPT, PRESENCE_EVENT, SUBSCRIBE_EXPIRES},
+    client::{MWI_ACCEPT, MWI_EVENT, PRESENCE_ACCEPT, PRESENCE_EVENT, SUBSCRIBE_EXPIRES, SipStack},
     events::SipEvent,
-    subscription::mwi::{parse_mwi_summary, MwiSubscription},
-    subscription::presence::{parse_pidf_basic, parse_subscription_state, PresenceSubscription},
+    subscription::mwi::{MwiSubscription, parse_mwi_summary},
+    subscription::presence::{PresenceSubscription, parse_pidf_basic, parse_subscription_state},
     wire::auth::build_challenge_response,
     wire::message::SipMessage,
     wire::util::{extract_expires, new_call_id, new_tag, parse_tag},
@@ -107,8 +107,8 @@ impl SipStack {
     /// everything else about the SUBSCRIBE (dialog identity, auth retry,
     /// refresh) is identical regardless of which event package it's for.
     #[allow(clippy::too_many_arguments)] // each param is a distinct, meaningfully-named
-                                         // piece of a SUBSCRIBE's identity; bundling them
-                                         // into a struct wouldn't reduce real complexity here.
+    // piece of a SUBSCRIBE's identity; bundling them
+    // into a struct wouldn't reduce real complexity here.
     fn build_subscribe(
         &self, call_id: &str, from_tag: &str, cseq: u32, target_uri: &str, expires: u32, auth: Option<&str>,
         event_package: &str, accept: &str,
@@ -349,16 +349,16 @@ impl SipStack {
             let call_id = call_id.clone().unwrap();
             let body = String::from_utf8_lossy(&msg.body).into_owned();
 
-            if let Some(state) = parse_pidf_basic(&body) {
-                if let Some(sub) = self.subscriptions.get_mut(&call_id) {
-                    sub.state = state;
-                    if sub.remote_tag.is_none() {
-                        // First NOTIFY can race ahead of the SUBSCRIBE's own 200 OK.
-                        sub.remote_tag = parse_tag(msg.header("From").unwrap_or(""));
-                    }
-                    let uri = sub.target_uri.clone();
-                    let _ = self.event_tx.send(SipEvent::PresenceUpdate { uri, state });
+            if let Some(state) = parse_pidf_basic(&body)
+                && let Some(sub) = self.subscriptions.get_mut(&call_id)
+            {
+                sub.state = state;
+                if sub.remote_tag.is_none() {
+                    // First NOTIFY can race ahead of the SUBSCRIBE's own 200 OK.
+                    sub.remote_tag = parse_tag(msg.header("From").unwrap_or(""));
                 }
+                let uri = sub.target_uri.clone();
+                let _ = self.event_tx.send(SipEvent::PresenceUpdate { uri, state });
             }
 
             if let Some(sub_state) = msg.header("Subscription-State") {
@@ -371,15 +371,15 @@ impl SipStack {
             let call_id = call_id.unwrap();
             let body = String::from_utf8_lossy(&msg.body).into_owned();
 
-            if let Some(state) = parse_mwi_summary(&body) {
-                if let Some(sub) = self.mwi_subscriptions.get_mut(&call_id) {
-                    sub.state = state;
-                    if sub.remote_tag.is_none() {
-                        sub.remote_tag = parse_tag(msg.header("From").unwrap_or(""));
-                    }
-                    let uri = sub.target_uri.clone();
-                    let _ = self.event_tx.send(SipEvent::MwiUpdate { uri, state });
+            if let Some(state) = parse_mwi_summary(&body)
+                && let Some(sub) = self.mwi_subscriptions.get_mut(&call_id)
+            {
+                sub.state = state;
+                if sub.remote_tag.is_none() {
+                    sub.remote_tag = parse_tag(msg.header("From").unwrap_or(""));
                 }
+                let uri = sub.target_uri.clone();
+                let _ = self.event_tx.send(SipEvent::MwiUpdate { uri, state });
             }
 
             if let Some(sub_state) = msg.header("Subscription-State") {

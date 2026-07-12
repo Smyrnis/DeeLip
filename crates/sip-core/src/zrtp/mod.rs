@@ -13,4 +13,4 @@ pub mod wire;
 
 pub use cache::{CacheEntry, MemorySharedSecretStore, RetainedSecrets, SharedSecretStore};
 pub use engine::{EngineEvent, HandshakeState, Role, ZrtpEngine};
-pub use wire::{is_zrtp_packet, Message, Packet};
+pub use wire::{Message, Packet, is_zrtp_packet};

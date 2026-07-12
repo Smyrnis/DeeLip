@@ -1,4 +1,4 @@
-use deelip_config::{apply_dial_plan, DialPlanRule};
+use deelip_config::{DialPlanRule, apply_dial_plan};
 
 /// Normalize a dial-box entry into a full SIP URI. Bare numbers/usernames
 /// (no scheme, no "@") are dialed against the account's own domain, matching
@@ -29,11 +29,7 @@ pub(crate) fn normalize_target_with_prefix(
         // bare IP/host (e.g. "192.168.1.50") from one should stay just that,
         // not become the malformed "sip:192.168.1.50@" this would otherwise
         // produce.
-        if domain.trim().is_empty() {
-            format!("sip:{dialed}")
-        } else {
-            format!("sip:{dialed}@{domain}")
-        }
+        if domain.trim().is_empty() { format!("sip:{dialed}") } else { format!("sip:{dialed}@{domain}") }
     }
 }
 

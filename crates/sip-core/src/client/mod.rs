@@ -18,8 +18,8 @@ pub(crate) use events::{IncomingVideoAnswer, OutgoingVideoConnected, StackEvent}
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU32;
 use std::time::Duration;
 
 use tokio::sync::mpsc;

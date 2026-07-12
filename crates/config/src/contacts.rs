@@ -1,8 +1,8 @@
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
-use crate::db::{bool_to_sql, sql_int_to_bool};
 use crate::Db;
+use crate::db::{bool_to_sql, sql_int_to_bool};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Contact {

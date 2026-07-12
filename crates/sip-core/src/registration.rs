@@ -3,7 +3,7 @@ use std::sync::atomic::Ordering;
 use tracing::{debug, info, warn};
 
 use crate::{
-    client::{SipStack, REG_RECV_TIMEOUT},
+    client::{REG_RECV_TIMEOUT, SipStack},
     wire::auth::build_challenge_response,
     wire::message::SipMessage,
     wire::util::{extract_expires, new_branch, parse_via_received},

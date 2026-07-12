@@ -14,19 +14,19 @@ use webrtc_srtp::protection_profile::ProtectionProfile;
 use webrtc_util::Conn;
 
 use deelip_config::RecordingFormat;
-use deelip_sip::zrtp::{is_zrtp_packet, Role};
+use deelip_sip::zrtp::{Role, is_zrtp_packet};
 use deelip_sip::{AudioCodec, SrtpSession};
 
 use crate::aec::EchoCanceller;
 use crate::agc::AutomaticGainControl;
-use crate::audio::{open_streams, AudioStreams, PlaybackTx, FRAME_SAMPLES};
-use crate::codec_dispatch::{clock_hz_for, ts_increment_for, AudioDecoder, AudioEncoder};
-use crate::dtmf::{build_dtmf_burst, char_to_event, dtmf_tone_frame, DTMF_PAYLOAD_TYPE, INBAND_FRAME_COUNT};
+use crate::audio::{AudioStreams, FRAME_SAMPLES, PlaybackTx, open_streams};
+use crate::codec_dispatch::{AudioDecoder, AudioEncoder, clock_hz_for, ts_increment_for};
+use crate::dtmf::{DTMF_PAYLOAD_TYPE, INBAND_FRAME_COUNT, build_dtmf_burst, char_to_event, dtmf_tone_frame};
 use crate::recording::{RecordingOptions, RecordingWriter};
 use crate::rtp::{RtpPacket, RtpSender};
 use crate::stats::{CallStatsSnapshot, JitterTracker, LegStats, SharedStats};
-use crate::vad::{synthesize_comfort_noise, ComfortNoiseState, VadDecision, VoiceActivityDetector};
-use crate::zrtp_session::{client_id as zrtp_client_id, ZrtpOutcome, ZrtpParams, ZrtpRuntime};
+use crate::vad::{ComfortNoiseState, VadDecision, VoiceActivityDetector, synthesize_comfort_noise};
+use crate::zrtp_session::{ZrtpOutcome, ZrtpParams, ZrtpRuntime, client_id as zrtp_client_id};
 
 /// Act on whatever `ZrtpRuntime::handle_incoming`/`tick` just produced --
 /// see `docs/crates/media-engine.md`'s ZRTP section. The two tasks each own their
@@ -818,10 +818,10 @@ impl MediaEngine {
                 Ok(w) => *guard = Some(w),
                 Err(e) => error!("Failed to start call recording: {e}"),
             }
-        } else if let Some(writer) = guard.take() {
-            if let Err(e) = writer.finalize() {
-                error!("Failed to finalize call recording: {e}");
-            }
+        } else if let Some(writer) = guard.take()
+            && let Err(e) = writer.finalize()
+        {
+            error!("Failed to finalize call recording: {e}");
         }
     }
 
@@ -866,10 +866,10 @@ impl MediaEngine {
         // regardless of the abort race above -- both WAV and MP3 need an
         // explicit finalize() (RIFF header sizes / final encoder flush);
         // Drop alone would leave either format malformed/truncated.
-        if let Some(writer) = self.recorder.lock().unwrap().take() {
-            if let Err(e) = writer.finalize() {
-                error!("Failed to finalize call recording: {e}");
-            }
+        if let Some(writer) = self.recorder.lock().unwrap().take()
+            && let Err(e) = writer.finalize()
+        {
+            error!("Failed to finalize call recording: {e}");
         }
     }
 }

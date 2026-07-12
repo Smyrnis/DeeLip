@@ -10,8 +10,8 @@ use crate::helpers::window_icon;
 /// why Messages can't share this) is in `docs/crates/ui.md`'s "Pop-out windows"
 /// section.
 #[allow(clippy::too_many_arguments)] // each param is a distinct, meaningfully-named
-                                     // piece of this window's identity; bundling them
-                                     // into a struct wouldn't reduce real complexity.
+// piece of this window's identity; bundling them
+// into a struct wouldn't reduce real complexity.
 pub(crate) fn show_pop_out_window(
     app: &mut DeelipApp, ctx: &egui::Context, self_app: SharedApp, key: &'static str, window_title: String,
     size: [f32; 2], min_size: [f32; 2], resizable: bool, is_open: fn(&DeelipApp) -> bool, on_close: fn(&mut DeelipApp),
@@ -45,14 +45,14 @@ pub(crate) fn show_pop_out_window(
             .with_min_inner_size(min_size)
             .with_resizable(resizable)
             .with_icon(window_icon()),
-        move |child_ctx, _class| {
+        move |child_ui: &mut egui::Ui, _class| {
             let mut app = self_app.lock();
             if !is_open(&app) {
                 return;
             }
 
             let label = title(&app);
-            egui::TopBottomPanel::top(format!("{key}_titlebar")).show(child_ctx, |ui| {
+            egui::Panel::top(format!("{key}_titlebar")).show_inside(child_ui, |ui| {
                 ui.add_space(4.0);
                 ui.label(RichText::new(label).font(crate::theme::font_heading(16.0)));
                 ui.add_space(4.0);
@@ -60,10 +60,10 @@ pub(crate) fn show_pop_out_window(
 
             // Explicit margin -- egui's own default left content flush
             // against the window edge (see docs/crates/ui.md's pop-out section).
-            let frame = egui::Frame::central_panel(&child_ctx.style()).inner_margin(14.0);
-            egui::CentralPanel::default().frame(frame).show(child_ctx, |ui| content(&mut app, ui));
+            let frame = egui::Frame::central_panel(child_ui.style()).inner_margin(14.0);
+            egui::CentralPanel::default().frame(frame).show_inside(child_ui, |ui| content(&mut app, ui));
 
-            if child_ctx.input(|i| i.viewport().close_requested()) {
+            if child_ui.input(|i| i.viewport().close_requested()) {
                 on_close(&mut app);
             }
         },

@@ -111,7 +111,7 @@ pub(super) fn show(
         ui.end_row();
 
         field_label(ui, palette, &t("settings.account.transport_label"));
-        egui::ComboBox::from_id_source("settings_transport")
+        egui::ComboBox::from_id_salt("settings_transport")
             .selected_text(match account.transport {
                 TransportProtocol::Udp => "UDP",
                 TransportProtocol::Tcp => "TCP",

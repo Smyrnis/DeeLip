@@ -34,17 +34,17 @@ pub fn local_ip_for(server: &str, port: u16) -> anyhow::Result<String> {
 /// Read `Expires` from a REGISTER/SUBSCRIBE response, falling back to the
 /// `expires=` param on the `Contact` header (RFC 3261 §10.2.4 allows either).
 pub fn extract_expires(msg: &crate::wire::message::SipMessage) -> Option<u32> {
-    if let Some(v) = msg.header("Expires") {
-        if let Ok(n) = v.trim().parse::<u32>() {
-            return Some(n);
-        }
+    if let Some(v) = msg.header("Expires")
+        && let Ok(n) = v.trim().parse::<u32>()
+    {
+        return Some(n);
     }
     if let Some(contact) = msg.header("Contact") {
         for param in contact.split(';') {
-            if let Some(v) = param.trim().strip_prefix("expires=") {
-                if let Ok(n) = v.trim_matches('"').parse::<u32>() {
-                    return Some(n);
-                }
+            if let Some(v) = param.trim().strip_prefix("expires=")
+                && let Ok(n) = v.trim_matches('"').parse::<u32>()
+            {
+                return Some(n);
             }
         }
     }
@@ -118,10 +118,10 @@ pub fn parse_tag(header: &str) -> Option<String> {
 /// Extract the URI from a `To`/`From`/`Contact`-style header value, preferring
 /// the `<...>` angle-bracket form but falling back to a bare URI.
 pub fn parse_uri(header: &str) -> Option<String> {
-    if let Some(start) = header.find('<') {
-        if let Some(end) = header.find('>') {
-            return Some(header[start + 1..end].to_string());
-        }
+    if let Some(start) = header.find('<')
+        && let Some(end) = header.find('>')
+    {
+        return Some(header[start + 1..end].to_string());
     }
     let candidate = header.split(';').next()?.trim();
     // Some UAs send a malformed bare-form header with a display-name-like

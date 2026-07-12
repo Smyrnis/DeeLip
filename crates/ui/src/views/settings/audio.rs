@@ -31,11 +31,11 @@ impl DeelipApp {
         let mut edited = false;
         ui.label(RichText::new(t("settings.tab_audio")).font(theme::font_heading(13.5)));
         theme::full_width_card(ui, *palette, |ui| {
-            if let Some(rx) = &self.audio_device_rx {
-                if let Ok(result) = rx.try_recv() {
-                    self.audio_device_cache = Some(result);
-                    self.audio_device_rx = None;
-                }
+            if let Some(rx) = &self.audio_device_rx
+                && let Ok(result) = rx.try_recv()
+            {
+                self.audio_device_cache = Some(result);
+                self.audio_device_rx = None;
             }
             if self.audio_device_cache.is_none() && self.audio_device_rx.is_none() {
                 self.spawn_audio_device_scan();
@@ -94,11 +94,11 @@ impl DeelipApp {
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_else(|| t("settings.audio.built_in_tone"));
                 ui.label(RichText::new(name).color(palette.ink_muted));
-                if ui.small_button(t("settings.choose_button")).clicked() {
-                    if let Some(path) = rfd::FileDialog::new().add_filter("WAV", &["wav"]).pick_file() {
-                        self.config.audio.ringtone_file = Some(path.to_string_lossy().into_owned());
-                        edited = true;
-                    }
+                if ui.small_button(t("settings.choose_button")).clicked()
+                    && let Some(path) = rfd::FileDialog::new().add_filter("WAV", &["wav"]).pick_file()
+                {
+                    self.config.audio.ringtone_file = Some(path.to_string_lossy().into_owned());
+                    edited = true;
                 }
                 if self.config.audio.ringtone_file.is_some() && ui.small_button(t("common.clear_button")).clicked() {
                     self.config.audio.ringtone_file = None;
@@ -136,7 +136,7 @@ impl DeelipApp {
             if self.config.recording_enabled {
                 ui.horizontal(|ui| {
                     field_label(ui, palette, &t("settings.audio.format_label"));
-                    egui::ComboBox::from_id_source("settings_recording_format")
+                    egui::ComboBox::from_id_salt("settings_recording_format")
                         .selected_text(match self.config.recording_format {
                             RecordingFormat::Wav => t("settings.audio.format_wav"),
                             RecordingFormat::Mp3 => t("settings.audio.format_mp3"),
@@ -163,11 +163,11 @@ impl DeelipApp {
                     let default_shown = t("settings.audio.save_to_default");
                     let shown = self.config.recordings_dir_override.as_deref().unwrap_or(default_shown.as_str());
                     ui.label(RichText::new(shown).color(palette.ink_muted));
-                    if ui.small_button(t("settings.choose_button")).clicked() {
-                        if let Some(dir) = rfd::FileDialog::new().pick_folder() {
-                            self.config.recordings_dir_override = Some(dir.to_string_lossy().into_owned());
-                            edited = true;
-                        }
+                    if ui.small_button(t("settings.choose_button")).clicked()
+                        && let Some(dir) = rfd::FileDialog::new().pick_folder()
+                    {
+                        self.config.recordings_dir_override = Some(dir.to_string_lossy().into_owned());
+                        edited = true;
                     }
                     if self.config.recordings_dir_override.is_some()
                         && ui.small_button(t("settings.reset_button")).clicked()

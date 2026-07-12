@@ -16,8 +16,8 @@ pub use account::{
 };
 pub use autostart::{is_autostart_enabled, set_autostart};
 pub use contacts::{Contact, ContactBook};
-pub use db::{default_db_path, Db};
-pub use dialplan::{apply_dial_plan, DialPlanRule};
+pub use db::{Db, default_db_path};
+pub use dialplan::{DialPlanRule, apply_dial_plan};
 pub use history::{CallDirection, CallHistory, CallRecord, CallStatus};
 pub use messages::{Message, MessageDirection, MessageLog};
 

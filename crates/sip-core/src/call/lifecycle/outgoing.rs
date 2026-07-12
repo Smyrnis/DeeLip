@@ -13,7 +13,7 @@ use crate::{
     call::media_setup::{self, NetworkConfig},
     client::{SipStack, StackEvent},
     events::SipEvent,
-    wire::sdp::{build_offer, build_video_media_section, IceAttrs, SrtpParams, VideoCodec},
+    wire::sdp::{IceAttrs, SrtpParams, VideoCodec, build_offer, build_video_media_section},
     wire::util::{new_branch, new_call_id, new_tag, uri_host_port},
 };
 
@@ -229,8 +229,8 @@ impl SipStack {
     }
 
     #[allow(clippy::too_many_arguments)] // each param is a distinct, meaningfully-named
-                                         // piece of an INVITE's identity; bundling them
-                                         // into a struct wouldn't reduce real complexity here.
+    // piece of an INVITE's identity; bundling them
+    // into a struct wouldn't reduce real complexity here.
     pub(super) fn build_invite(
         &self, call_id: &str, from_tag: &str, cseq: u32, to: &str, sdp: &str, auth: Option<&str>, branch: &str,
         session_expires: u32,

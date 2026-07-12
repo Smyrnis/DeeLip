@@ -23,7 +23,7 @@ impl SrtpParams {
     }
 
     pub(super) fn to_crypto_line(&self, tag: u32) -> String {
-        use base64::{engine::general_purpose::STANDARD, Engine};
+        use base64::{Engine, engine::general_purpose::STANDARD};
         let mut combined = Vec::with_capacity(SRTP_MASTER_KEY_LEN + SRTP_MASTER_SALT_LEN);
         combined.extend_from_slice(&self.key);
         combined.extend_from_slice(&self.salt);
@@ -32,7 +32,7 @@ impl SrtpParams {
     }
 
     pub(super) fn parse_crypto_line(line: &str) -> Option<Self> {
-        use base64::{engine::general_purpose::STANDARD, Engine};
+        use base64::{Engine, engine::general_purpose::STANDARD};
         // "a=crypto:1 AES_CM_128_HMAC_SHA1_80 inline:<base64>[|2^20|1:4]"
         let rest = line.trim().strip_prefix("a=crypto:")?;
         let mut parts = rest.split_whitespace();

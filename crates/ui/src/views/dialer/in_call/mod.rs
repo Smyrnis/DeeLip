@@ -16,8 +16,8 @@ use egui::{RichText, Ui};
 use stats::show_leg_stats;
 use video::{show_video_view, update_video_view};
 use widgets::{
-    call_avatar, caller_name_label, circular_action_button, icon_toggle_button, state_badge, RingState,
-    CIRCULAR_ACTION_COL_WIDTH,
+    CIRCULAR_ACTION_COL_WIDTH, RingState, call_avatar, caller_name_label, circular_action_button, icon_toggle_button,
+    state_badge,
 };
 
 use crate::app::DeelipApp;
@@ -76,8 +76,12 @@ impl DeelipApp {
         let row_width = 2.0 * CIRCULAR_ACTION_COL_WIDTH + ui.spacing().item_spacing.x;
         ui.horizontal(|ui| {
             ui.add_space(((ui.available_width() - row_width) / 2.0).max(0.0));
-            if circular_action_button(ui, egui_phosphor::regular::PHONE, self.palette.signal, &t("common.accept_button"))
-            {
+            if circular_action_button(
+                ui,
+                egui_phosphor::regular::PHONE,
+                self.palette.signal,
+                &t("common.accept_button"),
+            ) {
                 self.do_accept();
             }
             if circular_action_button(
@@ -222,8 +226,11 @@ impl DeelipApp {
                     ui.add_space(16.0);
                     // `vertical_centered` only centers a single fixed-size
                     // child -- see docs/crates/ui.md's "centering nested rows" note.
-                    let row_width =
-                        if self.in_conference { CIRCULAR_ACTION_COL_WIDTH } else { CIRCULAR_ACTION_COL_WIDTH + 10.0 + 56.0 };
+                    let row_width = if self.in_conference {
+                        CIRCULAR_ACTION_COL_WIDTH
+                    } else {
+                        CIRCULAR_ACTION_COL_WIDTH + 10.0 + 56.0
+                    };
                     ui.horizontal(|ui| {
                         ui.add_space(((ui.available_width() - row_width) / 2.0).max(0.0));
                         if circular_action_button(
@@ -242,7 +249,7 @@ impl DeelipApp {
                                     .color(self.palette.ink_muted),
                             )
                             .fill(self.palette.surface)
-                            .rounding(egui::Rounding::same(14));
+                            .corner_radius(egui::CornerRadius::same(14));
                             if ui.add_sized([56.0, 56.0], b).clicked() {
                                 hold_idx = Some(idx);
                             }

@@ -47,16 +47,16 @@ impl Ringtone {
 
         let sink = Sink::try_new(&handle)?;
         sink.set_volume(volume);
-        if kind == RingKind::Incoming {
-            if let Some(path) = ringtone_file {
-                match load_wav_looped(path) {
-                    Ok(source) => {
-                        sink.append(source);
-                        sink.play();
-                        return Ok(Self { _stream: stream, sink });
-                    }
-                    Err(e) => tracing::warn!("Custom ringtone {path} failed to load ({e}), using built-in tone"),
+        if kind == RingKind::Incoming
+            && let Some(path) = ringtone_file
+        {
+            match load_wav_looped(path) {
+                Ok(source) => {
+                    sink.append(source);
+                    sink.play();
+                    return Ok(Self { _stream: stream, sink });
                 }
+                Err(e) => tracing::warn!("Custom ringtone {path} failed to load ({e}), using built-in tone"),
             }
         }
         sink.append(RingSource::new(kind));

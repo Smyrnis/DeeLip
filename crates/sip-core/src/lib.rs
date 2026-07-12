@@ -24,8 +24,8 @@ pub use wire::message;
 pub use wire::message::{SipMessage, SipMethod, SipStartLine};
 pub use wire::sdp;
 pub use wire::sdp::{
-    build_answer, build_hold_offer, build_offer, build_resume_offer, parse_sdp, AudioCodec, IceAttrs, ParsedSdp,
-    SrtpParams, SrtpSession,
+    AudioCodec, IceAttrs, ParsedSdp, SrtpParams, SrtpSession, build_answer, build_hold_offer, build_offer,
+    build_resume_offer, parse_sdp,
 };
 pub use wire::util;
 

@@ -4,7 +4,7 @@ pub mod turn_relay;
 
 pub use ice::{IceConnection, IceGathered};
 pub use stun::discover_external_addr;
-pub use turn_relay::{allocate_relay, TurnRelay};
+pub use turn_relay::{TurnRelay, allocate_relay};
 
 /// Allocate a local RTP port (even port, per SIP convention). `range`, if
 /// given, restricts the search to `min..=max` (e.g. for a fixed firewall

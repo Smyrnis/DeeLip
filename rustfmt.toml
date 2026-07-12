@@ -1,4 +1,4 @@
-edition = "2021"
+edition = "2024"
 
 # Wider line budget before rustfmt wraps anything at all.
 max_width = 120

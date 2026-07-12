@@ -48,9 +48,5 @@ pub(super) fn show_leg_stats(
 }
 
 pub(super) fn format_bytes(bytes: u64) -> String {
-    if bytes < 1024 {
-        format!("{bytes} B")
-    } else {
-        format!("{:.1} KB", bytes as f64 / 1024.0)
-    }
+    if bytes < 1024 { format!("{bytes} B") } else { format!("{:.1} KB", bytes as f64 / 1024.0) }
 }

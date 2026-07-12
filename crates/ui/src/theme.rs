@@ -114,8 +114,8 @@ pub fn apply_style(ctx: &egui::Context, visuals: &mut egui::Visuals, palette: &P
 
     // v3: near-flat IDE-panel corners -- sharper than v2's already-tightened
     // rounding, matching Darcula's own squared-off widget chrome.
-    let rounding = egui::Rounding::same(2);
-    visuals.window_corner_radius = egui::Rounding::same(2);
+    let rounding = egui::CornerRadius::same(2);
+    visuals.window_corner_radius = egui::CornerRadius::same(2);
     for widgets in [
         &mut visuals.widgets.noninteractive,
         &mut visuals.widgets.inactive,
@@ -134,7 +134,7 @@ pub fn apply_style(ctx: &egui::Context, visuals: &mut egui::Visuals, palette: &P
     visuals.widgets.active.bg_fill = palette.surface_hover;
     visuals.widgets.open.bg_fill = palette.surface;
 
-    let mut style = (*ctx.style()).clone();
+    let mut style = (*ctx.global_style()).clone();
     // v3.1: loosened back up from v2's "too much chrome" density pass --
     // that ended up reading as too tight/cramped once lived with.
     style.spacing.item_spacing = egui::vec2(10.0, 8.0);
@@ -147,17 +147,17 @@ pub fn apply_style(ctx: &egui::Context, visuals: &mut egui::Visuals, palette: &P
         (egui::TextStyle::Monospace, egui::FontId::new(12.5, egui::FontFamily::Monospace)),
     ]
     .into();
-    ctx.set_style(style);
+    ctx.set_global_style(style);
 }
 
 /// A flat "card" surface -- `palette.surface` fill, a hairline
 /// `palette.border` stroke, rounded, padded -- the redesign's replacement
 /// for both `ui.group()`'s heavier box and the old solid-fill-only card.
 pub fn card_frame(palette: &Palette) -> egui::Frame {
-    egui::Frame::none()
+    egui::Frame::NONE
         .fill(palette.surface)
         .stroke(egui::Stroke::new(1.0, palette.border))
-        .rounding(egui::Rounding::same(2))
+        .corner_radius(egui::CornerRadius::same(2))
         .inner_margin(egui::Margin::same(14))
 }
 

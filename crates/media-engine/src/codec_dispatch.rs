@@ -5,8 +5,8 @@
 use anyhow::Context;
 
 use crate::codec::{
-    decode_pcma, decode_pcmu, encode_pcma, encode_pcmu, G722Decoder, G722Encoder, G729Decoder, G729Encoder, GsmDecoder,
-    GsmEncoder, IlbcDecoder, IlbcEncoder, OpusDecoder, OpusEncoder,
+    G722Decoder, G722Encoder, G729Decoder, G729Encoder, GsmDecoder, GsmEncoder, IlbcDecoder, IlbcEncoder, OpusDecoder,
+    OpusEncoder, decode_pcma, decode_pcmu, encode_pcma, encode_pcmu,
 };
 use deelip_sip::AudioCodec;
 

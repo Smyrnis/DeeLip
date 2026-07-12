@@ -19,7 +19,7 @@ pub(super) fn show(ui: &mut Ui, palette: &Palette, account: &mut SipAccount, edi
     ui.add_space(6.0);
     ui.horizontal(|ui| {
         field_label(ui, palette, &t("settings.account.dtmf_mode_label"));
-        egui::ComboBox::from_id_source("settings_dtmf_mode")
+        egui::ComboBox::from_id_salt("settings_dtmf_mode")
             .selected_text(match account.dtmf_mode {
                 DtmfMode::Rfc2833 => t("settings.account.dtmf_rfc2833"),
                 DtmfMode::SipInfo => t("settings.account.dtmf_sipinfo"),

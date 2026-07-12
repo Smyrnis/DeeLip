@@ -55,11 +55,11 @@ impl DeelipApp {
             is_registered(&self.config.accounts[self.edit_account_idx]),
             &format!("{}. {}", self.edit_account_idx + 1, account_label(&self.config.accounts[self.edit_account_idx])),
         );
-        egui::ComboBox::from_id_source("settings_account_picker").selected_text(selected_text).show_ui(ui, |ui| {
+        egui::ComboBox::from_id_salt("settings_account_picker").selected_text(selected_text).show_ui(ui, |ui| {
             for i in 0..self.config.accounts.len() {
                 let label_text = format!("{}. {}", i + 1, account_label(&self.config.accounts[i]));
                 let label = account_status_label(ui, palette, is_registered(&self.config.accounts[i]), &label_text);
-                if ui.add(egui::SelectableLabel::new(self.edit_account_idx == i, label)).clicked() {
+                if ui.add(egui::Button::selectable(self.edit_account_idx == i, label)).clicked() {
                     self.edit_account_idx = i;
                 }
             }

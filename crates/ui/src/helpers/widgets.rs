@@ -209,7 +209,7 @@ pub(crate) fn device_picker(
     let mut changed = false;
     ui.label(label);
     let selected = current.clone().unwrap_or_else(|| "Default".into());
-    egui::ComboBox::from_id_source(id_source).selected_text(selected).show_ui(ui, |ui| {
+    egui::ComboBox::from_id_salt(id_source).selected_text(selected).show_ui(ui, |ui| {
         if ui.selectable_label(current.is_none(), "Default").clicked() {
             *current = None;
             changed = true;
@@ -310,7 +310,8 @@ pub(crate) fn phone_keypad(ui: &mut Ui, palette: Palette, mut on_press: impl FnM
             let margin = ((ui.available_width() - row_width) / 2.0).max(0.0);
             ui.add_space(margin);
             for digit in row {
-                let button = egui::Button::new(keypad_button_text(digit, palette)).rounding(egui::Rounding::same(6));
+                let button =
+                    egui::Button::new(keypad_button_text(digit, palette)).corner_radius(egui::CornerRadius::same(6));
                 if ui.add_sized([BUTTON, BUTTON], button).clicked() {
                     on_press(digit);
                 }

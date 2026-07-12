@@ -117,9 +117,9 @@ fn restore_window(ctx_slot: &CtxSlot) {
 /// Build failures past the initial channel round-trip are logged, not
 /// propagated (the app works fine without a tray icon).
 #[allow(deprecated)] // `MainContext::channel` -- the suggested async-channel + spawn_future_local
-                     // replacement doesn't fit this thread's plain `gtk::main()` loop; this is
-                     // still the documented way to feed a synchronous cross-thread channel into
-                     // a classic (non-async) GLib main loop.
+// replacement doesn't fit this thread's plain `gtk::main()` loop; this is
+// still the documented way to feed a synchronous cross-thread channel into
+// a classic (non-async) GLib main loop.
 pub fn spawn_tray_icon() -> anyhow::Result<(TrayMenuIds, BadgeSender)> {
     let (ids_tx, ids_rx) = std::sync::mpsc::channel::<TrayMenuIds>();
     let (badge_tx, badge_rx) = gtk::glib::MainContext::channel::<u32>(gtk::glib::Priority::default());

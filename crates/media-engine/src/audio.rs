@@ -91,11 +91,7 @@ pub fn open_streams(
 /// default if `name` is `None` or doesn't match any available device.
 fn find_device(host: &cpal::Host, name: Option<&str>, is_input: bool) -> Option<cpal::Device> {
     let default = || {
-        if is_input {
-            host.default_input_device()
-        } else {
-            host.default_output_device()
-        }
+        if is_input { host.default_input_device() } else { host.default_output_device() }
     };
     let Some(name) = name else { return default() };
 

@@ -3,11 +3,7 @@ use super::*;
 fn ulaw_error_pct(original: i16, decoded: i16) -> f32 {
     let err = (original as i32 - decoded as i32).abs() as f32;
     let mag = original.unsigned_abs() as f32;
-    if mag < 1.0 {
-        err
-    } else {
-        err / mag * 100.0
-    }
+    if mag < 1.0 { err } else { err / mag * 100.0 }
 }
 
 #[test]

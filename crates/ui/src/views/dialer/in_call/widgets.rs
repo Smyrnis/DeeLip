@@ -62,9 +62,9 @@ pub(super) fn call_avatar(ui: &mut Ui, palette: &Palette, display_name: &str, st
 /// in place of the original pulse-ring animation. `text` should be
 /// lowercase, matching the rest of this screen's quiet, unshouty labels.
 pub(super) fn state_badge(ui: &mut Ui, text: &str, color: egui::Color32) {
-    egui::Frame::none()
+    egui::Frame::NONE
         .fill(with_alpha(color, 35))
-        .rounding(egui::Rounding::same(4))
+        .corner_radius(egui::CornerRadius::same(4))
         .inner_margin(egui::Margin::symmetric(7, 3))
         .show(ui, |ui| {
             ui.label(RichText::new(text).font(egui::FontId::new(10.5, egui::FontFamily::Monospace)).color(color));
@@ -109,13 +109,11 @@ pub(super) fn circular_action_button(ui: &mut Ui, icon: &str, color: egui::Color
     const BTN: f32 = 64.0;
     let (col_rect, response) =
         ui.allocate_exact_size(egui::vec2(CIRCULAR_ACTION_COL_WIDTH, BTN + 18.0), egui::Sense::click());
-    let btn_rect = egui::Rect::from_min_size(
-        egui::pos2(col_rect.center().x - BTN / 2.0, col_rect.min.y),
-        egui::vec2(BTN, BTN),
-    );
+    let btn_rect =
+        egui::Rect::from_min_size(egui::pos2(col_rect.center().x - BTN / 2.0, col_rect.min.y), egui::vec2(BTN, BTN));
 
     let painter = ui.painter();
-    painter.rect_filled(btn_rect, egui::Rounding::same(14), color);
+    painter.rect_filled(btn_rect, egui::CornerRadius::same(14), color);
     painter.text(
         btn_rect.center(),
         Align2::CENTER_CENTER,
@@ -166,7 +164,13 @@ pub(super) fn icon_toggle_button(
         egui::Rect::from_min_size(egui::pos2(col_rect.center().x - BTN / 2.0, col_rect.min.y), egui::vec2(BTN, BTN));
 
     let painter = ui.painter();
-    painter.rect(btn_rect, egui::Rounding::same(12), fill, egui::Stroke::new(1.0, palette.border), egui::StrokeKind::Middle);
+    painter.rect(
+        btn_rect,
+        egui::CornerRadius::same(12),
+        fill,
+        egui::Stroke::new(1.0, palette.border),
+        egui::StrokeKind::Middle,
+    );
     // Per-glyph vertical nudge -- the Phosphor `MICROPHONE`/
     // `MICROPHONE_SLASH` glyph's ink sits visibly higher within its own
     // font-metrics line box than `RECORD`/`EXPORT`/`NUMPAD` do (confirmed

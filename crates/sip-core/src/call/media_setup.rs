@@ -11,7 +11,7 @@ use webrtc_util::Conn;
 
 use crate::call::dialog::{CallMedia, VideoMedia};
 use crate::events::{CallMediaReady, VideoMediaReady};
-use crate::wire::sdp::{AudioCodec, IceAttrs, ParsedSdp, SrtpParams, SrtpSession, VideoCodec, ALL_CODECS};
+use crate::wire::sdp::{ALL_CODECS, AudioCodec, IceAttrs, ParsedSdp, SrtpParams, SrtpSession, VideoCodec};
 
 /// Bounded wait for ICE candidate gathering (host candidates are instant;
 /// server-reflexive/relay each cost one STUN/TURN round trip) -- generous
@@ -67,11 +67,7 @@ impl NetworkConfig {
 /// be unreachable in practice.
 pub fn account_codecs(acc: &SipAccount) -> Vec<AudioCodec> {
     let codecs: Vec<AudioCodec> = acc.codec_order.iter().filter_map(|s| codec_from_str(s)).collect();
-    if codecs.is_empty() {
-        ALL_CODECS.to_vec()
-    } else {
-        codecs
-    }
+    if codecs.is_empty() { ALL_CODECS.to_vec() } else { codecs }
 }
 
 /// Parse one of `codec_order`'s canonical lowercase codec names (also used
@@ -96,12 +92,12 @@ pub fn codec_from_str(s: &str) -> Option<AudioCodec> {
 pub async fn resolve_rtp_endpoint(
     network: &NetworkConfig, advertised_ip: &str, local_rtp: u16, relay: &mut Option<TurnRelay>,
 ) -> (String, u16) {
-    if relay.is_none() {
-        if let Some((server, username, password)) = network.turn() {
-            match deelip_nat::allocate_relay(&server, &username, &password).await {
-                Ok(r) => *relay = Some(r),
-                Err(e) => tracing::warn!("TURN allocation failed ({e}), falling back to direct"),
-            }
+    if relay.is_none()
+        && let Some((server, username, password)) = network.turn()
+    {
+        match deelip_nat::allocate_relay(&server, &username, &password).await {
+            Ok(r) => *relay = Some(r),
+            Err(e) => tracing::warn!("TURN allocation failed ({e}), falling back to direct"),
         }
     }
     match relay {
@@ -265,9 +261,9 @@ fn resolve_srtp_and_relay(
 }
 
 #[allow(clippy::too_many_arguments)] // each param is a distinct, meaningfully-named
-                                     // piece of one call leg's negotiated
-                                     // media state -- bundling them into a
-                                     // struct wouldn't reduce real complexity.
+// piece of one call leg's negotiated
+// media state -- bundling them into a
+// struct wouldn't reduce real complexity.
 pub fn resolve_call_media(
     local_rtp: u16, local_srtp: Option<SrtpParams>, relay: Option<TurnRelay>, ice: Option<IceConnection>,
     codec: AudioCodec, dtmf_type: Option<u8>, cn_type: Option<u8>, remote_rtp: SocketAddr,

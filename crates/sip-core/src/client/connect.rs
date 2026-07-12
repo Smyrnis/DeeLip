@@ -4,8 +4,8 @@
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU32;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -17,7 +17,7 @@ use deelip_config::{SipAccount, TransportProtocol};
 
 use super::builders::{contact_transport_param_str, via_proto_str};
 use super::events::EventSender;
-use super::{CmdRx, SipStack, MAX_RETRY};
+use super::{CmdRx, MAX_RETRY, SipStack};
 use crate::call::media_setup::NetworkConfig;
 use crate::events::SipEvent;
 use crate::handle::SipHandle;
@@ -315,10 +315,11 @@ async fn probe_register(
         let Ok(Ok((data, _from))) = tokio::time::timeout(remaining, transport.recv()).await else {
             return false;
         };
-        if let Some(resp) = SipMessage::parse(&data) {
-            if resp.call_id().is_some_and(|id| id == call_id) && resp.status_code().is_some() {
-                return true;
-            }
+        if let Some(resp) = SipMessage::parse(&data)
+            && resp.call_id().is_some_and(|id| id == call_id)
+            && resp.status_code().is_some()
+        {
+            return true;
         }
         // Unrelated datagram (retransmit noise, another in-flight
         // transaction) -- keep waiting until the deadline.

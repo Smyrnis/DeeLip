@@ -1,11 +1,11 @@
 //! `SipStack`'s main event loop (`run()`), its message/command dispatchers,
 //! and the background-call-setup event handler.
 
-use tokio::time::{interval, sleep_until, Duration, Instant};
+use tokio::time::{Duration, Instant, interval, sleep_until};
 use tracing::{debug, error};
 
 use super::events::StackEvent;
-use super::{CmdRx, SipStack, MAX_RETRY, PRESENCE_TICK, REG_MARGIN};
+use super::{CmdRx, MAX_RETRY, PRESENCE_TICK, REG_MARGIN, SipStack};
 use crate::events::{SipCommand, SipEvent};
 use crate::wire::message::{SipMessage, SipMethod, SipStartLine};
 

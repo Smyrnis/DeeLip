@@ -403,8 +403,8 @@ impl SipStack {
     }
 
     #[allow(clippy::too_many_arguments)] // mirrors the `Act::Connected` variant's own
-                                         // field set one-for-one; a struct wrapper would
-                                         // just rename this same list, not shrink it.
+    // field set one-for-one; a struct wrapper would
+    // just rename this same list, not shrink it.
     async fn handle_connected(
         &mut self, call_id: String, remote_sdp: String, pending_offer: Option<PendingOfferMedia>,
         ice_gathered: Option<deelip_nat::IceGathered>, ack_cid: String, ack_from_tag: String, ack_to_uri: String,
@@ -420,15 +420,14 @@ impl SipStack {
         // entirely if the far end doesn't support them (no
         // `Session-Expires` in the 200 OK), regardless of whether we
         // proposed one ourselves.
-        if let Some((interval, refresher)) = session_expires_hdr {
-            if let Some(dialog) = self.dialogs.get_mut(&call_id) {
-                dialog.session_expires = Some(interval);
-                dialog.we_are_refresher = refresher.as_deref() != Some("uas");
-                if dialog.we_are_refresher {
-                    dialog.session_refresh_at = Some(
-                        tokio::time::Instant::now() + tokio::time::Duration::from_secs((interval / 2).max(1) as u64),
-                    );
-                }
+        if let Some((interval, refresher)) = session_expires_hdr
+            && let Some(dialog) = self.dialogs.get_mut(&call_id)
+        {
+            dialog.session_expires = Some(interval);
+            dialog.we_are_refresher = refresher.as_deref() != Some("uas");
+            if dialog.we_are_refresher {
+                dialog.session_refresh_at =
+                    Some(tokio::time::Instant::now() + tokio::time::Duration::from_secs((interval / 2).max(1) as u64));
             }
         }
 
@@ -540,15 +539,14 @@ impl SipStack {
         // Reschedule from this response's (possibly renegotiated)
         // Session-Expires -- same parsing as the initial INVITE's
         // 200 OK in `handle_connected` above.
-        if let Some((interval, refresher)) = session_expires_hdr {
-            if let Some(dialog) = self.dialogs.get_mut(&call_id) {
-                dialog.session_expires = Some(interval);
-                dialog.we_are_refresher = refresher.as_deref() != Some("uas");
-                if dialog.we_are_refresher {
-                    dialog.session_refresh_at = Some(
-                        tokio::time::Instant::now() + tokio::time::Duration::from_secs((interval / 2).max(1) as u64),
-                    );
-                }
+        if let Some((interval, refresher)) = session_expires_hdr
+            && let Some(dialog) = self.dialogs.get_mut(&call_id)
+        {
+            dialog.session_expires = Some(interval);
+            dialog.we_are_refresher = refresher.as_deref() != Some("uas");
+            if dialog.we_are_refresher {
+                dialog.session_refresh_at =
+                    Some(tokio::time::Instant::now() + tokio::time::Duration::from_secs((interval / 2).max(1) as u64));
             }
         }
     }

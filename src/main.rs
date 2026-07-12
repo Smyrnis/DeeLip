@@ -2,8 +2,8 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::Context;
 use tracing::warn;
-use tracing_subscriber::fmt::writer::MakeWriterExt;
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::fmt::writer::MakeWriterExt;
 
 use deelip_config::{AppConfig, Db};
 use deelip_sip::SipStack;
@@ -172,7 +172,10 @@ fn main() -> anyhow::Result<()> {
     // DeeLip has no use for GTK event sounds anyway; disable canberra's
     // audio output entirely rather than let it keep retrying. Must be set
     // before spawn_tray_icon() below, which is what starts GTK.
-    std::env::set_var("CANBERRA_DRIVER", "null");
+    // SAFETY: set before spawn_tray_icon() starts the GTK thread that reads it
+    // (libcanberra probes this var when GTK first initializes); no other
+    // thread reads or writes env vars concurrently at this point.
+    unsafe { std::env::set_var("CANBERRA_DRIVER", "null") };
 
     // ── eframe (main thread) ──────────────────────────────────────────────────
     let tray = match deelip_ui::tray::spawn_tray_icon() {
@@ -202,7 +205,9 @@ fn main() -> anyhow::Result<()> {
     // returns (which blocks until its GTK thread has already called
     // gtk::init()) so the tray keeps using native Wayland — GTK's own
     // event dispatch for our menu broke when this ran before gtk::init().
-    std::env::remove_var("WAYLAND_DISPLAY");
+    // SAFETY: no other thread reads or writes WAYLAND_DISPLAY -- winit's window
+    // creation (which reads it) happens later, on this same thread.
+    unsafe { std::env::remove_var("WAYLAND_DISPLAY") };
 
     let rt_handle = rt.handle().clone();
     // `DeelipApp` is deliberately !Send (transitively holds a cpal::Stream)

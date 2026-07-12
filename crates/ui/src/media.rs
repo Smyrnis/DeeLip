@@ -5,8 +5,8 @@ use deelip_config::CallDirection;
 use deelip_media::video_capture::{self, CaptureHandle};
 use deelip_media::video_engine::{VideoConferenceLeg, VideoEngine};
 use deelip_media::{ConferenceLeg, MediaEngine, MediaEngineOptions, RecordingOptions, ZrtpParams};
-use deelip_sip::zrtp::Role;
 use deelip_sip::VideoMediaReady;
+use deelip_sip::zrtp::Role;
 
 use crate::app::{DeelipApp, VideoCallState};
 use crate::strings::t;

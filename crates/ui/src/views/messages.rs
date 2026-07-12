@@ -53,7 +53,7 @@ impl DeelipApp {
                 .with_inner_size([640.0, 520.0])
                 .with_min_inner_size([480.0, 360.0])
                 .with_icon(window_icon()),
-            move |child_ctx, _class| {
+            move |child_ui: &mut egui::Ui, _class| {
                 let mut app = self_app.lock();
                 if !app.messages_window_open {
                     return;
@@ -64,21 +64,21 @@ impl DeelipApp {
                 // upfront would go stale.
                 let peers = app.message_peers();
 
-                egui::TopBottomPanel::top("messages_window_titlebar").show(child_ctx, |ui| {
+                egui::Panel::top("messages_window_titlebar").show_inside(child_ui, |ui| {
                     ui.add_space(4.0);
                     ui.label(RichText::new(t("messages.title")).font(crate::theme::font_heading(16.0)));
                     ui.add_space(4.0);
                 });
 
-                egui::SidePanel::left("messages_peer_list")
+                egui::Panel::left("messages_peer_list")
                     .resizable(true)
-                    .default_width(200.0)
-                    .width_range(160.0..=320.0)
-                    .show(child_ctx, |ui| app.show_messages_peer_list(ui, &peers));
+                    .default_size(200.0)
+                    .size_range(160.0..=320.0)
+                    .show_inside(child_ui, |ui| app.show_messages_peer_list(ui, &peers));
 
-                egui::CentralPanel::default().show(child_ctx, |ui| app.show_messages_thread_and_compose(ui));
+                egui::CentralPanel::default().show_inside(child_ui, |ui| app.show_messages_thread_and_compose(ui));
 
-                if child_ctx.input(|i| i.viewport().close_requested()) {
+                if child_ui.input(|i| i.viewport().close_requested()) {
                     app.messages_window_open = false;
                 }
             },
@@ -110,7 +110,7 @@ impl DeelipApp {
             return;
         }
         egui::ScrollArea::vertical()
-            .id_source("messages_peer_list_scroll")
+            .id_salt("messages_peer_list_scroll")
             .show(ui, |ui| self.show_messages_peer_rows(ui, peers));
     }
 
@@ -140,7 +140,7 @@ impl DeelipApp {
     }
 
     /// Right-pane thread + compose box for `messages_window_peer`. Compose
-    /// is reserved *before* the thread via `TopBottomPanel` (same fixed-
+    /// is reserved *before* the thread via `Panel` (same fixed-
     /// chrome-first ordering as Settings' Save button -- see docs/crates/ui.md's
     /// Settings section).
     fn show_messages_thread_and_compose(&mut self, ui: &mut Ui) {
@@ -149,7 +149,7 @@ impl DeelipApp {
             return;
         };
 
-        egui::TopBottomPanel::top("messages_thread_header").show_inside(ui, |ui| {
+        egui::Panel::top("messages_thread_header").show_inside(ui, |ui| {
             let (name, _) = resolve_caller(&self.contacts, &peer);
             ui.add_space(4.0);
             ui.label(RichText::new(name).font(crate::theme::font_heading(14.0)));
@@ -157,7 +157,7 @@ impl DeelipApp {
             ui.separator();
         });
 
-        egui::TopBottomPanel::bottom("messages_compose_panel").show_inside(ui, |ui| {
+        egui::Panel::bottom("messages_compose_panel").show_inside(ui, |ui| {
             ui.add_space(4.0);
             let palette = self.palette;
             text_edit_scope(ui, &palette, |ui| {
@@ -179,17 +179,17 @@ impl DeelipApp {
         let thread: Vec<&Message> = self.messages.messages.iter().filter(|m| m.peer_uri == peer).rev().collect();
 
         let palette = self.palette;
-        egui::ScrollArea::vertical().id_source("messages_thread_scroll").stick_to_bottom(true).show(ui, |ui| {
+        egui::ScrollArea::vertical().id_salt("messages_thread_scroll").stick_to_bottom(true).show(ui, |ui| {
             for m in thread {
                 let outbound = m.direction == MessageDirection::Outbound;
                 let fill = if outbound { palette.signal.gamma_multiply(0.28) } else { palette.surface };
                 ui.with_layout(
                     egui::Layout::top_down(if outbound { egui::Align::Max } else { egui::Align::Min }),
                     |ui| {
-                        egui::Frame::none()
+                        egui::Frame::NONE
                             .fill(fill)
                             .stroke(egui::Stroke::new(1.0, palette.border))
-                            .rounding(egui::Rounding::same(2))
+                            .corner_radius(egui::CornerRadius::same(2))
                             .inner_margin(egui::Margin::symmetric(8, 6))
                             .show(ui, |ui| {
                                 ui.set_max_width(ui.available_width() * 0.7);

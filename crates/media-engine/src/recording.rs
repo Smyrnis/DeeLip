@@ -7,7 +7,7 @@ use std::io::{BufWriter, Write};
 use std::path::Path;
 
 use anyhow::Context;
-use mp3lame_encoder::{max_required_buffer_size, Bitrate, Builder, Encoder, FlushNoGap, InterleavedPcm, Quality};
+use mp3lame_encoder::{Bitrate, Builder, Encoder, FlushNoGap, InterleavedPcm, Quality, max_required_buffer_size};
 
 use deelip_config::RecordingFormat;
 

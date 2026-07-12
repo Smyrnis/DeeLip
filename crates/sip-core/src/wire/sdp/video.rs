@@ -6,7 +6,7 @@
 
 use std::net::SocketAddr;
 
-use super::build::{crypto_lines, ice_lines, savp_profile, IceAttrs};
+use super::build::{IceAttrs, crypto_lines, ice_lines, savp_profile};
 use super::srtp::SrtpParams;
 
 /// Negotiated video codec. H.264 only for now (via the `openh264` crate,
@@ -159,10 +159,10 @@ pub fn parse_video_section(m_line: &str, attr_lines: &[&str], allowed: &[VideoCo
             ice_candidates.push(val.trim().to_string());
         } else if let Some(val) = line.strip_prefix("a=rtpmap:") {
             let mut parts = val.splitn(2, ' ');
-            if let (Some(pt_str), Some(name)) = (parts.next(), parts.next()) {
-                if let Ok(pt) = pt_str.parse::<u8>() {
-                    rtpmaps.push((pt, name.to_ascii_lowercase()));
-                }
+            if let (Some(pt_str), Some(name)) = (parts.next(), parts.next())
+                && let Ok(pt) = pt_str.parse::<u8>()
+            {
+                rtpmaps.push((pt, name.to_ascii_lowercase()));
             }
         } else if line == "a=sendonly" {
             is_sendonly = true;
@@ -176,11 +176,7 @@ pub fn parse_video_section(m_line: &str, attr_lines: &[&str], allowed: &[VideoCo
 
     let resolve = |pt: u8| -> Option<VideoCodec> {
         let (_, name) = rtpmaps.iter().find(|(p, _)| *p == pt)?;
-        if name.starts_with("h264") {
-            Some(VideoCodec::H264)
-        } else {
-            None
-        }
+        if name.starts_with("h264") { Some(VideoCodec::H264) } else { None }
     };
     let (codec, payload_type) =
         pt_list.iter().find_map(|&pt| resolve(pt).filter(|c| allowed.contains(c)).map(|c| (c, pt)))?;

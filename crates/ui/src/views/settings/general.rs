@@ -35,7 +35,7 @@ impl DeelipApp {
                 });
                 ui.horizontal(|ui| {
                     field_label(ui, palette, &t("settings.default_list_action_label"));
-                    egui::ComboBox::from_id_source("settings_default_list_action")
+                    egui::ComboBox::from_id_salt("settings_default_list_action")
                         .selected_text(match self.config.default_list_action {
                             DefaultListAction::Call => t("common.call_button"),
                             DefaultListAction::Message => t("common.message_button"),
@@ -99,19 +99,19 @@ impl DeelipApp {
                 info_hint(ui, palette, &t("settings.crash_reporting_hint"));
             });
             ui.horizontal(|ui| {
-                if ui.button(t("settings.open_crash_reports_button")).clicked() {
-                    if let Ok(dir) = deelip_config::crashes_dir() {
-                        let _ = std::process::Command::new("xdg-open").arg(dir).spawn();
-                    }
+                if ui.button(t("settings.open_crash_reports_button")).clicked()
+                    && let Ok(dir) = deelip_config::crashes_dir()
+                {
+                    let _ = std::process::Command::new("xdg-open").arg(dir).spawn();
                 }
             });
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                if ui.checkbox(&mut self.autostart_enabled, t("settings.start_on_login_checkbox")).changed() {
-                    if let Err(e) = deelip_config::set_autostart(self.autostart_enabled) {
-                        tracing::error!("Failed to update autostart: {e}");
-                        self.autostart_enabled = deelip_config::is_autostart_enabled();
-                    }
+                if ui.checkbox(&mut self.autostart_enabled, t("settings.start_on_login_checkbox")).changed()
+                    && let Err(e) = deelip_config::set_autostart(self.autostart_enabled)
+                {
+                    tracing::error!("Failed to update autostart: {e}");
+                    self.autostart_enabled = deelip_config::is_autostart_enabled();
                 }
                 info_hint(ui, palette, &t("settings.applies_immediately_hint"));
             });

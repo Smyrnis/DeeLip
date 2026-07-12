@@ -46,27 +46,25 @@ pub async fn resolve_target(
 
     let dns_server = custom_nameserver.and_then(parse_nameserver).or_else(system_resolver);
 
-    if srv_enabled {
-        if let Some(server) = dns_server {
-            let service = srv_service_name(connect_host, transport);
-            match query(server, &service, QTYPE_SRV).await {
-                Ok(mut answers) => {
-                    answers.sort_by_key(|a| match a {
-                        Answer::Srv(s) => s.priority,
-                        Answer::Addr(_) => u16::MAX,
-                    });
-                    for answer in answers {
-                        if let Answer::Srv(srv) = answer {
-                            if let Ok(addr) = resolve_host(&srv.target, srv.port, custom_nameserver).await {
-                                debug!("SRV {service} -> {}:{}", srv.target, srv.port);
-                                return Ok(addr);
-                            }
-                        }
+    if srv_enabled && let Some(server) = dns_server {
+        let service = srv_service_name(connect_host, transport);
+        match query(server, &service, QTYPE_SRV).await {
+            Ok(mut answers) => {
+                answers.sort_by_key(|a| match a {
+                    Answer::Srv(s) => s.priority,
+                    Answer::Addr(_) => u16::MAX,
+                });
+                for answer in answers {
+                    if let Answer::Srv(srv) = answer
+                        && let Ok(addr) = resolve_host(&srv.target, srv.port, custom_nameserver).await
+                    {
+                        debug!("SRV {service} -> {}:{}", srv.target, srv.port);
+                        return Ok(addr);
                     }
-                    debug!("SRV lookup for {service} returned nothing usable, falling back to A/AAAA");
                 }
-                Err(e) => debug!("SRV lookup for {service} failed ({e:#}), falling back to A/AAAA"),
+                debug!("SRV lookup for {service} returned nothing usable, falling back to A/AAAA");
             }
+            Err(e) => debug!("SRV lookup for {service} failed ({e:#}), falling back to A/AAAA"),
         }
     }
 
@@ -117,10 +115,10 @@ async fn resolve_host(host: &str, port: u16, custom_nameserver: Option<&str>) ->
 fn system_resolver() -> Option<SocketAddr> {
     let text = std::fs::read_to_string("/etc/resolv.conf").ok()?;
     for line in text.lines() {
-        if let Some(rest) = line.trim().strip_prefix("nameserver") {
-            if let Ok(ip) = rest.trim().parse::<IpAddr>() {
-                return Some(SocketAddr::new(ip, 53));
-            }
+        if let Some(rest) = line.trim().strip_prefix("nameserver")
+            && let Ok(ip) = rest.trim().parse::<IpAddr>()
+        {
+            return Some(SocketAddr::new(ip, 53));
         }
     }
     None
@@ -131,7 +129,7 @@ fn parse_nameserver(s: &str) -> Option<SocketAddr> {
 }
 
 async fn query(server: SocketAddr, name: &str, qtype: u16) -> anyhow::Result<Vec<Answer>> {
-    let id: u16 = rand::thread_rng().gen();
+    let id: u16 = rand::thread_rng().r#gen();
     let packet = build_query(id, name, qtype);
     let bind_addr = if server.is_ipv6() { "[::]:0" } else { "0.0.0.0:0" };
     let sock = UdpSocket::bind(bind_addr).await?;

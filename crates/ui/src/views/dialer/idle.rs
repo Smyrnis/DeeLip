@@ -24,19 +24,16 @@ impl DeelipApp {
                     let acc = &self.accounts[current];
                     account_status_label(ui, &palette, acc.reg_ok, &acc.label)
                 };
-                egui::ComboBox::from_id_source("dialer_account_picker").selected_text(selected_label).show_ui(
-                    ui,
-                    |ui| {
-                        for i in 0..self.accounts.len() {
-                            let acc = &self.accounts[i];
-                            let label = account_status_label(ui, &palette, acc.reg_ok, &acc.label);
-                            if ui.add(egui::SelectableLabel::new(current == i, label)).clicked() {
-                                self.selected_account = i;
-                                self.refresh_idle_status();
-                            }
+                egui::ComboBox::from_id_salt("dialer_account_picker").selected_text(selected_label).show_ui(ui, |ui| {
+                    for i in 0..self.accounts.len() {
+                        let acc = &self.accounts[i];
+                        let label = account_status_label(ui, &palette, acc.reg_ok, &acc.label);
+                        if ui.add(egui::Button::selectable(current == i, label)).clicked() {
+                            self.selected_account = i;
+                            self.refresh_idle_status();
                         }
-                    },
-                );
+                    }
+                });
             });
             ui.add_space(6.0);
         }
@@ -97,7 +94,7 @@ impl DeelipApp {
                         egui::Button::new(call_text)
                             .fill(self.palette.surface_hover)
                             .stroke(egui::Stroke::new(1.0, self.palette.border))
-                            .rounding(egui::Rounding::same(2)),
+                            .corner_radius(egui::CornerRadius::same(2)),
                     )
                     .clicked()
                 {

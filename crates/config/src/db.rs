@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use anyhow::Context;
 use rusqlite::Connection;
 
-use crate::{deelip_dir, AppConfig, CallHistory, ContactBook};
+use crate::{AppConfig, CallHistory, ContactBook, deelip_dir};
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS settings (
@@ -145,10 +145,10 @@ impl Db {
             "video_enabled INTEGER NOT NULL DEFAULT 0",
         ];
         for col in COLUMNS {
-            if let Err(e) = self.conn.execute(&format!("ALTER TABLE accounts ADD COLUMN {col}"), []) {
-                if !e.to_string().contains("duplicate column name") {
-                    return Err(e.into());
-                }
+            if let Err(e) = self.conn.execute(&format!("ALTER TABLE accounts ADD COLUMN {col}"), [])
+                && !e.to_string().contains("duplicate column name")
+            {
+                return Err(e.into());
             }
         }
         Ok(())
@@ -159,27 +159,27 @@ impl Db {
         let mut migrated_anything = false;
 
         let legacy_config = dir.join("config.toml");
-        if let Ok(raw) = std::fs::read_to_string(&legacy_config) {
-            if let Ok(cfg) = toml::from_str::<AppConfig>(&raw) {
-                cfg.save(self)?;
-                migrated_anything = true;
-            }
+        if let Ok(raw) = std::fs::read_to_string(&legacy_config)
+            && let Ok(cfg) = toml::from_str::<AppConfig>(&raw)
+        {
+            cfg.save(self)?;
+            migrated_anything = true;
         }
 
         let legacy_contacts = dir.join("contacts.json");
-        if let Ok(raw) = std::fs::read_to_string(&legacy_contacts) {
-            if let Ok(book) = serde_json::from_str::<ContactBook>(&raw) {
-                book.save(self)?;
-                migrated_anything = true;
-            }
+        if let Ok(raw) = std::fs::read_to_string(&legacy_contacts)
+            && let Ok(book) = serde_json::from_str::<ContactBook>(&raw)
+        {
+            book.save(self)?;
+            migrated_anything = true;
         }
 
         let legacy_history = dir.join("history.json");
-        if let Ok(raw) = std::fs::read_to_string(&legacy_history) {
-            if let Ok(hist) = serde_json::from_str::<CallHistory>(&raw) {
-                hist.save(self)?;
-                migrated_anything = true;
-            }
+        if let Ok(raw) = std::fs::read_to_string(&legacy_history)
+            && let Ok(hist) = serde_json::from_str::<CallHistory>(&raw)
+        {
+            hist.save(self)?;
+            migrated_anything = true;
         }
 
         if !migrated_anything {
@@ -225,11 +225,7 @@ pub fn default_db_path() -> anyhow::Result<PathBuf> {
 // Used by both `account.rs` (`SipAccount`) and `contacts.rs` (`Contact`).
 
 pub(crate) fn bool_to_sql(b: bool) -> &'static str {
-    if b {
-        "1"
-    } else {
-        "0"
-    }
+    if b { "1" } else { "0" }
 }
 pub(crate) fn sql_to_bool(s: &str) -> bool {
     s == "1"

@@ -5,9 +5,9 @@
 
 use crate::zrtp::cache::{CacheEntry, RetainedSecrets, SharedSecretStore};
 use crate::zrtp::crypto::{
-    self, compute_hvi, confirm_decrypt, confirm_encrypt, derive_mac_keys, derive_s0, derive_sas, derive_srtp_keys,
-    derive_zrtp_keys, generate_ec25_keypair, generate_hash_chain, kdf_context, message_mac, total_hash,
-    verify_hash_chain_hop, Ec25KeyPair, HashChain, SrtpKeys,
+    self, Ec25KeyPair, HashChain, SrtpKeys, compute_hvi, confirm_decrypt, confirm_encrypt, derive_mac_keys, derive_s0,
+    derive_sas, derive_srtp_keys, derive_zrtp_keys, generate_ec25_keypair, generate_hash_chain, kdf_context,
+    message_mac, total_hash, verify_hash_chain_hop,
 };
 use crate::zrtp::wire::{Commit, Confirm, DhPart, Hello, Message};
 

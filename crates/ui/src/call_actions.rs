@@ -15,11 +15,7 @@ impl DeelipApp {
     /// `local_ip:local_port` for valid headers), so that alone can't detect
     /// the serverless case.
     pub(crate) fn dial_domain(&self, acc: usize) -> String {
-        if self.accounts[acc].account.local_account {
-            String::new()
-        } else {
-            self.accounts[acc].handle.domain.clone()
-        }
+        if self.accounts[acc].account.local_account { String::new() } else { self.accounts[acc].handle.domain.clone() }
     }
 
     /// Core dialing mechanics shared by ordinary dialing and the attended-
@@ -380,11 +376,11 @@ impl DeelipApp {
             return;
         };
         let now = unix_now();
-        if let Some(at) = pending.auto_answer_at {
-            if now >= at {
-                self.do_accept();
-                return;
-            }
+        if let Some(at) = pending.auto_answer_at
+            && now >= at
+        {
+            self.do_accept();
+            return;
         }
         let Some((deadline, target)) = &pending.forward else {
             return;

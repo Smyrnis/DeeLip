@@ -14,9 +14,8 @@ pub(super) fn show(ui: &mut Ui, palette: &Palette, account: &mut SipAccount, edi
     let mut move_up: Option<usize> = None;
     let mut move_down: Option<usize> = None;
     let mut to_disable: Option<usize> = None;
-    let list_frame = egui::Frame::none()
-        .stroke(egui::Stroke::new(1.0, palette.border))
-        .inner_margin(egui::Margin::symmetric(8, 6));
+    let list_frame =
+        egui::Frame::NONE.stroke(egui::Stroke::new(1.0, palette.border)).inner_margin(egui::Margin::symmetric(8, 6));
     ui.horizontal(|ui| {
         ui.vertical(|ui| {
             ui.label(RichText::new(t("settings.account.codecs_available_label")).color(palette.ink_muted).small());
@@ -94,30 +93,24 @@ pub(super) fn show(ui: &mut Ui, palette: &Palette, account: &mut SipAccount, edi
         field_label(ui, palette, &t("settings.account.force_incoming_codec_label"));
         let no_override = t("settings.account.no_override_option");
         let selected_label = account.force_incoming_codec.as_deref().map(codec_label).unwrap_or(no_override.as_str());
-        egui::ComboBox::from_id_source("settings_force_incoming_codec").selected_text(selected_label).show_ui(
-            ui,
-            |ui| {
+        egui::ComboBox::from_id_salt("settings_force_incoming_codec").selected_text(selected_label).show_ui(ui, |ui| {
+            if ui
+                .selectable_label(account.force_incoming_codec.is_none(), t("settings.account.no_override_option"))
+                .clicked()
+            {
+                account.force_incoming_codec = None;
+                *edited = true;
+            }
+            for name in &account.codec_order {
                 if ui
-                    .selectable_label(account.force_incoming_codec.is_none(), t("settings.account.no_override_option"))
+                    .selectable_label(account.force_incoming_codec.as_deref() == Some(name.as_str()), codec_label(name))
                     .clicked()
                 {
-                    account.force_incoming_codec = None;
+                    account.force_incoming_codec = Some(name.clone());
                     *edited = true;
                 }
-                for name in &account.codec_order {
-                    if ui
-                        .selectable_label(
-                            account.force_incoming_codec.as_deref() == Some(name.as_str()),
-                            codec_label(name),
-                        )
-                        .clicked()
-                    {
-                        account.force_incoming_codec = Some(name.clone());
-                        *edited = true;
-                    }
-                }
-            },
-        );
+            }
+        });
         info_hint(ui, palette, &t("settings.account.force_incoming_codec_info"));
     });
 }

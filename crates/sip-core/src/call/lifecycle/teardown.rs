@@ -68,12 +68,11 @@ impl SipStack {
     }
 
     pub(crate) fn on_ack(&mut self, msg: SipMessage) {
-        if let Some(id) = msg.call_id().map(str::to_string) {
-            if let Some(d) = self.dialogs.get_mut(&id) {
-                if d.state == DialogState::Calling {
-                    d.state = DialogState::Confirmed;
-                }
-            }
+        if let Some(id) = msg.call_id().map(str::to_string)
+            && let Some(d) = self.dialogs.get_mut(&id)
+            && d.state == DialogState::Calling
+        {
+            d.state = DialogState::Confirmed;
         }
     }
 

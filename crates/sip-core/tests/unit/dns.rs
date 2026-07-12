@@ -5,7 +5,7 @@ fn build_query_encodes_name_and_qtype() {
     let packet = build_query(0x1234, "_sip._udp.example.com", QTYPE_SRV);
     assert_eq!(&packet[0..2], &[0x12, 0x34]); // ID
     assert_eq!(&packet[4..6], &[0, 1]); // QDCOUNT = 1
-                                        // Question starts at byte 12: len-prefixed labels, then QTYPE/QCLASS.
+    // Question starts at byte 12: len-prefixed labels, then QTYPE/QCLASS.
     assert_eq!(packet[12], 4); // "_sip"
     assert_eq!(&packet[13..17], b"_sip");
     let qtype_offset = packet.len() - 4;
@@ -26,7 +26,7 @@ fn parse_response_extracts_a_record() {
     // Flip QR bit to mark this as a response before appending the answer.
     resp[2] |= 0x80;
     resp[6..8].copy_from_slice(&1u16.to_be_bytes()); // ANCOUNT = 1
-                                                     // Answer: pointer to the question's name (offset 12), TYPE=A, CLASS=IN, TTL, RDLENGTH=4, RDATA.
+    // Answer: pointer to the question's name (offset 12), TYPE=A, CLASS=IN, TTL, RDLENGTH=4, RDATA.
     resp.extend_from_slice(&[0xC0, 0x0C]);
     resp.extend_from_slice(&QTYPE_A.to_be_bytes());
     resp.extend_from_slice(&1u16.to_be_bytes());

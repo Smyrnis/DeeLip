@@ -3,7 +3,7 @@
 //! the framing constants below, verification status, and the scope cuts
 //! from the full RFC: docs/crates/sip-core.md's "ZRTP" section.
 
-use crc::{Crc, CRC_32_ISO_HDLC};
+use crc::{CRC_32_ISO_HDLC, Crc};
 
 /// ASCII "ZRTP" -- identifies a ZRTP packet sharing the RTP socket, since
 /// the first two octets (see `HEADER_PREFIX`) alone aren't part of any

@@ -22,7 +22,7 @@ impl DeelipApp {
         ui.horizontal(|ui| {
             search_field(ui, &palette, &mut self.history_search, &t("common.search_hint_name_or_number"), 140.0);
             ui.label(t("history.status_label"));
-            egui::ComboBox::from_id_source("history_status_filter")
+            egui::ComboBox::from_id_salt("history_status_filter")
                 .selected_text(status_filter_label(&self.history_status_filter))
                 .show_ui(ui, |ui| {
                     ui.selectable_value(&mut self.history_status_filter, None, t("history.status_all"));
@@ -154,19 +154,19 @@ impl DeelipApp {
                             |ui| {
                                 if ui.button(t("common.call_button")).clicked() {
                                     call_target = Some(remote_uri.clone());
-                                    ui.close_menu();
+                                    ui.close();
                                 }
                                 if ui.button(t("common.message_button")).clicked() {
                                     message_target = Some(remote_uri.clone());
-                                    ui.close_menu();
+                                    ui.close();
                                 }
                                 if ui.button(t("common.copy_button")).clicked() {
                                     copy_target = Some(remote_uri.clone());
-                                    ui.close_menu();
+                                    ui.close();
                                 }
                                 if ui.button(t("history.block_button")).clicked() {
                                     block_target = Some(remote_uri.clone());
-                                    ui.close_menu();
+                                    ui.close();
                                 }
                                 ui.separator();
                                 let already_contact = is_name;
@@ -176,12 +176,12 @@ impl DeelipApp {
                                     .clicked()
                                 {
                                     add_contact_target = Some((remote_uri.clone(), display_name_for_menu.clone()));
-                                    ui.close_menu();
+                                    ui.close();
                                 }
                                 ui.separator();
                                 if ui.button(RichText::new(t("common.delete_button")).color(palette.danger)).clicked() {
                                     delete_idx = Some(real_idx);
-                                    ui.close_menu();
+                                    ui.close();
                                 }
                             },
                         );

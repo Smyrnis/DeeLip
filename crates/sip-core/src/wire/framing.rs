@@ -38,10 +38,10 @@ fn extract_content_length(header_block: &str) -> usize {
     for line in header_block.split("\r\n") {
         let lower = line.to_ascii_lowercase();
         let value = lower.strip_prefix("content-length:").or_else(|| lower.strip_prefix("l:"));
-        if let Some(v) = value {
-            if let Ok(n) = v.trim().parse::<usize>() {
-                return n;
-            }
+        if let Some(v) = value
+            && let Ok(n) = v.trim().parse::<usize>()
+        {
+            return n;
         }
     }
     0

@@ -6,7 +6,7 @@
 use anyhow::Context;
 
 use super::app_config::{
-    default_hotkey_answer, default_hotkey_hangup, default_hotkey_mute, default_ldap_port, AppConfig,
+    AppConfig, default_hotkey_answer, default_hotkey_hangup, default_hotkey_mute, default_ldap_port,
 };
 use super::enums::{
     default_list_action_from_str, default_list_action_to_str, dtmf_mode_from_str, dtmf_mode_to_str, language_from_str,
@@ -15,12 +15,12 @@ use super::enums::{
     update_check_frequency_to_str,
 };
 use super::sip_account::{
-    default_codec_order, default_frame_ms, default_ringtone_volume, default_sample_rate, default_sip_port,
-    default_video_bitrate_bps, default_video_capture_height, default_video_capture_width, default_video_fps,
-    AudioConfig, SipAccount,
+    AudioConfig, SipAccount, default_codec_order, default_frame_ms, default_ringtone_volume, default_sample_rate,
+    default_sip_port, default_video_bitrate_bps, default_video_capture_height, default_video_capture_width,
+    default_video_fps,
 };
-use crate::db::{bool_to_sql, sql_int_to_bool, sql_to_bool};
 use crate::Db;
+use crate::db::{bool_to_sql, sql_int_to_bool, sql_to_bool};
 
 impl AppConfig {
     pub fn load(db: &Db) -> anyhow::Result<Self> {

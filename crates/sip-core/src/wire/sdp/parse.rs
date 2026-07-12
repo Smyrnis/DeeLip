@@ -83,16 +83,16 @@ pub fn parse_sdp_forcing(sdp: &str, allowed: &[AudioCodec], force: Option<AudioC
             }
         } else if let Some(val) = line.strip_prefix("a=rtpmap:") {
             let mut parts = val.splitn(2, ' ');
-            if let (Some(pt_str), Some(name)) = (parts.next(), parts.next()) {
-                if let Ok(pt) = pt_str.parse::<u8>() {
-                    let lname = name.to_ascii_lowercase();
-                    if lname.starts_with("telephone-event") {
-                        dtmf_type = Some(pt);
-                    } else if lname.starts_with("cn") {
-                        cn_type = Some(pt);
-                    } else {
-                        rtpmaps.push((pt, lname));
-                    }
+            if let (Some(pt_str), Some(name)) = (parts.next(), parts.next())
+                && let Ok(pt) = pt_str.parse::<u8>()
+            {
+                let lname = name.to_ascii_lowercase();
+                if lname.starts_with("telephone-event") {
+                    dtmf_type = Some(pt);
+                } else if lname.starts_with("cn") {
+                    cn_type = Some(pt);
+                } else {
+                    rtpmaps.push((pt, lname));
                 }
             }
         } else if line == "a=sendonly" {

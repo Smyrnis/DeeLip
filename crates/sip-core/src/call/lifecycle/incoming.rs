@@ -15,8 +15,8 @@ use crate::{
     events::SipEvent,
     wire::message::{SipMessage, SipMethod},
     wire::sdp::{
-        build_answer, build_video_media_section, parse_sdp_forcing, parse_video_section, split_media_sections,
-        SrtpParams,
+        SrtpParams, build_answer, build_video_media_section, parse_sdp_forcing, parse_video_section,
+        split_media_sections,
     },
     wire::util::{new_tag, parse_tag, parse_uri},
 };
