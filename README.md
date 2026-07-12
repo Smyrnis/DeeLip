@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/icon.png" width="200" alt="DeeLip logo">
+    <img src="assets/icon.png" href="https://smyrnis.github.io/DeeLip/" width="200" alt="DeeLip logo">
 </p>
 
 <h1 align="center">DeeLip</h1>
