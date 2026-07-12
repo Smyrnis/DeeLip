@@ -65,7 +65,14 @@ jobs:
         uses: cargo-bins/cargo-binstall@main
 
       - name: Install packaging tools
-        run: cargo binstall --no-confirm cargo-deb cargo-generate-rpm
+        # --force: Swatinem/rust-cache caches ~/.cargo/bin (and cargo's
+        # install-tracking metadata) across runs. A real CI run showed that
+        # after a cache save, the *next* run's cargo-binstall sees the
+        # metadata and reports "already installed" without the binary
+        # actually surviving the cache round-trip, so the packaging step
+        # after it fails with "no such command". --force skips that
+        # unreliable check and always (re)installs the real binary.
+        run: cargo binstall --no-confirm --force cargo-deb cargo-generate-rpm
 
       - name: Determine version
         id: version
@@ -187,8 +194,12 @@ jobs:
         uses: cargo-bins/cargo-binstall@main
 
       - name: Install cargo-wix
+        # --force: see the "Install packaging tools" comment in the Linux
+        # job -- Swatinem/rust-cache + cargo-binstall's "already installed"
+        # check can falsely skip installing a binary that didn't actually
+        # survive the cache round-trip.
         shell: bash
-        run: cargo binstall --no-confirm cargo-wix
+        run: cargo binstall --no-confirm --force cargo-wix
         # WiX Toolset itself needs no separate install step -- windows-latest
         # already ships the Legacy v3.14.1 variant cargo-wix expects.
 
@@ -254,7 +265,11 @@ jobs:
         uses: cargo-bins/cargo-binstall@main
 
       - name: Install cargo-bundle
-        run: cargo binstall --no-confirm cargo-bundle
+        # --force: see the "Install packaging tools" comment in the Linux
+        # job -- Swatinem/rust-cache + cargo-binstall's "already installed"
+        # check can falsely skip installing a binary that didn't actually
+        # survive the cache round-trip.
+        run: cargo binstall --no-confirm --force cargo-bundle
 
       - name: Determine version
         id: version
