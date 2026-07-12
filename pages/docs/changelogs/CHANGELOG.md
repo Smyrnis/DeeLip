@@ -19,7 +19,11 @@ Everything so far — no version has been tagged/released yet.
   DTMF mode (RFC 2833 or SIP INFO); acoustic echo cancellation and AGC; VAD-driven
   RFC 3389 comfort noise.
 - Video calling: H.264 capture/encode/decode over SRTP-protected RTP, negotiated
-  additively alongside the audio leg.
+  additively alongside the audio leg. Carried into the local 3-way conference too
+  (fans the shared camera encode out to both remote legs, decoded independently).
+  A mid-call camera on/off toggle sits next to the mute button. Resolution, frame
+  rate, and bitrate are configurable in Settings > Video (previously fixed at
+  640×480 @15fps/500kbps).
 - NAT traversal: STUN, TURN relay fallback, and full ICE.
 - ZRTP (RFC 6189) end-to-end encryption with SAS verification, alongside SDES-SRTP.
 - SIP presence (PIDF) subscriptions, voicemail (MWI) notifications, and SIP MESSAGE-based
@@ -44,6 +48,12 @@ Everything so far — no version has been tagged/released yet.
 - Several large files split into per-concern modules/directories as they grew:
   `sip-core`'s `client.rs` and call lifecycle, `ui`'s `lib.rs`/`settings.rs`/`dialer.rs`,
   `CallStatus` display logic consolidated out of three separate copies.
+- A further maintainability pass (ARCHITECTURE_GAPS.md Phase 4) split the next
+  round of large files the same way, purely organizational, no behavior change:
+  `config`'s `account.rs`, `sip-core`'s `client.rs` (again, now `events.rs`/
+  `connect.rs`/`run_loop.rs`/`builders.rs`) and `wire/sdp.rs`, `media-engine`'s
+  `engine.rs` (partial extraction: `codec_dispatch.rs`/`stats.rs`), and `ui`'s
+  `dialer/in_call.rs` and `settings/account.rs`.
 - Settings and Messages became genuine separate OS windows (`Deferred` egui viewports)
   instead of in-canvas overlays, fixing a real "can't move the Settings window" bug and
   a redraw-throttling slowdown while it was open.

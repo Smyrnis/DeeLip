@@ -1,0 +1,13 @@
+{
+  "name": "deelip-page",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vitepress dev pages",
+    "build": "vitepress build pages",
+    "priv": "vitepress preview pages"
+  },
+  "devDependencies": {
+    "vitepress": "^1.6.4"
+  }
+}

@@ -1,0 +1,240 @@
+/**
+ * DeeLip docs theme — a modern take on MicroSIP's website: white/near-white
+ * nav bar, charcoal body text, plain blue underlined links, utilitarian and
+ * content-first — with contemporary spacing, soft shadows, and motion layered
+ * on top. No custom components — CSS-variable overrides plus targeted
+ * selectors against VitePress's stock default-theme markup.
+ */
+
+:root {
+  /* Brand: a deep, grounded forest green — deliberately not the neon/mint
+     green SaaS default, closer to a signal/status green a phone app would
+     use for "connected." Light theme only, no dark-mode counterpart. */
+  --vp-c-brand-1: #0f7a52;
+  --vp-c-brand-2: #159463;
+  --vp-c-brand-3: #0b5c3f;
+  --vp-c-brand-soft: rgba(15, 122, 82, 0.1);
+
+  --vp-c-text-1: #262b33;
+  --vp-c-text-2: #4b5563;
+
+  --deelip-nav-bg: #ffffff;
+  --deelip-nav-border: #e5e9f0;
+  --deelip-hero-wash-1: #f4f7fc;
+  --deelip-hero-wash-2: #ffffff;
+  --deelip-shadow: 0 2px 10px rgba(15, 23, 42, 0.06);
+  --deelip-shadow-hover: 0 12px 30px rgba(15, 23, 42, 0.12);
+}
+
+body {
+  letter-spacing: -0.006em;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Top bar — flat, white, underlined text links (MicroSIP-style)          */
+/* ---------------------------------------------------------------------- */
+
+.VPNavBar {
+  background-color: var(--deelip-nav-bg);
+  border-bottom: 1px solid var(--deelip-nav-border);
+}
+.VPNavBar.has-sidebar .content-body {
+  background-color: transparent;
+}
+
+.VPNavBarTitle .title .text {
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  color: var(--vp-c-brand-1);
+}
+
+.VPNavBarMenu.menu {
+  gap: 4px;
+}
+
+.VPNavBarMenuLink {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  font-weight: 500;
+  border-radius: 6px;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.VPNavBarMenuLink:hover,
+.VPNavBarMenuLink.active {
+  background-color: var(--vp-c-brand-soft);
+  color: var(--vp-c-brand-1);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Hero — subtle wash + refined buttons                                   */
+/* ---------------------------------------------------------------------- */
+
+.VPHero {
+  background: radial-gradient(
+    ellipse 80% 60% at 50% 0%,
+    var(--deelip-hero-wash-1),
+    var(--deelip-hero-wash-2)
+  );
+}
+
+.VPHero .name {
+  letter-spacing: -0.03em;
+}
+.VPHero .text {
+  letter-spacing: -0.01em;
+}
+
+.VPButton {
+  border-radius: 999px !important;
+  font-weight: 600 !important;
+  transition: transform 0.15s ease, box-shadow 0.15s ease !important;
+}
+.VPButton:hover {
+  transform: translateY(-1px);
+}
+.VPButton.brand {
+  box-shadow: var(--deelip-shadow);
+}
+.VPButton.brand:hover {
+  box-shadow: var(--deelip-shadow-hover);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Feature grid — elevated cards                                          */
+/* ---------------------------------------------------------------------- */
+
+.VPFeature {
+  border-radius: 14px !important;
+  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease !important;
+}
+.VPFeature:hover {
+  transform: translateY(-3px);
+  box-shadow: var(--deelip-shadow-hover);
+  border-color: var(--vp-c-brand-2) !important;
+}
+/* ---------------------------------------------------------------------- */
+/* Screenshot row (see pages/index.md for the base .screenshot-row rules) */
+/* ---------------------------------------------------------------------- */
+
+.screenshot-row img {
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  box-shadow: var(--deelip-shadow);
+}
+.screenshot-row img:hover {
+  transform: translateY(-4px) scale(1.02);
+  box-shadow: var(--deelip-shadow-hover);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Homepage info band — a modern, horizontal stand-in for MicroSIP's       */
+/* right sidebar (Platforms / Get Involved / Project)                      */
+/* ---------------------------------------------------------------------- */
+
+.info-columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1px;
+  margin: 40px 0 8px;
+  background-color: var(--vp-c-divider);
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 14px;
+  overflow: hidden;
+}
+.info-columns .info-col {
+  background-color: var(--vp-c-bg);
+  padding: 20px 22px;
+  text-align: left;
+}
+.info-columns h4 {
+  margin: 0 0 10px;
+  font-size: 0.78em;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--vp-c-text-2);
+}
+.info-columns ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.info-columns li {
+  margin: 0;
+}
+.info-columns a {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  color: var(--vp-c-brand-1);
+  font-weight: 500;
+}
+.info-columns a:hover {
+  color: var(--vp-c-brand-3);
+}
+.info-columns p {
+  margin: 0;
+  color: var(--vp-c-text-2);
+  font-size: 0.92em;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Standalone content pages (Downloads/FAQ/Troubleshooting/Contact)       */
+/* ---------------------------------------------------------------------- */
+
+.pill-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 20px 0;
+}
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background-color: var(--vp-c-brand-soft);
+  color: var(--vp-c-brand-1);
+  font-weight: 600;
+  font-size: 0.85em;
+  border: 1px solid var(--deelip-nav-border);
+}
+
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+  margin: 24px 0;
+}
+.card-grid .card {
+  padding: 18px 20px;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 14px;
+  background-color: var(--vp-c-bg-soft);
+  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+}
+.card-grid .card:hover {
+  transform: translateY(-3px);
+  box-shadow: var(--deelip-shadow-hover);
+  border-color: var(--vp-c-brand-2);
+}
+.card-grid .card h3 {
+  margin-top: 0;
+  border-top: none;
+  padding-top: 0;
+}
+
+/* ---------------------------------------------------------------------- */
+/* FAQ / Troubleshooting — accent the topic headings so a plain Q&A list  */
+/* still reads as part of the same designed site, not bare markdown       */
+/* ---------------------------------------------------------------------- */
+
+.faq-page .vp-doc h3,
+.troubleshooting-page .vp-doc h2 {
+  margin-top: 44px;
+  padding-left: 14px;
+  border-left: 3px solid var(--vp-c-brand-1);
+}
