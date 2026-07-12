@@ -24,6 +24,12 @@ fn main() -> anyhow::Result<()> {
     let db = Db::open_default().context("Opening database")?;
     let config = AppConfig::load(&db).context("Loading config")?;
 
+    // Must happen before spawn_tray_icon() below -- its GTK thread builds the
+    // tray menu's labels via `t()` immediately, before `DeelipApp::new()` would
+    // otherwise get around to calling this, which left the menu permanently
+    // showing raw i18n keys instead of translated text.
+    deelip_ui::init_strings(config.language);
+
     // ── Logging ───────────────────────────────────────────────────────────────
     // `_log_guard` (only bound when logging to a file) must live for the
     // whole process -- its `Drop` flushes the non-blocking writer's queue;

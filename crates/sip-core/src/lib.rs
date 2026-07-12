@@ -28,3 +28,7 @@ pub use wire::sdp::{
     SrtpParams, SrtpSession,
 };
 pub use wire::util;
+
+/// The `User-Agent` sent on every outgoing SIP request/response, kept in
+/// lockstep with the crate's own (workspace-inherited) version.
+pub(crate) const USER_AGENT: &str = concat!("DeeLip/", env!("CARGO_PKG_VERSION"));

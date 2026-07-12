@@ -101,6 +101,7 @@ impl SipStack {
         let display = self.account.display_name.as_deref().unwrap_or(username);
         let via_proto = self.via_proto();
         let body_len = body.len();
+        let user_agent = crate::USER_AGENT;
 
         let mut msg = format!(
             "PUBLISH {entity} SIP/2.0\r\n\
@@ -121,7 +122,7 @@ impl SipStack {
             msg.push_str("\r\n");
         }
         msg.push_str(&format!(
-            "Content-Type: application/pidf+xml\r\nUser-Agent: DeeLip/0.1.0\r\nContent-Length: {body_len}\r\n\r\n{body}"
+            "Content-Type: application/pidf+xml\r\nUser-Agent: {user_agent}\r\nContent-Length: {body_len}\r\n\r\n{body}"
         ));
         msg
     }

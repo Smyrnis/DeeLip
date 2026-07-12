@@ -12,6 +12,7 @@ mod views;
 
 pub use app::{DeelipApp, SharedApp};
 pub use platform::tray;
+pub use strings::init as init_strings;
 
 /// Embedded JetBrains Mono, SIL OFL 1.1 -- see
 /// `assets/fonts/OFL-JetBrainsMono.txt` -- replacing egui's built-in

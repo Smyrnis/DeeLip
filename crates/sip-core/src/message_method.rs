@@ -62,6 +62,7 @@ impl SipStack {
         let body_len = body.len();
         let via_proto = self.via_proto();
         let contact_transport = self.contact_transport_param();
+        let user_agent = crate::USER_AGENT;
 
         let mut msg = format!(
             "MESSAGE {to} SIP/2.0\r\n\
@@ -73,7 +74,7 @@ impl SipStack {
              CSeq: {cseq} MESSAGE\r\n\
              Contact: <sip:{username}@{adv_ip}:{local_port}{contact_transport}>\r\n\
              Content-Type: text/plain\r\n\
-             User-Agent: DeeLip/0.1.0\r\n"
+             User-Agent: {user_agent}\r\n"
         );
         if let Some(a) = auth {
             msg.push_str(a);

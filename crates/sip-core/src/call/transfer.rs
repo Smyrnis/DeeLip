@@ -37,6 +37,7 @@ impl SipStack {
             dialog.remote_contact.as_deref().and_then(|s| s.parse().ok()).unwrap_or(self.server_addr);
         let via_proto = self.via_proto();
         let contact_transport = self.contact_transport_param();
+        let user_agent = crate::USER_AGENT;
 
         let refer = format!(
             "REFER {to_uri} SIP/2.0\r\n\
@@ -48,7 +49,7 @@ impl SipStack {
              CSeq: {cseq} REFER\r\n\
              Contact: <sip:{username}@{adv_ip}:{local_port}{contact_transport}>\r\n\
              Refer-To: <{target}>\r\n\
-             User-Agent: DeeLip/0.1.0\r\n\
+             User-Agent: {user_agent}\r\n\
              Content-Length: 0\r\n\r\n"
         );
         debug!("→ REFER {to_uri} (Refer-To: {target})");
@@ -97,6 +98,7 @@ impl SipStack {
             dialog.remote_contact.as_deref().and_then(|s| s.parse().ok()).unwrap_or(self.server_addr);
         let via_proto = self.via_proto();
         let contact_transport = self.contact_transport_param();
+        let user_agent = crate::USER_AGENT;
 
         let refer = format!(
             "REFER {to_uri} SIP/2.0\r\n\
@@ -108,7 +110,7 @@ impl SipStack {
              CSeq: {cseq} REFER\r\n\
              Contact: <sip:{username}@{adv_ip}:{local_port}{contact_transport}>\r\n\
              Refer-To: <{refer_to}>\r\n\
-             User-Agent: DeeLip/0.1.0\r\n\
+             User-Agent: {user_agent}\r\n\
              Content-Length: 0\r\n\r\n"
         );
         debug!("→ REFER {to_uri} (attended transfer, Replaces: {replaces})");

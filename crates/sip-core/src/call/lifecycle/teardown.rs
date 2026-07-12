@@ -34,6 +34,7 @@ impl SipStack {
         let contact = ctx.contact;
         let via_proto = ctx.via_proto;
         let contact_transport = ctx.contact_transport;
+        let user_agent = crate::USER_AGENT;
 
         let bye = format!(
             "BYE {to_uri} SIP/2.0\r\n\
@@ -44,7 +45,7 @@ impl SipStack {
              Call-ID: {call_id_s}\r\n\
              CSeq: {cseq} BYE\r\n\
              Contact: <sip:{username}@{adv_ip}:{local_port}{contact_transport}>\r\n\
-             User-Agent: DeeLip/0.1.0\r\n\
+             User-Agent: {user_agent}\r\n\
              Content-Length: 0\r\n\r\n"
         );
         let _ = self.transport.send(bye.as_bytes(), contact).await;

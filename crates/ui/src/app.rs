@@ -403,8 +403,6 @@ impl DeelipApp {
         accounts: Vec<(SipAccount, SipHandle)>, rt: Handle, config: AppConfig, db: Db,
         tray: Option<(CtxSlot, QuitState, tray::BadgeSender)>, ctx_slot: CtxSlot,
     ) -> Self {
-        crate::strings::init(config.language);
-
         let accounts = accounts
             .into_iter()
             .map(|(account, handle)| AccountState {

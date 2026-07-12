@@ -72,6 +72,7 @@ impl SipStack {
         dialog.local_sdp = Some(local_sdp.to_string());
         let via_proto = ctx.via_proto;
         let contact_transport = ctx.contact_transport;
+        let user_agent = crate::USER_AGENT;
 
         let reinvite = format!(
             "INVITE {to_uri} SIP/2.0\r\n\
@@ -83,7 +84,7 @@ impl SipStack {
              CSeq: {cseq} INVITE\r\n\
              Contact: <sip:{username}@{adv_ip}:{local_port}{contact_transport}>\r\n\
              Content-Type: application/sdp\r\n\
-             User-Agent: DeeLip/0.1.0\r\n\
+             User-Agent: {user_agent}\r\n\
              Content-Length: {body_len}\r\n\r\n\
              {local_sdp}"
         );
@@ -136,6 +137,7 @@ impl SipStack {
         dialog.session_refresh_pending = true;
         let via_proto = ctx.via_proto;
         let contact_transport = ctx.contact_transport;
+        let user_agent = crate::USER_AGENT;
 
         let refresh = format!(
             "INVITE {to_uri} SIP/2.0\r\n\
@@ -149,7 +151,7 @@ impl SipStack {
              Content-Type: application/sdp\r\n\
              Supported: timer\r\n\
              Session-Expires: {interval};refresher={refresher}\r\n\
-             User-Agent: DeeLip/0.1.0\r\n\
+             User-Agent: {user_agent}\r\n\
              Content-Length: {body_len}\r\n\r\n\
              {local_sdp}"
         );
@@ -207,6 +209,7 @@ impl SipStack {
         let via_proto = ctx.via_proto;
         let contact_transport = ctx.contact_transport;
 
+        let user_agent = crate::USER_AGENT;
         let body = format!("Signal={digit}\r\nDuration=250\r\n");
         let info = format!(
             "INFO {to_uri} SIP/2.0\r\n\
@@ -218,7 +221,7 @@ impl SipStack {
              CSeq: {cseq} INFO\r\n\
              Contact: <sip:{username}@{adv_ip}:{local_port}{contact_transport}>\r\n\
              Content-Type: application/dtmf-relay\r\n\
-             User-Agent: DeeLip/0.1.0\r\n\
+             User-Agent: {user_agent}\r\n\
              Content-Length: {}\r\n\r\n{body}",
             body.len()
         );

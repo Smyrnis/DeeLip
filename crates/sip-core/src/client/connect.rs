@@ -288,6 +288,7 @@ async fn probe_register(
     let via_proto = via_proto_str(proto);
     let contact_transport = contact_transport_param_str(proto);
 
+    let user_agent = crate::USER_AGENT;
     let msg = format!(
         "REGISTER sip:{server} SIP/2.0\r\n\
          Via: SIP/2.0/{via_proto} {local_ip}:{local_port};branch={branch};rport\r\n\
@@ -298,7 +299,7 @@ async fn probe_register(
          CSeq: 1 REGISTER\r\n\
          Contact: <sip:{username}@{advertised_ip}:{local_port}{contact_transport}>\r\n\
          Expires: 0\r\n\
-         User-Agent: DeeLip/0.1.0\r\n\
+         User-Agent: {user_agent}\r\n\
          Content-Length: 0\r\n\r\n"
     );
     if transport.send(msg.as_bytes(), server_addr).await.is_err() {

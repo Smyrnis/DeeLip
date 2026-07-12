@@ -49,6 +49,7 @@ impl SipStack {
             if !to_tag.is_empty() && !to.contains(";tag=") { format!("{to};tag={to_tag}") } else { to.to_string() };
 
         let ct_header = if !body.is_empty() { "Content-Type: application/sdp\r\n" } else { "" };
+        let user_agent = crate::USER_AGENT;
 
         let mut resp = format!(
             "SIP/2.0 {code} {phrase}\r\n\
@@ -57,7 +58,7 @@ impl SipStack {
              From: {from}\r\n\
              Call-ID: {call_id}\r\n\
              CSeq: {cseq}\r\n\
-             User-Agent: DeeLip/0.1.0\r\n\
+             User-Agent: {user_agent}\r\n\
              {ct_header}\
              Content-Length: {body_len}\r\n\r\n"
         );

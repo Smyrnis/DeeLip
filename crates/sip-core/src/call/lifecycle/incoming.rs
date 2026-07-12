@@ -314,6 +314,7 @@ impl SipStack {
                 format!("Supported: timer\r\nSession-Expires: {interval};refresher={echoed}\r\n")
             })
             .unwrap_or_default();
+        let user_agent = crate::USER_AGENT;
 
         let ok_msg = format!(
             "SIP/2.0 200 OK\r\n\
@@ -324,7 +325,7 @@ impl SipStack {
              CSeq: {cseq_n} INVITE\r\n\
              Contact: <sip:{username}@{adv_ip}:{local_port}{contact_transport}>\r\n\
              Content-Type: application/sdp\r\n\
-             User-Agent: DeeLip/0.1.0\r\n\
+             User-Agent: {user_agent}\r\n\
              {session_timer_hdr}\
              Content-Length: {body_len}\r\n\r\n\
              {local_sdp}"

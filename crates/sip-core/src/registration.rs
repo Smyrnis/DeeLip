@@ -85,6 +85,7 @@ impl SipStack {
         let via_proto = self.via_proto();
         let contact_transport = self.contact_transport_param();
         let expires = self.account.register_expires;
+        let user_agent = crate::USER_AGENT;
 
         let mut msg = format!(
             "REGISTER sip:{server} SIP/2.0\r\n\
@@ -96,7 +97,7 @@ impl SipStack {
              CSeq: {cseq} REGISTER\r\n\
              Contact: <sip:{username}@{adv_ip}:{local_port}{contact_transport}>\r\n\
              Expires: {expires}\r\n\
-             User-Agent: DeeLip/0.1.0\r\n"
+             User-Agent: {user_agent}\r\n"
         );
         if let Some(a) = auth {
             msg.push_str(a);

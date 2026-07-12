@@ -245,6 +245,7 @@ impl SipStack {
         let body_len = sdp.len();
         let via_proto = identity.via_proto;
         let contact_transport = identity.contact_transport;
+        let user_agent = crate::USER_AGENT;
 
         let mut msg = format!(
             "INVITE {to} SIP/2.0\r\n\
@@ -256,7 +257,7 @@ impl SipStack {
              CSeq: {cseq} INVITE\r\n\
              Contact: <sip:{username}@{adv_ip}:{local_port}{contact_transport}>\r\n\
              Content-Type: application/sdp\r\n\
-             User-Agent: DeeLip/0.1.0\r\n"
+             User-Agent: {user_agent}\r\n"
         );
         if self.account.hide_caller_id {
             msg.push_str("Privacy: id\r\n");

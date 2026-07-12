@@ -15,10 +15,11 @@ static STRINGS: OnceLock<HashMap<String, String>> = OnceLock::new();
 const EN: &str = include_str!("../../../assets/locales/en.json");
 
 /// Parse and cache `language`'s locale file -- call once at startup (see
-/// `DeelipApp::new`), before any `t`/`tf` call. A call before `init` (or a
-/// key missing from the parsed file) falls back to the raw key itself (see
-/// `t`'s own doc comment) rather than panicking, so a startup-ordering bug
-/// or an unmigrated call site fails visibly instead of crashing.
+/// `main()`, before `spawn_tray_icon()`), before any `t`/`tf` call. A call
+/// before `init` (or a key missing from the parsed file) falls back to the
+/// raw key itself (see `t`'s own doc comment) rather than panicking, so a
+/// startup-ordering bug or an unmigrated call site fails visibly instead of
+/// crashing.
 pub fn init(language: Language) {
     let json = match language {
         Language::En => EN,
