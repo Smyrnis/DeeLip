@@ -3,9 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vitepress dev pages",
-    "build": "vitepress build pages",
-    "priv": "vitepress preview pages"
+    "docs:dev": "vitepress dev pages",
+    "docs:build": "vitepress build pages",
+    "docs:preview": "vitepress preview pages"
   },
   "devDependencies": {
     "vitepress": "^1.6.4"

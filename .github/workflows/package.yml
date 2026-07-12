@@ -45,7 +45,16 @@ jobs:
             libx11-dev libxkbcommon-dev libxi-dev libxrandr-dev \
             libxcb1-dev libxcb-render0-dev libxcb-shm0-dev \
             libgl1-mesa-dev libegl1-mesa-dev libwayland-dev \
+            libopus-dev \
             rpm
+          # libopus-dev matters beyond just linking deelip itself: without it,
+          # audiopus_sys builds Opus from source as a private dylib that
+          # linuxdeploy's automatic dependency scan can't find on the
+          # standard library search path (`ERROR: Could not find dependency:
+          # libopus.so.0`, breaking the AppImage step below) -- installing
+          # the dev package makes audiopus_sys link the system libopus0
+          # instead, which lives at the normal /usr/lib path linuxdeploy
+          # already knows to look at.
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -265,7 +274,10 @@ jobs:
       - name: Collect artifacts
         run: |
           mkdir -p dist
-          cp target/release/bundle/osx/*.dmg "dist/deelip-${{ steps.version.outputs.version }}-x86_64.dmg"
+          # The .app lands under bundle/osx/, but the final .dmg cargo-bundle
+          # produces from it lands in a sibling bundle/dmg/ directory, not
+          # bundle/osx/ -- confirmed by an actual CI run, not assumed.
+          cp target/release/bundle/dmg/*.dmg "dist/deelip-${{ steps.version.outputs.version }}-x86_64.dmg"
 
       - name: Checksum artifacts
         run: |
