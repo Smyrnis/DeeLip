@@ -189,13 +189,15 @@ fn vad_enabled_answer_includes_comfort_noise_for_narrowband_codec() {
     assert_eq!(parsed.cn_type, Some(CN_PAYLOAD_TYPE));
 }
 
-// ── Video (Phase 1 additive primitives) ─────────────────────────────────────
+// ── Video (additive SDP primitives) ─────────────────────────────────────────
 
 const ALL_VIDEO_CODECS: [VideoCodec; 1] = [VideoCodec::H264];
 
-/// Concatenate an audio offer with a video media section, exactly the shape
-/// Phase 2 would eventually produce -- used only by these tests, since
-/// `build_offer` itself isn't touched in Phase 1.
+/// Concatenate an audio offer with a video media section -- the same shape
+/// `call/lifecycle/outgoing.rs::prepare_video_offer` produces for a real
+/// call; used only by these tests since `build_offer` itself stays
+/// audio-only and video is always appended externally (see
+/// `build_video_media_section`'s doc comment for why).
 fn build_audio_video_offer() -> String {
     let audio = build_offer("192.0.2.1", 40000, None, &ALL_CODECS, None, false);
     let video = build_video_media_section("192.0.2.1", 40002, VideoCodec::H264, None, None);

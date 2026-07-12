@@ -315,19 +315,32 @@ impl DeelipApp {
             return;
         }
         let remote_frame = self.video.as_ref().and_then(|v| v.engine.latest_decoded_frame());
+        let remote2_frame = self.video.as_ref().and_then(|v| v.engine.latest_decoded_frame_leg2());
         let local_frame = self.video.as_ref().and_then(|v| v.camera.as_ref()).and_then(|c| c.latest_frame());
 
         let ctx = ui.ctx().clone();
         if let Some(v) = self.video.as_mut() {
             update_video_view(&ctx, &mut v.remote, remote_frame, "deelip_remote_video");
+            update_video_view(&ctx, &mut v.remote2, remote2_frame, "deelip_remote2_video");
             update_video_view(&ctx, &mut v.local, local_frame, "deelip_local_video");
         }
 
         let palette = self.palette;
+        // A conference bridges a second remote party's video onto the same
+        // panel (`remote2` only ever has a texture once that leg exists --
+        // see `media.rs::start_conference`) -- everyone else just sees the
+        // ordinary 2-box remote/self layout.
+        let has_second_leg = self.video.as_ref().is_some_and(|v| v.remote2.texture.is_some());
         if let Some(v) = self.video.as_ref() {
             ui.horizontal(|ui| {
-                show_video_view(ui, &palette, &v.remote, &t("dialer.video_remote_label"), false);
+                let remote_label =
+                    if has_second_leg { t("dialer.video_remote1_label") } else { t("dialer.video_remote_label") };
+                show_video_view(ui, &palette, &v.remote, &remote_label, false);
                 ui.add_space(8.0);
+                if has_second_leg {
+                    show_video_view(ui, &palette, &v.remote2, &t("dialer.video_remote2_label"), false);
+                    ui.add_space(8.0);
+                }
                 show_video_view(ui, &palette, &v.local, &t("dialer.video_you_label"), true);
             });
         }
@@ -337,7 +350,10 @@ impl DeelipApp {
     fn show_focused_call_controls(&mut self, ui: &mut Ui) {
         theme::full_width_card(ui, self.palette, |ui| {
             let palette = self.palette;
-            let row_width = 4.0 * widgets::ICON_TOGGLE_COL_WIDTH + 3.0 * ui.spacing().item_spacing.x;
+            let has_video = self.video.is_some();
+            let button_count = if has_video { 5.0 } else { 4.0 };
+            let row_width =
+                button_count * widgets::ICON_TOGGLE_COL_WIDTH + (button_count - 1.0) * ui.spacing().item_spacing.x;
             ui.horizontal(|ui| {
                 ui.add_space(((ui.available_width() - row_width) / 2.0).max(0.0));
                 let muted = self.is_muted();
@@ -351,6 +367,25 @@ impl DeelipApp {
                     false,
                 ) {
                     self.do_mute_toggle();
+                }
+                if has_video {
+                    let video_muted = self.is_video_muted();
+                    let video_caption =
+                        if video_muted { t("common.camera_on_button") } else { t("common.camera_off_button") };
+                    if icon_toggle_button(
+                        ui,
+                        &palette,
+                        if video_muted {
+                            egui_phosphor::regular::VIDEO_CAMERA_SLASH
+                        } else {
+                            egui_phosphor::regular::VIDEO_CAMERA
+                        },
+                        &video_caption,
+                        video_muted,
+                        false,
+                    ) {
+                        self.do_video_toggle();
+                    }
                 }
                 let recording = self.is_recording();
                 let record_caption = if recording { t("common.stop_button") } else { t("common.record_button") };

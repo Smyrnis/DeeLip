@@ -181,18 +181,35 @@ verification/provenance status).
 
 ## Known limitations / open items
 
-- **Video has never been confirmed working against real camera hardware** — this
-  development environment has no camera device at all (no `/dev/video*`, no
-  `uvcvideo` kernel module), so while `nokhwa`'s device-enumeration/open/capture
-  calls are structurally complete, only the pixel-format conversion
-  (`rgb8_to_yuv420`) has been verified end-to-end here, using synthetic RGB buffers.
+- **Video has been confirmed working end-to-end through a real call, but not
+  against real camera hardware.** This development environment has no camera
+  device at all (no `/dev/video*`, no `uvcvideo` kernel module), so
+  `nokhwa`'s device-enumeration/open/capture calls remain structurally
+  untested here. What *has* been verified: two real, separate DeeLip
+  processes (Local Account/serverless, one placing the call, one answering),
+  each with a synthetic frame substituted for a real camera, completed a real
+  SDP video negotiation and both sides rendered an actual decoded frame from
+  the other party in their in-call video panel — a genuine encode → RTP →
+  SRTP → decode → texture round trip through the real call-setup path, not
+  just the isolated `video_engine.rs` unit tests. Real camera hardware still
+  needs testing on a machine that has one.
 - **No RTP reordering/jitter-buffering on the video recv side** — fragments are
   reassembled in arrival order only; real out-of-order delivery would corrupt a
-  frame until the next keyframe. Acceptable for proving the pipeline works, worth
-  revisiting before this is real-world-facing (tracked in the current
-  `ARCHITECTURE_GAPS.md`'s video phase).
-- **Conferencing stays audio-only** — merging two calls drops any video leg either
-  one had (see `ARCHITECTURE_GAPS.md`'s video phase for the two design options being
-  weighed to change this).
+  frame until the next keyframe. The same live 2-process test above surfaced a
+  concrete, real instance of this: the callee side decoded exactly one frame
+  successfully, then failed to decode every subsequent frame from the caller
+  for the rest of the call, while the reverse direction (caller decoding the
+  callee's stream) had zero failures — consistent with real packet reordering/
+  loss corrupting the callee's reassembly in a way the caller's didn't hit,
+  though the asymmetry wasn't root-caused further. Previously only a
+  theoretical concern; now observed in practice. Worth revisiting before this
+  is real-world-facing (tracked in the current `ARCHITECTURE_GAPS.md`'s video
+  phase).
+- **Conferencing now carries video** — merging two calls fans the local camera's
+  single encoded stream out to both remote legs (one `H264Encoder`, two RTP sends,
+  each leg decoded independently — mirrors `MediaEngine`'s "encode once, decode per
+  leg" audio shape). If only one of the two merged calls negotiated video, that
+  leg's video is kept and the other simply has none, rather than dropping video
+  for both. See `video_engine.rs`'s `VideoConferenceLeg`.
 - **MP3 recording's buffer-reservation requirement** (see above) is a correctness
   invariant, not a style choice — regressing it reintroduces a real SIGSEGV.

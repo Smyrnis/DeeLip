@@ -1,11 +1,20 @@
 use egui::{RichText, Ui};
 
 use crate::app::DeelipApp;
-use crate::helpers::{device_picker, empty_state, info_hint};
+use crate::helpers::{device_picker, empty_state, field_label, info_hint};
 use crate::strings::t;
 use crate::theme::{self, Palette};
 
 use super::SETTINGS_VIEWPORT_NAME;
+
+/// Resolution presets offered in Settings -- I420 requires even width/height
+/// in both dimensions, so picking from a fixed list sidesteps ever landing
+/// on an invalid custom value.
+const RESOLUTION_PRESETS: [(u32, u32, &str); 3] =
+    [(320, 240, "320 × 240"), (640, 480, "640 × 480"), (1280, 720, "1280 × 720")];
+const FPS_PRESETS: [u32; 4] = [10, 15, 24, 30];
+const BITRATE_PRESETS: [(u32, &str); 4] =
+    [(250_000, "250 kbps"), (500_000, "500 kbps"), (1_000_000, "1 Mbps"), (2_000_000, "2 Mbps")];
 
 impl DeelipApp {
     /// Same idiom (and same both-viewports wake reasoning) as
@@ -62,6 +71,56 @@ impl DeelipApp {
             if cameras.is_empty() {
                 empty_state(ui, palette, &t("settings.video.no_cameras"));
             }
+
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                field_label(ui, palette, &t("settings.video.resolution_label"));
+                let (w, h) = (self.config.audio.video_capture_width, self.config.audio.video_capture_height);
+                let selected =
+                    RESOLUTION_PRESETS.iter().find(|(pw, ph, _)| (*pw, *ph) == (w, h)).map_or("", |(_, _, l)| l);
+                egui::ComboBox::from_id_source("settings_video_resolution").selected_text(selected).show_ui(
+                    ui,
+                    |ui| {
+                        for (pw, ph, label) in RESOLUTION_PRESETS {
+                            if ui.selectable_label(w == pw && h == ph, label).clicked() {
+                                self.config.audio.video_capture_width = pw;
+                                self.config.audio.video_capture_height = ph;
+                                edited = true;
+                            }
+                        }
+                    },
+                );
+                info_hint(ui, palette, &t("settings.restart_to_apply_hint"));
+            });
+
+            ui.horizontal(|ui| {
+                field_label(ui, palette, &t("settings.video.fps_label"));
+                let fps = self.config.audio.video_fps;
+                egui::ComboBox::from_id_source("settings_video_fps")
+                    .selected_text(fps.to_string())
+                    .show_ui(ui, |ui| {
+                        for preset in FPS_PRESETS {
+                            if ui.selectable_label(fps == preset, preset.to_string()).clicked() {
+                                self.config.audio.video_fps = preset;
+                                edited = true;
+                            }
+                        }
+                    });
+            });
+
+            ui.horizontal(|ui| {
+                field_label(ui, palette, &t("settings.video.bitrate_label"));
+                let bitrate = self.config.audio.video_bitrate_bps;
+                let selected = BITRATE_PRESETS.iter().find(|(v, _)| *v == bitrate).map_or("", |(_, l)| l);
+                egui::ComboBox::from_id_source("settings_video_bitrate").selected_text(selected).show_ui(ui, |ui| {
+                    for (value, label) in BITRATE_PRESETS {
+                        if ui.selectable_label(bitrate == value, label).clicked() {
+                            self.config.audio.video_bitrate_bps = value;
+                            edited = true;
+                        }
+                    }
+                });
+            });
         });
         edited
     }

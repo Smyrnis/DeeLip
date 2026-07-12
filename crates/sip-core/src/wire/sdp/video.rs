@@ -36,8 +36,8 @@ impl VideoCodec {
     }
 
     /// `a=fmtp` line -- baseline profile (`42e01f`), level 3.1, single-NAL
-    /// packetization mode. Conservative/broadly-compatible defaults; revisit
-    /// once real encoder output parameters exist (Phase 2).
+    /// packetization mode. Conservative/broadly-compatible defaults, chosen
+    /// for interop over squeezing out `H264Encoder`'s full capability.
     fn fmtp(self) -> Option<String> {
         match self {
             VideoCodec::H264 => Some(format!(
@@ -81,8 +81,9 @@ pub struct ParsedVideoMedia {
 /// first `m=` line into any section's group (see its own doc comment), so a
 /// parser working from an isolated video section needs this line present
 /// locally. Reuses `crypto_lines`/`ice_lines` verbatim so this concatenates
-/// cleanly onto `build_offer`'s/`build_answer`'s existing output once
-/// Phase 2 wires video in.
+/// cleanly onto `build_offer`'s/`build_answer`'s existing output -- see
+/// `call/lifecycle/outgoing.rs::prepare_video_offer`/
+/// `incoming.rs::prepare_video_answer` for where that concatenation happens.
 pub fn build_video_media_section(
     local_ip: &str, rtp_port: u16, codec: VideoCodec, srtp: Option<&SrtpParams>, ice: Option<&IceAttrs>,
 ) -> String {

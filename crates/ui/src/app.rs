@@ -374,11 +374,15 @@ pub(crate) struct CallSlot {
 /// (video still receives/displays the remote side, see
 /// `media.rs::start_video`); `remote`/`local` cache each side's decoded
 /// frame + uploaded texture so `views/dialer/in_call.rs` doesn't
-/// re-upload an unchanged frame every repaint.
+/// re-upload an unchanged frame every repaint. `remote2` is only populated
+/// during a conference where both merged calls negotiated video (see
+/// `media.rs::start_conference`) -- caches the second remote party's frame
+/// the same way `remote` does for the first.
 pub(crate) struct VideoCallState {
     pub(crate) engine: deelip_media::video_engine::VideoEngine,
     pub(crate) camera: Option<deelip_media::video_capture::CaptureHandle>,
     pub(crate) remote: VideoViewCache,
+    pub(crate) remote2: VideoViewCache,
     pub(crate) local: VideoViewCache,
 }
 

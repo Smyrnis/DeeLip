@@ -378,6 +378,20 @@ pub struct AudioConfig {
     /// `video_capture::find_camera_by_name` at call-start time.
     #[serde(default)]
     pub camera_device: Option<String>,
+    /// Camera capture width/height in pixels -- must be an even number in
+    /// both dimensions (I420's chroma planes are half-resolution). Restart
+    /// required, same as `camera_device`. Defaults match the values every
+    /// video call used before this became configurable.
+    #[serde(default = "default_video_capture_width")]
+    pub video_capture_width: u32,
+    #[serde(default = "default_video_capture_height")]
+    pub video_capture_height: u32,
+    /// Target encode/capture frame rate.
+    #[serde(default = "default_video_fps")]
+    pub video_fps: u32,
+    /// Target H.264 encode bitrate, in bits per second.
+    #[serde(default = "default_video_bitrate_bps")]
+    pub video_bitrate_bps: u32,
 }
 
 pub(super) fn default_sample_rate() -> u32 {
@@ -388,6 +402,18 @@ pub(super) fn default_frame_ms() -> u32 {
 }
 pub(super) fn default_ringtone_volume() -> f32 {
     1.0
+}
+pub(super) fn default_video_capture_width() -> u32 {
+    640
+}
+pub(super) fn default_video_capture_height() -> u32 {
+    480
+}
+pub(super) fn default_video_fps() -> u32 {
+    15
+}
+pub(super) fn default_video_bitrate_bps() -> u32 {
+    500_000
 }
 
 impl Default for AudioConfig {
@@ -403,6 +429,10 @@ impl Default for AudioConfig {
             ringtone_volume: default_ringtone_volume(),
             agc_enabled: false,
             camera_device: None,
+            video_capture_width: default_video_capture_width(),
+            video_capture_height: default_video_capture_height(),
+            video_fps: default_video_fps(),
+            video_bitrate_bps: default_video_bitrate_bps(),
         }
     }
 }

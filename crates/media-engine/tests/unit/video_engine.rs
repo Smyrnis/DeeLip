@@ -59,6 +59,7 @@ async fn run_pair(
         alice_source.clone(),
         30,
         300_000,
+        None,
     )
     .await
     .unwrap();
@@ -70,6 +71,7 @@ async fn run_pair(
         bob_source,
         30,
         300_000,
+        None,
     )
     .await
     .unwrap();
@@ -109,6 +111,139 @@ async fn plaintext_video_round_trips_over_real_udp() {
 
     alice.stop().await;
     bob.stop().await;
+}
+
+#[tokio::test]
+async fn muted_video_sends_nothing_until_unmuted() {
+    let (_alice_source, alice, bob) = run_pair(41120, 41122, None, None).await;
+    alice.set_muted(true);
+    assert!(alice.is_muted());
+
+    // While muted, Bob should never decode a frame -- give it a real window
+    // to prove absence, not just check once.
+    for _ in 0..20 {
+        assert!(bob.latest_decoded_frame().is_none(), "Bob decoded a frame from a muted camera");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(alice.stats().packets_sent, 0, "Muted send loop should never have sent a packet");
+
+    alice.set_muted(false);
+    let mut got_bob_side = false;
+    for _ in 0..40 {
+        if bob.latest_decoded_frame().is_some() {
+            got_bob_side = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(got_bob_side, "Bob should decode a frame once Alice unmutes");
+
+    alice.stop().await;
+    bob.stop().await;
+}
+
+/// A 3-way local conference: `host` fans one shared camera source out to
+/// both `peer1` and `peer2` (its `second_leg`), decoding each of their
+/// independent streams back on its own two `recv_loop`s -- mirrors what
+/// `media.rs::start_conference` builds from two merged calls' negotiated
+/// `VideoMediaReady`s.
+#[tokio::test]
+async fn conference_fans_out_to_both_legs_and_decodes_both_independently() {
+    let host_source: Arc<Mutex<Option<Yuv420Frame>>> = Arc::new(Mutex::new(None));
+    let h = host_source.clone();
+    tokio::spawn(async move {
+        for i in 0..30u8 {
+            *h.lock().unwrap() = Some(Yuv420Frame::solid_color(64, 64, i, 128, 128));
+            tokio::time::sleep(Duration::from_millis(33)).await;
+        }
+    });
+    let peer1_source: Arc<Mutex<Option<Yuv420Frame>>> = Arc::new(Mutex::new(None));
+    let p1 = peer1_source.clone();
+    tokio::spawn(async move {
+        for i in 0..30u8 {
+            *p1.lock().unwrap() = Some(Yuv420Frame::solid_color(64, 64, 50u8.wrapping_add(i), 64, 64));
+            tokio::time::sleep(Duration::from_millis(33)).await;
+        }
+    });
+    let peer2_source: Arc<Mutex<Option<Yuv420Frame>>> = Arc::new(Mutex::new(None));
+    let p2 = peer2_source.clone();
+    tokio::spawn(async move {
+        for i in 0..30u8 {
+            *p2.lock().unwrap() = Some(Yuv420Frame::solid_color(64, 64, 200u8.wrapping_sub(i), 200, 200));
+            tokio::time::sleep(Duration::from_millis(33)).await;
+        }
+    });
+
+    let host_port = 41200;
+    let peer1_port = 41202;
+    let peer2_port = 41204;
+
+    let peer1 = VideoEngine::start(
+        peer1_port,
+        format!("127.0.0.1:{host_port}").parse().unwrap(),
+        None,
+        None,
+        peer1_source,
+        30,
+        300_000,
+        None,
+    )
+    .await
+    .unwrap();
+    let host_leg2_port = host_port + 1;
+    let peer2 = VideoEngine::start(
+        peer2_port,
+        format!("127.0.0.1:{host_leg2_port}").parse().unwrap(),
+        None,
+        None,
+        peer2_source,
+        30,
+        300_000,
+        None,
+    )
+    .await
+    .unwrap();
+    let host = VideoEngine::start(
+        host_port,
+        format!("127.0.0.1:{peer1_port}").parse().unwrap(),
+        None,
+        None,
+        host_source,
+        30,
+        300_000,
+        Some(VideoConferenceLeg {
+            local_rtp_port: host_leg2_port,
+            remote_rtp: format!("127.0.0.1:{peer2_port}").parse().unwrap(),
+            srtp: None,
+            relay: None,
+        }),
+    )
+    .await
+    .unwrap();
+
+    let mut got_peer1_side = false;
+    let mut got_peer2_side = false;
+    let mut got_host_leg1 = false;
+    let mut got_host_leg2 = false;
+    for _ in 0..40 {
+        got_peer1_side |= peer1.latest_decoded_frame().is_some();
+        got_peer2_side |= peer2.latest_decoded_frame().is_some();
+        got_host_leg1 |= host.latest_decoded_frame().is_some();
+        got_host_leg2 |= host.latest_decoded_frame_leg2().is_some();
+        if got_peer1_side && got_peer2_side && got_host_leg1 && got_host_leg2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    assert!(got_peer1_side, "Peer1 should have decoded the host's fanned-out video");
+    assert!(got_peer2_side, "Peer2 should have decoded the host's fanned-out video");
+    assert!(got_host_leg1, "Host should have decoded peer1's video on leg 1");
+    assert!(got_host_leg2, "Host should have decoded peer2's video on leg 2");
+
+    host.stop().await;
+    peer1.stop().await;
+    peer2.stop().await;
 }
 
 #[tokio::test]

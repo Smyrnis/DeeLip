@@ -15,8 +15,9 @@ use super::enums::{
     update_check_frequency_to_str,
 };
 use super::sip_account::{
-    default_codec_order, default_frame_ms, default_ringtone_volume, default_sample_rate, default_sip_port, AudioConfig,
-    SipAccount,
+    default_codec_order, default_frame_ms, default_ringtone_volume, default_sample_rate, default_sip_port,
+    default_video_bitrate_bps, default_video_capture_height, default_video_capture_width, default_video_fps,
+    AudioConfig, SipAccount,
 };
 use crate::db::{bool_to_sql, sql_int_to_bool, sql_to_bool};
 use crate::Db;
@@ -106,6 +107,10 @@ impl AppConfig {
                 ringtone_volume: get_f32("audio.ringtone_volume", default_ringtone_volume()),
                 agc_enabled: get_bool("audio.agc_enabled", false),
                 camera_device: get("audio.camera_device"),
+                video_capture_width: get_u32("video.width", default_video_capture_width()),
+                video_capture_height: get_u32("video.height", default_video_capture_height()),
+                video_fps: get_u32("video.fps", default_video_fps()),
+                video_bitrate_bps: get_u32("video.bitrate_bps", default_video_bitrate_bps()),
             },
             local_sip_port: get_u32("local_sip_port", default_sip_port() as u32) as u16,
             stun_server: get("stun_server"),
@@ -230,6 +235,10 @@ impl AppConfig {
         db.set_setting("audio.ringtone_volume", &self.audio.ringtone_volume.to_string())?;
         db.set_setting("audio.agc_enabled", bool_to_sql(self.audio.agc_enabled))?;
         db.set_setting_opt("audio.camera_device", &self.audio.camera_device)?;
+        db.set_setting("video.width", &self.audio.video_capture_width.to_string())?;
+        db.set_setting("video.height", &self.audio.video_capture_height.to_string())?;
+        db.set_setting("video.fps", &self.audio.video_fps.to_string())?;
+        db.set_setting("video.bitrate_bps", &self.audio.video_bitrate_bps.to_string())?;
 
         db.set_setting("local_sip_port", &self.local_sip_port.to_string())?;
         db.set_setting_opt("stun_server", &self.stun_server)?;

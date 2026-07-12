@@ -296,6 +296,19 @@ impl DeelipApp {
         }
     }
 
+    /// Whether the local camera is currently off for the focused call's
+    /// video leg -- `false` (not muted) for a call with no video at all,
+    /// same "absent means not-toggled" convention as `is_muted`.
+    pub(crate) fn is_video_muted(&self) -> bool {
+        self.video.as_ref().is_some_and(|v| v.engine.is_muted())
+    }
+
+    pub(crate) fn do_video_toggle(&self) {
+        if let Some(video) = &self.video {
+            video.engine.set_muted(!video.engine.is_muted());
+        }
+    }
+
     /// Whether the focused call's `MediaEngine` is currently recording --
     /// true either because auto-record is on, or because the user manually
     /// started it with `do_record_toggle` below.

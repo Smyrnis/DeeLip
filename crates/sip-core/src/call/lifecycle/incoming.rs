@@ -141,8 +141,8 @@ impl SipStack {
         };
 
         // Video (negotiation only): a separate, independent parse of the
-        // same `remote_sdp` via Phase 1's section-aware helpers, never
-        // folded into `parsed`/`ParsedSdp` itself -- see this file's
+        // same `remote_sdp` via `wire/sdp/video.rs`'s section-aware helpers,
+        // never folded into `parsed`/`ParsedSdp` itself -- see this file's
         // `VIDEO_CODECS`/`prepare_video_answer` doc comments. `None` if the
         // account doesn't have video enabled or the remote didn't offer it.
         let parsed_video = if self.account.video_enabled {

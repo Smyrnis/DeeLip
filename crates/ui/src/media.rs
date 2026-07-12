@@ -3,21 +3,13 @@ use std::time::Duration;
 
 use deelip_config::CallDirection;
 use deelip_media::video_capture::{self, CaptureHandle};
-use deelip_media::video_engine::VideoEngine;
+use deelip_media::video_engine::{VideoConferenceLeg, VideoEngine};
 use deelip_media::{ConferenceLeg, MediaEngine, MediaEngineOptions, RecordingOptions, ZrtpParams};
 use deelip_sip::zrtp::Role;
 use deelip_sip::VideoMediaReady;
 
 use crate::app::{DeelipApp, VideoCallState};
 use crate::strings::t;
-
-/// Hardcoded video call parameters -- SDP negotiates codec/SRTP/ICE only,
-/// never resolution/framerate/bitrate; no per-account Settings surface for
-/// these yet (disclosed scope cut, same spirit as "H.264 only").
-const VIDEO_CAPTURE_WIDTH: u32 = 640;
-const VIDEO_CAPTURE_HEIGHT: u32 = 480;
-const VIDEO_FPS: u32 = 15;
-const VIDEO_BITRATE_BPS: u32 = 500_000;
 
 impl DeelipApp {
     /// Builds `ZrtpParams` for `calls[idx]` if its account has ZRTP enabled
@@ -98,36 +90,66 @@ impl DeelipApp {
     /// so this side can receive and display the remote party's video even
     /// without a working camera of its own.
     fn start_video(&mut self, video: VideoMediaReady) {
-        let camera_name = self.config.audio.camera_device.clone();
-        let camera_index = camera_name
-            .as_deref()
-            .and_then(video_capture::find_camera_by_name)
-            .or_else(|| video_capture::list_cameras().into_iter().next().map(|(idx, _)| idx));
+        self.start_video_internal(video, None, None);
+    }
 
-        let camera: Option<CaptureHandle> = camera_index.and_then(|idx| {
-            match video_capture::start_capture(idx, VIDEO_CAPTURE_WIDTH, VIDEO_CAPTURE_HEIGHT, VIDEO_FPS) {
+    /// Shared by `start_video` (ordinary call, `second_leg`/`existing_camera`
+    /// both `None`) and `start_conference` (fans the same camera out to a
+    /// second remote party). `existing_camera`, if given, is reused instead
+    /// of opening a fresh capture -- only one physical camera is ever
+    /// captured from at a time, so a conference reuses whichever handle the
+    /// merged call already had running rather than closing and reopening it.
+    fn start_video_internal(
+        &mut self, primary: VideoMediaReady, second_leg: Option<VideoMediaReady>,
+        existing_camera: Option<CaptureHandle>,
+    ) {
+        let width = self.config.audio.video_capture_width;
+        let height = self.config.audio.video_capture_height;
+        let fps = self.config.audio.video_fps;
+        let bitrate_bps = self.config.audio.video_bitrate_bps;
+
+        let camera: Option<CaptureHandle> = existing_camera.or_else(|| {
+            let camera_name = self.config.audio.camera_device.clone();
+            let camera_index = camera_name
+                .as_deref()
+                .and_then(video_capture::find_camera_by_name)
+                .or_else(|| video_capture::list_cameras().into_iter().next().map(|(idx, _)| idx));
+            camera_index.and_then(|idx| match video_capture::start_capture(idx, width, height, fps) {
                 Ok(h) => Some(h),
                 Err(e) => {
                     tracing::warn!("Camera capture unavailable, sending no video: {e:#}");
                     None
                 }
-            }
+            })
         });
         let frame_source = camera.as_ref().map(CaptureHandle::frame_slot).unwrap_or_else(|| Arc::new(Mutex::new(None)));
 
+        let conference_leg = second_leg.map(|v| VideoConferenceLeg {
+            local_rtp_port: v.local_rtp,
+            remote_rtp: v.remote_rtp,
+            srtp: v.srtp,
+            relay: v.relay,
+        });
+
         let engine = self.rt.block_on(VideoEngine::start(
-            video.local_rtp,
-            video.remote_rtp,
-            video.srtp,
-            video.relay,
+            primary.local_rtp,
+            primary.remote_rtp,
+            primary.srtp,
+            primary.relay,
             frame_source,
-            VIDEO_FPS,
-            VIDEO_BITRATE_BPS,
+            fps,
+            bitrate_bps,
+            conference_leg,
         ));
         match engine {
             Ok(engine) => {
-                self.video =
-                    Some(VideoCallState { engine, camera, remote: Default::default(), local: Default::default() });
+                self.video = Some(VideoCallState {
+                    engine,
+                    camera,
+                    remote: Default::default(),
+                    remote2: Default::default(),
+                    local: Default::default(),
+                });
             }
             Err(e) => tracing::error!("VideoEngine failed: {e:#}"),
         }
@@ -175,16 +197,21 @@ impl DeelipApp {
         if let Some(engine) = self.media.take() {
             self.rt.block_on(engine.stop());
         }
-        // Conferencing stays video-free (see `video_engine.rs`'s own doc
-        // comment) -- drop any video leg one of the merged calls had
-        // instead of leaking its task.
-        if let Some(v) = self.video.take() {
+        // Stop whichever call's `VideoEngine` was running (only the focused
+        // call ever has one) but keep its camera handle -- a conference
+        // still only captures from one physical camera, fanned out to both
+        // legs, so there's no reason to close and reopen it if it's already
+        // running (see `start_video_internal`'s `existing_camera` param).
+        let existing_camera = self.video.take().and_then(|v| {
             self.rt.block_on(v.engine.stop());
-        }
+            v.camera
+        });
 
         let call_id0 = self.calls[0].call_id.clone();
         let media0 = self.calls[0].media.clone();
         let media1 = self.calls[1].media.clone();
+        let video0 = media0.video.clone();
+        let video1 = media1.video.clone();
         let rt = self.rt.clone();
         let input_device = self.config.audio.input_device.clone();
         let output_device = self.config.audio.output_device.clone();
@@ -230,6 +257,19 @@ impl DeelipApp {
                 self.in_conference = true;
                 self.attended_transfer_original = None;
                 self.status_line = t("status.in_conference_line");
+
+                // Both legs negotiated video -> real 2-remote-party
+                // conference video (fan-out, see `video_engine.rs`'s doc
+                // comment). Only one did -> single-leg video for whichever
+                // leg has it, same as an ordinary call; the other leg
+                // simply has no video, nothing to bridge. Neither -> no
+                // video state at all, unchanged from before this existed.
+                match (video0, video1) {
+                    (Some(v0), Some(v1)) => self.start_video_internal(v0, Some(v1), existing_camera),
+                    (Some(v0), None) => self.start_video_internal(v0, None, existing_camera),
+                    (None, Some(v1)) => self.start_video_internal(v1, None, existing_camera),
+                    (None, None) => {}
+                }
             }
             Err(e) => tracing::error!("Conference MediaEngine failed: {e}"),
         }
