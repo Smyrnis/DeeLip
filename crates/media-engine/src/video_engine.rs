@@ -19,8 +19,9 @@ use webrtc_util::Conn;
 use deelip_sip::sdp::H264_PAYLOAD_TYPE;
 use deelip_sip::SrtpSession;
 
-use crate::engine::{LegStats, RtpSocket};
+use crate::engine::RtpSocket;
 use crate::rtp::{RtpPacket, RtpSender};
+use crate::stats::LegStats;
 use crate::video_codec::{H264Decoder, H264Encoder, Yuv420Frame};
 use crate::video_rtp::{fragment_nal_units, reassemble_nal_units};
 

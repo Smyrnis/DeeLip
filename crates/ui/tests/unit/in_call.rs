@@ -1,4 +1,7 @@
-use super::*;
+use egui::Color32;
+
+use super::stats::format_bytes;
+use super::widgets::{avatar_initial, with_alpha};
 
 #[test]
 fn with_alpha_255_is_a_pure_alpha_overwrite() {
