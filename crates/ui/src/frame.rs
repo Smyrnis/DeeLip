@@ -223,9 +223,14 @@ impl DeelipApp {
 }
 
 impl eframe::App for SharedApp {
-    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+    /// eframe 0.34 replaced `update(&Context, ...)` with `ui(&mut egui::Ui,
+    /// ...)`; the rest of this app still panels against a bare `&egui::Context`
+    /// (own top/bottom/central panels for the root viewport), so this just
+    /// recovers that `Context` from the given `Ui` and defers to it unchanged.
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
         let self_arc = self.clone();
-        self.0.lock().unwrap().update_inner(ctx, frame, &self_arc);
+        self.0.lock().unwrap().update_inner(&ctx, frame, &self_arc);
     }
 
     /// Hang up any in-progress call before the process exits, so the remote
@@ -372,6 +377,7 @@ impl DeelipApp {
         self.show_settings_modal(ctx, self_arc.clone());
         self.show_messages_window(ctx, self_arc.clone());
         self.show_transfer_window(ctx, self_arc.clone());
+        self.show_redirect_window(ctx, self_arc.clone());
         self.show_dtmf_window(ctx, self_arc.clone());
         self.show_update_popup(ctx);
         self.show_contact_dialog(ctx, self_arc.clone());

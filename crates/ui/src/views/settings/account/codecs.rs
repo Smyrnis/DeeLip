@@ -16,7 +16,7 @@ pub(super) fn show(ui: &mut Ui, palette: &Palette, account: &mut SipAccount, edi
     let mut to_disable: Option<usize> = None;
     let list_frame = egui::Frame::none()
         .stroke(egui::Stroke::new(1.0, palette.border))
-        .inner_margin(egui::Margin::symmetric(8.0, 6.0));
+        .inner_margin(egui::Margin::symmetric(8, 6));
     ui.horizontal(|ui| {
         ui.vertical(|ui| {
             ui.label(RichText::new(t("settings.account.codecs_available_label")).color(palette.ink_muted).small());

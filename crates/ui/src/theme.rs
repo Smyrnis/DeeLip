@@ -114,8 +114,8 @@ pub fn apply_style(ctx: &egui::Context, visuals: &mut egui::Visuals, palette: &P
 
     // v3: near-flat IDE-panel corners -- sharper than v2's already-tightened
     // rounding, matching Darcula's own squared-off widget chrome.
-    let rounding = egui::Rounding::same(2.0);
-    visuals.window_rounding = egui::Rounding::same(2.0);
+    let rounding = egui::Rounding::same(2);
+    visuals.window_corner_radius = egui::Rounding::same(2);
     for widgets in [
         &mut visuals.widgets.noninteractive,
         &mut visuals.widgets.inactive,
@@ -123,7 +123,7 @@ pub fn apply_style(ctx: &egui::Context, visuals: &mut egui::Visuals, palette: &P
         &mut visuals.widgets.active,
         &mut visuals.widgets.open,
     ] {
-        widgets.rounding = rounding;
+        widgets.corner_radius = rounding;
     }
     visuals.widgets.noninteractive.bg_fill = palette.canvas;
     visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, palette.border);
@@ -157,8 +157,8 @@ pub fn card_frame(palette: &Palette) -> egui::Frame {
     egui::Frame::none()
         .fill(palette.surface)
         .stroke(egui::Stroke::new(1.0, palette.border))
-        .rounding(egui::Rounding::same(2.0))
-        .inner_margin(egui::Margin::same(14.0))
+        .rounding(egui::Rounding::same(2))
+        .inner_margin(egui::Margin::same(14))
 }
 
 /// `card_frame(palette).show(ui, |ui| { ui.set_width(ui.available_width()); ... })`

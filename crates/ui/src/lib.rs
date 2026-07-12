@@ -25,7 +25,7 @@ pub fn install_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
 
     let embed = |fonts: &mut egui::FontDefinitions, key: &str, bytes: &'static [u8]| {
-        fonts.font_data.insert(key.into(), egui::FontData::from_static(bytes));
+        fonts.font_data.insert(key.into(), egui::FontData::from_static(bytes).into());
     };
 
     embed(&mut fonts, "jbmono-regular", include_bytes!("../../../assets/fonts/JetBrainsMono-Regular.ttf"));

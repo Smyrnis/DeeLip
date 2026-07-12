@@ -97,7 +97,7 @@ impl DeelipApp {
                         egui::Button::new(call_text)
                             .fill(self.palette.surface_hover)
                             .stroke(egui::Stroke::new(1.0, self.palette.border))
-                            .rounding(egui::Rounding::same(2.0)),
+                            .rounding(egui::Rounding::same(2)),
                     )
                     .clicked()
                 {

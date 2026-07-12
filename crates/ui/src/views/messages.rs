@@ -189,8 +189,8 @@ impl DeelipApp {
                         egui::Frame::none()
                             .fill(fill)
                             .stroke(egui::Stroke::new(1.0, palette.border))
-                            .rounding(egui::Rounding::same(2.0))
-                            .inner_margin(egui::Margin::symmetric(8.0, 6.0))
+                            .rounding(egui::Rounding::same(2))
+                            .inner_margin(egui::Margin::symmetric(8, 6))
                             .show(ui, |ui| {
                                 ui.set_max_width(ui.available_width() * 0.7);
                                 ui.label(RichText::new(&m.body));

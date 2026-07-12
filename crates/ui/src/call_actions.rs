@@ -154,6 +154,31 @@ impl DeelipApp {
         }
     }
 
+    /// Redirect `pending_call` (302 Moved Temporarily) to a typed destination
+    /// without ever answering it -- the same `SipHandle::redirect_call` the
+    /// automatic no-answer-forward timeout already uses
+    /// (`check_pending_call_timeout`, below), just user-triggered instead of
+    /// deadline-triggered. `do_transfer`'s existing dialog can't be reused
+    /// here since it hard-requires a connected `focused_call`, not a still-
+    /// ringing `pending_call`.
+    pub(crate) fn do_redirect_pending_call(&mut self) {
+        let Some(pending) = self.pending_call.take() else { return };
+        let raw = self.redirect_target.trim().to_string();
+        if raw.is_empty() {
+            self.pending_call = Some(pending);
+            return;
+        }
+        let domain = self.dial_domain(pending.account);
+        let prefix = self.accounts[pending.account].account.dialing_prefix.clone().unwrap_or_default();
+        let dial_plan = self.accounts[pending.account].account.dial_plan.clone();
+        let target = normalize_target_with_prefix(&raw, &domain, &prefix, &dial_plan);
+        self.accounts[pending.account].handle.redirect_call(&pending.call_id, target);
+        self.record_history(pending.from, CallDirection::Inbound, pending.start_time, CallStatus::Missed);
+        self.redirect_target.clear();
+        self.showing_redirect = false;
+        self.refresh_call_status();
+    }
+
     pub(crate) fn do_hangup(&mut self, idx: usize) {
         let call_id = self.calls[idx].call_id.clone();
         let acc = self.calls[idx].account;

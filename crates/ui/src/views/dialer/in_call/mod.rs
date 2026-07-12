@@ -15,7 +15,10 @@ use egui::{RichText, Ui};
 
 use stats::show_leg_stats;
 use video::{show_video_view, update_video_view};
-use widgets::{call_avatar, caller_name_label, circular_action_button, icon_toggle_button, state_badge, RingState};
+use widgets::{
+    call_avatar, caller_name_label, circular_action_button, icon_toggle_button, state_badge, RingState,
+    CIRCULAR_ACTION_COL_WIDTH,
+};
 
 use crate::app::DeelipApp;
 use crate::helpers::{format_call_timer, resolve_caller, short_uri, styled_slider, unix_now};
@@ -57,7 +60,11 @@ impl DeelipApp {
 
     fn show_incoming_call_screen(&mut self, ui: &mut Ui, from: &str) {
         let (name, is_name) = self.caller_display(from);
-        ui.add_space(20.0);
+        // More breathing room than the connected screen's own leading space
+        // -- this screen has far less content (no timer/controls card yet),
+        // so a bit more top space keeps it from reading as pinned to the
+        // very top of a mostly-empty canvas.
+        ui.add_space(48.0);
         ui.vertical_centered(|ui| {
             call_avatar(ui, &self.palette, &name, RingState::Pending);
             ui.add_space(8.0);
@@ -65,16 +72,34 @@ impl DeelipApp {
             ui.add_space(4.0);
             state_badge(ui, &t("dialer.status_ringing"), self.palette.ringing);
         });
-        ui.add_space(20.0);
+        ui.add_space(28.0);
+        let row_width = 2.0 * CIRCULAR_ACTION_COL_WIDTH + ui.spacing().item_spacing.x;
         ui.horizontal(|ui| {
-            let spacing = ui.available_width() * 0.16;
-            ui.add_space(spacing);
-            if circular_action_button(ui, egui_phosphor::regular::PHONE, self.palette.signal) {
+            ui.add_space(((ui.available_width() - row_width) / 2.0).max(0.0));
+            if circular_action_button(ui, egui_phosphor::regular::PHONE, self.palette.signal, &t("common.accept_button"))
+            {
                 self.do_accept();
             }
-            ui.add_space(ui.available_width() - spacing - 44.0);
-            if circular_action_button(ui, egui_phosphor::regular::PHONE_X, self.palette.danger) {
+            if circular_action_button(
+                ui,
+                egui_phosphor::regular::PHONE_X,
+                self.palette.danger,
+                &t("common.reject_button"),
+            ) {
                 self.do_reject();
+            }
+        });
+        ui.add_space(12.0);
+        ui.vertical_centered(|ui| {
+            if icon_toggle_button(
+                ui,
+                &self.palette,
+                egui_phosphor::regular::EXPORT,
+                &t("dialer.redirect_caption"),
+                self.showing_redirect,
+                false,
+            ) {
+                self.showing_redirect = !self.showing_redirect;
             }
         });
     }
@@ -96,6 +121,10 @@ impl DeelipApp {
                 let reject = format!("{}  {}", egui_phosphor::regular::PHONE_X, t("common.reject_button"));
                 if ui.button(RichText::new(reject).color(self.palette.danger)).clicked() {
                     self.do_reject();
+                }
+                let redirect = format!("{}  {}", egui_phosphor::regular::EXPORT, t("dialer.redirect_caption"));
+                if ui.button(redirect).clicked() {
+                    self.showing_redirect = !self.showing_redirect;
                 }
             });
         });
@@ -119,7 +148,7 @@ impl DeelipApp {
     /// real *name* was found, so the caller can render a resolved name in
     /// Inter and a bare address in JetBrains Mono (the redesign's one
     /// typographic rule: numbers/addresses are mono, names are Inter).
-    fn caller_display(&self, uri: &str) -> (String, bool) {
+    pub(crate) fn caller_display(&self, uri: &str) -> (String, bool) {
         resolve_caller(&self.contacts, uri)
     }
 
@@ -193,10 +222,16 @@ impl DeelipApp {
                     ui.add_space(16.0);
                     // `vertical_centered` only centers a single fixed-size
                     // child -- see docs/crates/ui.md's "centering nested rows" note.
-                    let row_width = if self.in_conference { 64.0 } else { 64.0 + 10.0 + 56.0 };
+                    let row_width =
+                        if self.in_conference { CIRCULAR_ACTION_COL_WIDTH } else { CIRCULAR_ACTION_COL_WIDTH + 10.0 + 56.0 };
                     ui.horizontal(|ui| {
                         ui.add_space(((ui.available_width() - row_width) / 2.0).max(0.0));
-                        if circular_action_button(ui, egui_phosphor::regular::PHONE_X, self.palette.danger) {
+                        if circular_action_button(
+                            ui,
+                            egui_phosphor::regular::PHONE_X,
+                            self.palette.danger,
+                            &t("dialer.hangup_button"),
+                        ) {
                             hangup_idx = Some(idx);
                         }
                         if !self.in_conference {
@@ -207,7 +242,7 @@ impl DeelipApp {
                                     .color(self.palette.ink_muted),
                             )
                             .fill(self.palette.surface)
-                            .rounding(egui::Rounding::same(14.0));
+                            .rounding(egui::Rounding::same(14));
                             if ui.add_sized([56.0, 56.0], b).clicked() {
                                 hold_idx = Some(idx);
                             }

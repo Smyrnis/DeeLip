@@ -307,6 +307,10 @@
   "tray.tooltip_missed_plural": "DeeLip — {count} missed calls",
 
   "dialer.transfer_window_title": "Transfer Call",
+  "dialer.redirect_window_title": "Redirect Call",
+  "dialer.redirect_caller_label": "Redirect this call from:",
+  "dialer.redirect_button": "Redirect",
+  "dialer.redirect_caption": "Redirect",
   "dialer.keypad_window_title": "Keypad",
   "dialer.blind_transfer": "Blind Transfer",
   "dialer.attended_transfer": "Attended Transfer",

@@ -115,7 +115,7 @@ impl DeelipApp {
                 .fill(palette.surface_hover)
                 .stroke(egui::Stroke::new(1.0, palette.border))
                 .min_size(egui::vec2(fab_size, fab_size))
-                .rounding(egui::Rounding::same(20.0));
+                .rounding(egui::Rounding::same(20));
             if ui.add(button).on_hover_text(t("contacts.add_contact_hover")).clicked() {
                 self.editing_contact_idx = None;
                 self.new_contact = Contact::default();

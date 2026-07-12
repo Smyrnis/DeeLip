@@ -64,8 +64,8 @@ pub(super) fn call_avatar(ui: &mut Ui, palette: &Palette, display_name: &str, st
 pub(super) fn state_badge(ui: &mut Ui, text: &str, color: egui::Color32) {
     egui::Frame::none()
         .fill(with_alpha(color, 35))
-        .rounding(egui::Rounding::same(4.0))
-        .inner_margin(egui::Margin::symmetric(7.0, 3.0))
+        .rounding(egui::Rounding::same(4))
+        .inner_margin(egui::Margin::symmetric(7, 3))
         .show(ui, |ui| {
             ui.label(RichText::new(text).font(egui::FontId::new(10.5, egui::FontFamily::Monospace)).color(color));
         });
@@ -91,14 +91,46 @@ pub(super) fn caller_name_label(ui: &mut Ui, palette: &Palette, name: &str, is_n
     ui.label(RichText::new(name).font(font).color(palette.ink));
 }
 
-/// A large rounded-square icon-only button for the focused-call screen's
-/// primary actions (Accept/Reject/Hang Up) -- same rounded-square language
-/// as `phone_keypad`'s digit buttons, not a full circle.
-pub(super) fn circular_action_button(ui: &mut Ui, icon: &str, color: egui::Color32) -> bool {
-    let button = egui::Button::new(RichText::new(icon).size(22.0).color(egui::Color32::WHITE))
-        .fill(color)
-        .rounding(egui::Rounding::same(14.0));
-    ui.add_sized([64.0, 64.0], button).clicked()
+/// A large rounded-square icon button with a caption underneath, for the
+/// focused-call screen's primary actions (Accept/Reject/Hang Up) -- same
+/// rounded-square language as `phone_keypad`'s digit buttons, not a full
+/// circle. Column width wider than the 64px button itself so a longer
+/// caption has room not to wrap (same reasoning as `ICON_TOGGLE_COL_WIDTH`).
+/// Built from `ui.painter()` calls on one `allocate_exact_size` rect, not a
+/// nested `egui::Button` + layout container -- matches `icon_toggle_button`'s
+/// own choice just below, made for the same real box-position bug (see its
+/// doc comment).
+/// Column width reserved per button in the incoming-call Accept/Reject row --
+/// wider than the 64px button itself, same reasoning as `ICON_TOGGLE_COL_WIDTH`.
+/// Also used by `show_incoming_call_screen` to compute that row's centering.
+pub(super) const CIRCULAR_ACTION_COL_WIDTH: f32 = 76.0;
+
+pub(super) fn circular_action_button(ui: &mut Ui, icon: &str, color: egui::Color32, caption: &str) -> bool {
+    const BTN: f32 = 64.0;
+    let (col_rect, response) =
+        ui.allocate_exact_size(egui::vec2(CIRCULAR_ACTION_COL_WIDTH, BTN + 18.0), egui::Sense::click());
+    let btn_rect = egui::Rect::from_min_size(
+        egui::pos2(col_rect.center().x - BTN / 2.0, col_rect.min.y),
+        egui::vec2(BTN, BTN),
+    );
+
+    let painter = ui.painter();
+    painter.rect_filled(btn_rect, egui::Rounding::same(14), color);
+    painter.text(
+        btn_rect.center(),
+        Align2::CENTER_CENTER,
+        icon,
+        egui::FontId::proportional(22.0),
+        egui::Color32::WHITE,
+    );
+    painter.text(
+        egui::pos2(col_rect.center().x, btn_rect.max.y + 4.0),
+        Align2::CENTER_TOP,
+        caption,
+        egui::FontId::new(11.0, egui::FontFamily::Proportional),
+        color,
+    );
+    response.clicked()
 }
 
 /// Column width reserved per button in the Mute/Record/Xfer/Keypad row --
@@ -134,7 +166,7 @@ pub(super) fn icon_toggle_button(
         egui::Rect::from_min_size(egui::pos2(col_rect.center().x - BTN / 2.0, col_rect.min.y), egui::vec2(BTN, BTN));
 
     let painter = ui.painter();
-    painter.rect(btn_rect, egui::Rounding::same(12.0), fill, egui::Stroke::new(1.0, palette.border));
+    painter.rect(btn_rect, egui::Rounding::same(12), fill, egui::Stroke::new(1.0, palette.border), egui::StrokeKind::Middle);
     // Per-glyph vertical nudge -- the Phosphor `MICROPHONE`/
     // `MICROPHONE_SLASH` glyph's ink sits visibly higher within its own
     // font-metrics line box than `RECORD`/`EXPORT`/`NUMPAD` do (confirmed

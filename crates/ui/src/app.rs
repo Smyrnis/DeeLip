@@ -105,6 +105,12 @@ pub struct DeelipApp {
     /// `transfer_target`/`showing_transfer` exactly.
     pub(crate) attended_target: String,
     pub(crate) showing_attended: bool,
+    /// Redirect-before-answering box state for `pending_call` — same shape as
+    /// `transfer_target`/`showing_transfer`, but a separate window since it
+    /// sources a ringing call, not a connected `focused_call` (see
+    /// `call_actions.rs::do_redirect_pending_call`).
+    pub(crate) redirect_target: String,
+    pub(crate) showing_redirect: bool,
     /// Whether the in-call screen's DTMF keypad is expanded -- hidden by
     /// default so the focused-call screen stays uncluttered, matching the
     /// redesign's "reveal on demand" treatment of secondary controls.
@@ -458,6 +464,8 @@ impl DeelipApp {
             showing_transfer: false,
             attended_target: String::new(),
             showing_attended: false,
+            redirect_target: String::new(),
+            showing_redirect: false,
             showing_dtmf: false,
             attended_transfer_original: None,
             in_conference: false,

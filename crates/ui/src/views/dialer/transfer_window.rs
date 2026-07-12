@@ -85,7 +85,7 @@ impl DeelipApp {
 /// own transfer keypad). Shared by both panels since they're otherwise
 /// identical field+keypad+backspace/clear blocks, just feeding a different
 /// `String` and followed by a different action button.
-fn transfer_target_editor(ui: &mut Ui, palette: Palette, target: &mut String) {
+pub(crate) fn transfer_target_editor(ui: &mut Ui, palette: Palette, target: &mut String) {
     text_edit_scope(ui, &palette, |ui| {
         ui.add(
             egui::TextEdit::singleline(target)

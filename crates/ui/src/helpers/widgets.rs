@@ -310,7 +310,7 @@ pub(crate) fn phone_keypad(ui: &mut Ui, palette: Palette, mut on_press: impl FnM
             let margin = ((ui.available_width() - row_width) / 2.0).max(0.0);
             ui.add_space(margin);
             for digit in row {
-                let button = egui::Button::new(keypad_button_text(digit, palette)).rounding(egui::Rounding::same(6.0));
+                let button = egui::Button::new(keypad_button_text(digit, palette)).rounding(egui::Rounding::same(6));
                 if ui.add_sized([BUTTON, BUTTON], button).clicked() {
                     on_press(digit);
                 }

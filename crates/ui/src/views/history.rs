@@ -204,7 +204,7 @@ impl DeelipApp {
             self.message_from_list(target);
         }
         if let Some(target) = copy_target {
-            ui.output_mut(|o| o.copied_text = target);
+            ui.ctx().copy_text(target);
         }
         if let Some(idx) = delete_idx {
             self.history.records.remove(idx);

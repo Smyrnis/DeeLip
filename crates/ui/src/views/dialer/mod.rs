@@ -9,6 +9,7 @@
 mod dtmf_window;
 mod idle;
 mod in_call;
+mod redirect_window;
 mod transfer_window;
 
 use egui::Ui;
