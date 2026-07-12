@@ -1,8 +1,8 @@
 use deelip_config::{DialPlanRule, apply_dial_plan};
 
 /// Normalize a dial-box entry into a full SIP URI. Bare numbers/usernames
-/// (no scheme, no "@") are dialed against the account's own domain, matching
-/// how MicroSIP and other softphones resolve local extensions.
+/// (no scheme, no "@") are dialed against the account's own domain, the
+/// conventional way softphones resolve local extensions.
 pub(crate) fn normalize_target(raw: &str, domain: &str) -> String {
     normalize_target_with_prefix(raw, domain, "", &[])
 }

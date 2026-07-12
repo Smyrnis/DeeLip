@@ -217,7 +217,7 @@ repaint, since egui repaints far faster than either the camera or the decode fra
 
 ### Settings
 
-MicroSIP-style tabbed dialog (`views/settings/mod.rs`) — one section visible at a time,
+A tabbed dialog (`views/settings/mod.rs`) — one section visible at a time,
 sized to fit without scrolling, replacing an earlier single long scrolling stack of 12
 sections grouped down to 8 tabs. The Save button's `TopBottomPanel::bottom` is anchored
 *before* the tab-content match, not after — `ScrollArea::vertical()` (used by the
@@ -264,10 +264,10 @@ scroll-lag bug.
 
 ### Platform integration (tray/hotkeys/notifications)
 
-`platform::tray`/`hotkeys`/`notify` each wrap a Linux mechanism that needs its own
-event loop independent of egui's: tray-icon clicks need a GTK main loop running on the
-thread that created the icon (not winit's), global hotkeys need `global-hotkey`'s own
-X11 event thread, and desktop-notification action buttons block synchronously on
+`platform::tray`/`hotkeys`/`notify` each wrap a mechanism that needs its own event
+loop independent of egui's: tray-icon clicks need *some* OS-level event loop pumping
+the thread that owns the icon, global hotkeys need `global-hotkey`'s own event
+thread, and desktop-notification action buttons block synchronously on
 `notify-rust`'s `wait_for_action`. All three (plus `update.rs`'s release check and
 `views/directory.rs`'s LDAP search) share one idiom: spawn a dedicated background
 thread that owns the blocking/foreign-event-loop call, forward whatever it produces
@@ -279,26 +279,40 @@ called once per frame) just drains the channel, never blocks.
 render/update loop while the window is hidden (a normal optimization) — but "restore"
 and "quit" are exactly the two actions you need *while* hidden. The tray's event
 threads run independently of whether any frame is being drawn, and `egui::Context` is
-thread-safe by design specifically for this. Hiding/restoring uses
+thread-safe by design specifically for this. On Linux, hiding/restoring uses
 `ViewportCommand::Visible`, not `Minimized`: window mapping is baseline ICCCM behavior
 every X11 window manager gets right, whereas GNOME Shell/Mutter's handling of the
 WM-level iconify state for an XWayland-forced client is unreliable and could leave
 "Show DeeLip" doing nothing.
 
-**Tray menu/badge construction must happen on the GTK thread**: `MenuItem`/`Menu`/
-`TrayIcon` use `Rc` internally, so they're built *on* the spawned GTK thread, not
-constructed elsewhere and moved in — `spawn_tray_icon` blocks briefly on a one-shot
-channel round-trip until the menu items exist so their ids can be returned to the
-caller. The missed-call badge overlay updates through a separate `glib::MainContext`
-channel for the same reason (attached before `gtk::main()` starts).
+**Tray construction is genuinely per-OS** (`platform/tray.rs`), because `tray-icon`
+itself has different requirements per platform for *when*, and on which thread, the
+icon can be built:
+- **Linux**: `MenuItem`/`Menu`/`TrayIcon` use `Rc` internally, so they're built *on* a
+  dedicated spawned GTK thread, not constructed elsewhere and moved in —
+  `spawn_tray_icon` blocks briefly on a one-shot channel round-trip until the menu
+  items exist so their ids can be returned to the caller. The missed-call badge
+  overlay updates through a separate `glib::MainContext` channel for the same reason
+  (attached before `gtk::main()` starts).
+- **Windows/macOS**: `tray-icon`'s own docs require the tray be created only once an
+  OS event loop is already running on the thread that will pump it — the opposite of
+  Linux's "build it before anything else starts" approach, and incompatible with
+  building it eagerly in `main.rs` before `eframe::run_native`. Instead,
+  `frame.rs::init_lazy_tray` builds it lazily on `DeelipApp`'s first real frame (by
+  which point eframe's winit loop is definitely already running on this thread), with
+  no dedicated thread of its own — the badge overlay is instead polled once per frame
+  (`tray::poll_native_tray_badge`, called from `process_tray_events`) rather than
+  attached to a GTK-style running main loop. Written and cross-compile-checked
+  without access to real Windows/macOS hardware, so unverified at runtime.
 
 **Global hotkeys**: Linux support in `global-hotkey` is X11-only, which is fine since
 `main.rs` already forces the main window onto X11/XWayland for the tray-restore
-reasons above. Unlike the tray, this crate's backend owns its own dedicated
-connection/event-loop thread internally, so it has no GTK-style setup-ordering
-constraint. A hardware headset/multimedia hook button (`Code::MediaPlayPause`) is
-registered as a fourth, independent binding interpreted as "Answer if ringing, else
-Hangup" — a real phone's hook-switch behavior.
+reasons above (that forcing is itself `cfg(target_os = "linux")`-gated — Windows/macOS
+have no Wayland/X11 split to work around). Unlike the tray, this crate's backend owns
+its own dedicated connection/event-loop thread internally on every platform, so it has
+no GTK-style setup-ordering constraint. A hardware headset/multimedia hook button
+(`Code::MediaPlayPause`) is registered as a fourth, independent binding interpreted as
+"Answer if ringing, else Hangup" — a real phone's hook-switch behavior.
 
 ### i18n
 

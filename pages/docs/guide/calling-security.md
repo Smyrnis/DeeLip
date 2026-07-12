@@ -58,9 +58,9 @@ rejected automatically, regardless of which account they call.
 
 ## Local Account (serverless calling)
 
-Like MicroSIP, DeeLip can place and receive calls directly to a bare IP address with
-no SIP provider or registrar involved at all — useful for testing, a local network,
-or anywhere you don't need a phone number, just a direct connection to another
+DeeLip can place and receive calls directly to a bare IP address with no SIP
+provider or registrar involved at all — useful for testing, a local network, or
+anywhere you don't need a phone number, just a direct connection to another
 DeeLip/SIP client.
 
 ## Video

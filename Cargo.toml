@@ -53,7 +53,7 @@ webrtc-ice = "0.17"
 webrtc-util = "0.17"
 async-trait = "0.1"
 fdaf-aec = "0.1"
-tray-icon = { version = "0.24", default-features = false, features = ["gtk"] }
+tray-icon = { version = "0.24", default-features = false }
 image = "0.25"
 gtk = "0.18"
 hound = "3"
@@ -118,7 +118,7 @@ strip = true
 maintainer = "Smyrnis Giannis <kodosaek@gmail.com>"
 copyright = "2026, Smyrnis Giannis"
 license-file = ["LICENSE", "4"]
-extended-description = "DeeLip is a lightweight, MicroSIP-inspired SIP softphone for Linux."
+extended-description = "DeeLip is a lightweight, SIP softphone."
 section = "comm"
 priority = "optional"
 depends = "$auto"
@@ -134,3 +134,16 @@ assets = [
     { source = "assets/icon.png", dest = "/usr/share/icons/hicolor/256x256/apps/deelip.png", mode = "644" },
     { source = "packaging/deelip.desktop", dest = "/usr/share/applications/deelip.desktop", mode = "644" },
 ]
+
+# Packaging metadata consumed by `cargo bundle` (see
+# .github/workflows/package.yml's macOS job) to produce a .app bundle.
+# `identifier` matches the LaunchAgent label used by
+# crates/config/src/autostart.rs's macOS branch, for consistency.
+[package.metadata.bundle]
+name = "DeeLip"
+identifier = "com.deelip.app"
+icon = ["assets/icons_macos/*.png"]
+category = "Productivity"
+short_description = "Lightweight SIP softphone"
+long_description = "DeeLip is a lightweight, SIP softphone."
+osx_minimum_system_version = "10.13"

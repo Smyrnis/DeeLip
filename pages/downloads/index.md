@@ -17,7 +17,7 @@ title: Downloads
   </div>
 </div>
 
-## Install via script
+## Linux
 
 ```sh
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/Smyrnis/DeeLip/main/scripts/install.sh)"
@@ -46,13 +46,30 @@ cd DeeLip
 Full flag reference, including `--version=TAG` to pin a specific release: see the
 [Install docs](/docs/install/install).
 
+## Windows
+
+Download the `.msi` from the [latest release](https://github.com/Smyrnis/DeeLip/releases/latest)
+and run it — a standard installer with a Start Menu shortcut and an optional "add to PATH" step.
+The Windows build is newer than the Linux packages above and hasn't seen as much real-world
+testing yet; please [report an issue](https://github.com/Smyrnis/DeeLip/issues/new) if something
+doesn't work.
+
+## macOS
+
+Download the `.dmg` from the [latest release](https://github.com/Smyrnis/DeeLip/releases/latest),
+open it, and drag `DeeLip.app` into `Applications`. The build isn't code-signed or notarized yet,
+so Gatekeeper will likely block the first launch — right-click (or Control-click) the app and
+choose **Open** instead of double-clicking to get past that once. Like Windows, this build is
+newer than the Linux packages and hasn't seen as much real-world testing; please
+[report an issue](https://github.com/Smyrnis/DeeLip/issues/new) if something doesn't work.
+
 ## Manual download
 
 Prefer to grab the file yourself? Every [release](https://github.com/Smyrnis/DeeLip/releases)
-publishes a `.deb`, `.rpm`, and `.tar.gz` — download the one matching your distro and install it
-with your normal package manager, or unpack the tarball anywhere on your `PATH`.
+publishes a `.deb`, `.rpm`, and `.tar.gz` for Linux, a `.msi` for Windows, and a `.dmg` for macOS —
+download the one matching your platform.
 
-## After installing
+## After installing (Linux)
 
 - [`scripts/health-check.sh`](/docs/install/health-check) — verify (and `--fix`) your install
 - [`scripts/uninstall.sh`](/docs/install/uninstall) — remove DeeLip cleanly

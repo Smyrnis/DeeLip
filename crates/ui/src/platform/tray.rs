@@ -4,6 +4,7 @@
 //! section.
 
 use std::cell::RefCell;
+#[cfg(target_os = "linux")]
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
@@ -18,13 +19,22 @@ use crate::strings::{t, tf};
 const ICON_BYTES: &[u8] = include_bytes!("../../../../assets/Deelip-tray.png");
 
 /// Sends an updated missed-call/unread count to the tray icon's badge —
-/// `u32::MAX` is never sent; `0` clears the badge. Safe to call from any
-/// thread (it's a `glib::MainContext` channel, the officially-supported
-/// way to hand work to a GTK main loop running on a different thread from
-/// the sender — the same category of problem `MenuItem`/`Menu` needing to
-/// be *constructed* on the GTK thread already solved for menu setup, just
-/// for an ongoing update instead of a one-time handoff).
+/// `u32::MAX` is never sent; `0` clears the badge.
+///
+/// Linux: safe to call from any thread (it's a `glib::MainContext` channel,
+/// the officially-supported way to hand work to a GTK main loop running on
+/// a different thread from the sender — the same category of problem
+/// `MenuItem`/`Menu` needing to be *constructed* on the GTK thread already
+/// solved for menu setup, just for an ongoing update instead of a one-time
+/// handoff).
+///
+/// Windows/macOS: a plain channel, drained once per frame by
+/// `poll_native_tray_badge` (see its doc comment for why there's no
+/// GTK-style "attach to a running main loop" step needed there).
+#[cfg(target_os = "linux")]
 pub type BadgeSender = gtk::glib::Sender<u32>;
+#[cfg(not(target_os = "linux"))]
+pub type BadgeSender = std::sync::mpsc::Sender<u32>;
 
 /// IDs of the tray menu's "Show" and "Quit" items.
 #[derive(Clone)]
@@ -111,11 +121,27 @@ fn restore_window(ctx_slot: &CtxSlot) {
     }
 }
 
+/// Tooltip text for a given missed/unread count -- shared by every
+/// platform's badge-update path.
+fn tooltip_for_count(count: u32) -> String {
+    if count > 0 {
+        // Pluralization rules are out of scope for now (see
+        // `ARCHITECTURE_GAPS.md` item 6) -- the English
+        // singular/plural branch stays in Rust, with each
+        // branch's fixed text as its own locale key.
+        let key = if count == 1 { "tray.tooltip_missed_singular" } else { "tray.tooltip_missed_plural" };
+        tf(key, &[("count", &count.to_string())])
+    } else {
+        t("tray.tooltip_default")
+    }
+}
+
 /// Spawn the tray icon on a dedicated GTK event-loop thread -- see
 /// `docs/crates/ui.md`'s "Platform integration" section for why menu/icon
 /// construction and the badge channel both have to happen on this thread.
 /// Build failures past the initial channel round-trip are logged, not
 /// propagated (the app works fine without a tray icon).
+#[cfg(target_os = "linux")]
 #[allow(deprecated)] // `MainContext::channel` -- the suggested async-channel + spawn_future_local
 // replacement doesn't fit this thread's plain `gtk::main()` loop; this is
 // still the documented way to feed a synchronous cross-thread channel into
@@ -167,18 +193,7 @@ pub fn spawn_tray_icon() -> anyhow::Result<(TrayMenuIds, BadgeSender)> {
                     if let Err(e) = tray.borrow_mut().set_icon(Some(icon)) {
                         tracing::warn!("Tray: failed to update badge icon: {e}");
                     }
-                    let tooltip = if count > 0 {
-                        // Pluralization rules are out of scope for now (see
-                        // `ARCHITECTURE_GAPS.md` item 6) -- the English
-                        // singular/plural branch stays in Rust, with each
-                        // branch's fixed text as its own locale key.
-                        let key =
-                            if count == 1 { "tray.tooltip_missed_singular" } else { "tray.tooltip_missed_plural" };
-                        tf(key, &[("count", &count.to_string())])
-                    } else {
-                        t("tray.tooltip_default")
-                    };
-                    if let Err(e) = tray.borrow().set_tooltip(Some(&tooltip)) {
+                    if let Err(e) = tray.borrow().set_tooltip(Some(&tooltip_for_count(count))) {
                         tracing::warn!("Tray: failed to update tooltip: {e}");
                     }
                 }
@@ -193,6 +208,100 @@ pub fn spawn_tray_icon() -> anyhow::Result<(TrayMenuIds, BadgeSender)> {
     let ids = ids_rx.recv().context("Tray thread failed before creating menu items")?;
     Ok((ids, badge_tx_ret))
 }
+
+/// Windows/macOS: build the tray icon directly (no dedicated event-loop
+/// thread, unlike Linux's GTK approach) -- **must** be called after eframe's
+/// own winit event loop is already running on this thread, not before. Per
+/// `tray-icon`'s own docs: macOS strictly requires the tray to be created
+/// once the event loop has started (the earliest safe point is winit's
+/// `StartCause::Init`); Windows requires it be built on whichever thread's
+/// event loop will pump its hidden window's messages. Both are satisfied by
+/// calling this from `DeelipApp`'s first real frame (see
+/// `frame.rs::init_lazy_tray`) rather than from `main.rs` before
+/// `eframe::run_native`, since by the app's first frame eframe's winit loop
+/// is definitely already pumping this thread's message queue -- which is
+/// also what keeps `spawn_tray_event_handlers`'s two background threads
+/// (unchanged, pure channel-consumers) fed on these platforms, with no
+/// GTK-style dedicated main loop needed at all.
+///
+/// UNVERIFIED on real Windows/macOS hardware -- this sandbox is Linux-only.
+#[cfg(not(target_os = "linux"))]
+pub fn spawn_tray_icon() -> anyhow::Result<(TrayMenuIds, BadgeSender)> {
+    let icon = load_icon(0).context("Tray icon: failed to load icon")?;
+
+    let show_item = MenuItem::new(t("tray.show_item"), true, None);
+    let quit_item = MenuItem::new(t("tray.quit_item"), true, None);
+    let ids = TrayMenuIds { show: show_item.id().clone(), quit: quit_item.id().clone() };
+
+    let menu = Menu::new();
+    menu.append(&show_item).map_err(|e| anyhow::anyhow!("Tray icon: failed to append Show item: {e}"))?;
+    menu.append(&quit_item).map_err(|e| anyhow::anyhow!("Tray icon: failed to append Quit item: {e}"))?;
+
+    let tray = TrayIconBuilder::new()
+        .with_icon(icon)
+        .with_menu(Box::new(menu))
+        .with_tooltip("DeeLip")
+        .build()
+        .context("Tray icon: failed to build")?;
+
+    let (badge_tx, badge_rx) = std::sync::mpsc::channel::<u32>();
+    NATIVE_TRAY.with(|slot| *slot.borrow_mut() = Some(NativeTray { tray, badge_rx }));
+    Ok((ids, badge_tx))
+}
+
+/// Windows/macOS only -- the tray icon built by `spawn_tray_icon`, plus its
+/// badge-count channel, kept on the main thread (never sent across threads,
+/// so no `Send`/`Sync` bound on `tray_icon::TrayIcon` is needed) for
+/// `poll_native_tray_badge` to drain once per frame.
+#[cfg(not(target_os = "linux"))]
+struct NativeTray {
+    tray: tray_icon::TrayIcon,
+    badge_rx: std::sync::mpsc::Receiver<u32>,
+}
+
+#[cfg(not(target_os = "linux"))]
+thread_local! {
+    static NATIVE_TRAY: RefCell<Option<NativeTray>> = const { RefCell::new(None) };
+}
+
+/// Windows/macOS: apply the latest pending badge-count update (if any) to
+/// the tray icon built by `spawn_tray_icon`. Unlike Linux, which attaches a
+/// callback directly to the GTK main loop that's already running the tray,
+/// there's no separate main loop here to attach to -- the tray was built
+/// on the same thread `DeelipApp::update`/`ui` runs on, so this just needs
+/// to be polled once per frame instead (see `frame.rs::process_tray_events`,
+/// which already runs every frame). No-op if the tray never started (see
+/// `spawn_tray_icon`'s doc comment for how construction failure is handled).
+/// A no-op on Linux, where the GTK thread's own `badge_rx.attach` callback
+/// already handles this.
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn poll_native_tray_badge() {
+    NATIVE_TRAY.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let Some(state) = slot.as_mut() else { return };
+        // Only the most recent pending count matters -- drain fully rather
+        // than acting on every queued update.
+        let mut latest = None;
+        while let Ok(count) = state.badge_rx.try_recv() {
+            latest = Some(count);
+        }
+        let Some(count) = latest else { return };
+        match load_icon(count) {
+            Ok(icon) => {
+                if let Err(e) = state.tray.set_icon(Some(icon)) {
+                    tracing::warn!("Tray: failed to update badge icon: {e}");
+                }
+                if let Err(e) = state.tray.set_tooltip(Some(&tooltip_for_count(count))) {
+                    tracing::warn!("Tray: failed to update tooltip: {e}");
+                }
+            }
+            Err(e) => tracing::warn!("Tray: failed to render badge icon: {e}"),
+        }
+    });
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn poll_native_tray_badge() {}
 
 /// Load the base tray icon, compositing a small red badge with `count`
 /// (capped at a single digit, "9" for anything ≥9 -- a badge this size has

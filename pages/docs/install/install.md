@@ -1,5 +1,8 @@
 # Install
 
+> On Windows or macOS, this page doesn't apply — see [Downloads](/downloads/) for the `.msi`/`.dmg`
+> installer instead. `install.sh` is a Linux-only script.
+
 `scripts/install.sh` installs a prebuilt DeeLip package for your distro straight from GitHub
 Releases — no local Rust toolchain or compiling required. Run it straight from GitHub, no
 checkout needed:

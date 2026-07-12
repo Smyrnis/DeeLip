@@ -89,8 +89,8 @@ impl SipStack {
         }
     }
 
-    /// `SipAccount::local_account` (MicroSIP's "Local Account"/serverless
-    /// mode) -- see docs/crates/sip-core.md's "SipAccount::local_account" section.
+    /// `SipAccount::local_account` (a serverless, direct-IP "Local Account"
+    /// calling mode) -- see docs/crates/sip-core.md's "SipAccount::local_account" section.
     async fn connect_local(
         account: &SipAccount, local_port: u16, external_ip: &Option<String>,
     ) -> anyhow::Result<(Arc<SipTransport>, String, String, SocketAddr, TransportProtocol)> {

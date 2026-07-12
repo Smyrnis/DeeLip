@@ -86,13 +86,13 @@ pub struct SipAccount {
     /// React to a remote `Call-Info: ...;answer-after=N` signal (an
     /// intercom/paging-hardware convention, distinct from the always-on
     /// timer-based `auto_answer_enabled` above) by auto-answering after N
-    /// seconds -- MicroSIP's "Auto Answer (Control Button)". Ignored unless
+    /// seconds -- an "Auto Answer (Control Button)" behavior. Ignored unless
     /// the incoming INVITE actually carries the header; off by default.
     #[serde(default)]
     pub auto_answer_control_button: bool,
     /// Mirror of `auto_answer_control_button`: react to the same remote
-    /// signal by immediately rejecting the call instead -- MicroSIP's "Deny
-    /// Incoming (Control Button)". Takes priority if both are somehow on.
+    /// signal by immediately rejecting the call instead -- a "Deny Incoming
+    /// (Control Button)" behavior. Takes priority if both are somehow on.
     /// Ignored unless the incoming INVITE carries the header; off by default.
     #[serde(default)]
     pub deny_incoming_control_button: bool,
@@ -196,9 +196,9 @@ pub struct SipAccount {
     /// editor.
     #[serde(default = "default_true")]
     pub session_timers_enabled: bool,
-    /// MicroSIP's "Local Account"/serverless mode. Off by default. Full
-    /// picture (why UDP-only, how outgoing calls resolve a destination):
-    /// `docs/crates/config.md`.
+    /// A serverless, direct-IP "Local Account" calling mode. Off by default.
+    /// Full picture (why UDP-only, how outgoing calls resolve a
+    /// destination): `docs/crates/config.md`.
     #[serde(default)]
     pub local_account: bool,
     /// Attempt to negotiate a video leg (H.264) alongside audio on this

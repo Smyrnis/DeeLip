@@ -49,11 +49,11 @@ pub struct DeelipApp {
     pub(crate) rt: Handle,
 
     pub(crate) tab: Tab,
-    /// Whether the Settings dialog is open -- MicroSIP-style separate modal
-    /// window rather than a tab, since a settings screen the size of this
-    /// one competing for tab-bar space with Dialer/History/etc. read as
+    /// Whether the Settings dialog is open -- a separate modal window
+    /// rather than a tab, since a settings screen the size of this one
+    /// competing for tab-bar space with Dialer/History/etc. would read as
     /// "just another view" rather than the distinct, out-of-the-way
-    /// configuration surface MicroSIP's own Settings dialog is.
+    /// configuration surface it's meant to be.
     pub(crate) settings_open: bool,
     /// Which Settings tab is currently shown -- see `SettingsTab`.
     pub(crate) settings_tab: SettingsTab,

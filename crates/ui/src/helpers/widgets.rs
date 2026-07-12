@@ -47,7 +47,7 @@ pub(crate) fn window_icon() -> egui::IconData {
 /// Left-hand side of the bottom status bar -- just the connection dot and
 /// status text. Caller wraps this in its own `ui.horizontal()` alongside a
 /// right-to-left cluster (voicemail badge / DND toggle / account label) so
-/// everything shares one row, MicroSIP-style.
+/// everything shares one row.
 pub(crate) fn status_bar(ui: &mut Ui, palette: &Palette, text: &str, ok: bool, held: bool) {
     let color = if held {
         palette.ringing
@@ -101,7 +101,7 @@ pub(crate) fn list_row(
 
 /// Same as `list_row`, but also attaches a right-click context menu to the
 /// row background -- History/Contacts use this for their per-row actions
-/// (MicroSIP-style, not always-visible inline buttons). `menu_contents` must
+/// (a context menu, not always-visible inline buttons). `menu_contents` must
 /// not capture anything `add_contents` also mutably captures -- both
 /// closures are constructed together but only one runs per frame, so
 /// borrowing the same `&mut` from both won't compile.

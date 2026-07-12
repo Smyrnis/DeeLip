@@ -2,7 +2,7 @@ import { defineConfig } from 'vitepress'
 
 export default defineConfig({
   title: 'DeeLip',
-  description: 'A lightweight, MicroSIP-inspired SIP softphone for Linux',
+  description: 'A lightweight, SIP softphone for Linux, Windows, and macOS',
   // Required for a GitHub Pages *project* page — this repo publishes at
   // https://smyrnis.github.io/DeeLip/, not the domain root, so every
   // generated asset/link needs this prefix. Case must match the repo name.
@@ -13,7 +13,7 @@ export default defineConfig({
 
   themeConfig: {
     // Renders bold + underlined top-left, doubling as the "Home" link —
-    // mirrors the "MicroSIP Home" first item in a MicroSIP-style top bar.
+    // the first item in the top bar.
     siteTitle: 'DeeLip Home',
 
     nav: [
@@ -26,7 +26,7 @@ export default defineConfig({
     ],
 
     // Only shown under /docs/ — Downloads/FAQ/Troubleshooting/Contact stay
-    // clean single pages with just the top bar, matching the MicroSIP feel.
+    // clean single pages with just the top bar.
     sidebar: {
       '/docs/': [
         {

@@ -14,9 +14,7 @@ egui = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 tokio = { workspace = true }
-tray-icon = { workspace = true }
 image = { workspace = true }
-gtk = { workspace = true }
 cpal = { workspace = true }
 notify-rust = "4.18.0"
 rodio = { version = "0.19", default-features = false, features = ["wav"] }
@@ -27,3 +25,13 @@ rand = { workspace = true }
 ldap3 = { workspace = true }
 chrono = { workspace = true }
 serde_json = { workspace = true }
+
+# The tray icon needs GTK/libappindicator only on Linux -- `tray-icon`'s own
+# native Windows/macOS backends need no extra feature at all (see
+# `platform/tray.rs`'s module doc comment for the full per-OS rationale).
+[target.'cfg(target_os = "linux")'.dependencies]
+tray-icon = { workspace = true, features = ["gtk"] }
+gtk = { workspace = true }
+
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+tray-icon = { workspace = true }

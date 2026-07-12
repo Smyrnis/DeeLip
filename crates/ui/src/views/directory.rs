@@ -1,7 +1,7 @@
-//! MicroSIP's "Directory of Users" -- an optional corporate/LDAP directory
-//! search, distinct from local Contacts. Read-only: this never writes back
-//! to the directory, only searches it and (optionally) copies a result into
-//! local Contacts. See `AppConfig::ldap_server` et al. for the connection
+//! "Directory of Users" -- an optional corporate/LDAP directory search,
+//! distinct from local Contacts. Read-only: this never writes back to the
+//! directory, only searches it and (optionally) copies a result into local
+//! Contacts. See `AppConfig::ldap_server` et al. for the connection
 //! settings.
 
 use anyhow::Context as _;

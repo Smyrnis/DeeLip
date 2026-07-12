@@ -109,8 +109,8 @@ impl DeelipApp {
                     return;
                 }
                 let acc = &self.accounts[account].account;
-                // MicroSIP's "Deny/Auto Answer (Control Button)": both react
-                // to the same remote answer-after signal (see
+                // "Deny/Auto Answer (Control Button)": both react to the
+                // same remote answer-after signal (see
                 // `deelip_sip::wire::util::parse_call_info_answer_after`).
                 // Deny wins if both are on; both bypass DND/forwarding below
                 // (the intercom/paging use case this exists for) -- only the

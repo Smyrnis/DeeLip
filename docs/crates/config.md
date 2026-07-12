@@ -2,9 +2,11 @@
 
 `deelip-config` owns every piece of state DeeLip persists between runs and every
 other crate reads settings from: `AppConfig` (global + per-account settings),
-`ContactBook`, `CallHistory`, `MessageLog`, dial-plan matching, and the XDG autostart
-integration. Every other crate in the workspace (`sip-core`, `media-engine`, `ui`)
-depends on this one for its config types; this crate depends on none of them.
+`ContactBook`, `CallHistory`, `MessageLog`, dial-plan matching, and the per-OS
+autostart integration (`autostart.rs` — XDG on Linux, a registry `Run` key on
+Windows, a `LaunchAgent` plist on macOS). Every other crate in the workspace
+(`sip-core`, `media-engine`, `ui`) depends on this one for its config types; this
+crate depends on none of them.
 
 ## Architecture
 
@@ -70,8 +72,8 @@ second one means every existing install's `SELECT`/`INSERT` in `account.rs` star
 failing with "no such column" the moment they upgrade, even though a fresh install
 would work fine.
 
-**`local_account` (`SipAccount`)**: MicroSIP's "Local Account"/serverless mode —
-place and receive direct SIP calls to/from a bare IP with no registrar at all. No
+**`local_account` (`SipAccount`)**: a serverless, direct-IP calling mode — place and
+receive direct SIP calls to/from a bare IP with no registrar at all. No
 `REGISTER` is ever sent; `server`/`password`/`auth_username` go unused since there's
 nothing to authenticate to, while `username`/`display_name` still serve as this
 account's caller-ID identity. Forced to UDP regardless of the account's own

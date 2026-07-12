@@ -171,13 +171,24 @@ fn main() -> anyhow::Result<()> {
     // (e.g. no running sound server), where it just spams stderr forever.
     // DeeLip has no use for GTK event sounds anyway; disable canberra's
     // audio output entirely rather than let it keep retrying. Must be set
-    // before spawn_tray_icon() below, which is what starts GTK.
+    // before spawn_tray_icon() below, which is what starts GTK. Linux-only:
+    // there's no GTK/libcanberra on the other platforms.
     // SAFETY: set before spawn_tray_icon() starts the GTK thread that reads it
     // (libcanberra probes this var when GTK first initializes); no other
     // thread reads or writes env vars concurrently at this point.
-    unsafe { std::env::set_var("CANBERRA_DRIVER", "null") };
+    #[cfg(target_os = "linux")]
+    unsafe {
+        std::env::set_var("CANBERRA_DRIVER", "null")
+    };
 
     // ── eframe (main thread) ──────────────────────────────────────────────────
+    // Linux builds the tray icon here, eagerly, since GTK drives its own
+    // independent event-loop thread that can start at any time. Windows/
+    // macOS instead build it lazily on `DeelipApp`'s first real frame --
+    // see `deelip_ui`'s `frame.rs::init_lazy_tray`/`tray::spawn_tray_icon`
+    // doc comments for why -- so `tray` just starts `None` here and
+    // `DeelipApp::new` below populates it later on those platforms.
+    #[cfg(target_os = "linux")]
     let tray = match deelip_ui::tray::spawn_tray_icon() {
         Ok((tray_ids, badge_tx)) => {
             let quit_state = deelip_ui::tray::QuitState {
@@ -193,6 +204,8 @@ fn main() -> anyhow::Result<()> {
             None
         }
     };
+    #[cfg(not(target_os = "linux"))]
+    let tray = None;
 
     // ── Force X11/XWayland for the main window only ───────────────────────────
     // winit's native Wayland backend has no protocol-level way for a client to
@@ -205,9 +218,13 @@ fn main() -> anyhow::Result<()> {
     // returns (which blocks until its GTK thread has already called
     // gtk::init()) so the tray keeps using native Wayland — GTK's own
     // event dispatch for our menu broke when this ran before gtk::init().
+    // Linux-only: Windows/macOS have no Wayland/X11 distinction to force.
     // SAFETY: no other thread reads or writes WAYLAND_DISPLAY -- winit's window
     // creation (which reads it) happens later, on this same thread.
-    unsafe { std::env::remove_var("WAYLAND_DISPLAY") };
+    #[cfg(target_os = "linux")]
+    unsafe {
+        std::env::remove_var("WAYLAND_DISPLAY")
+    };
 
     let rt_handle = rt.handle().clone();
     // `DeelipApp` is deliberately !Send (transitively holds a cpal::Stream)

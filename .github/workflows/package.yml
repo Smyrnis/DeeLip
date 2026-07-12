@@ -1,11 +1,20 @@
 name: Package
 
-# Builds Linux distributables and, on a version tag, attaches them to a
-# GitHub Release:
-#   - .deb   (Debian / Ubuntu and derivatives)
-#   - .rpm   (Fedora / RHEL / openSUSE and derivatives)
+# Builds distributables for Linux, Windows, and macOS, and on a version tag,
+# attaches them to a GitHub Release:
+#   - .deb      (Debian / Ubuntu and derivatives)
+#   - .rpm      (Fedora / RHEL / openSUSE and derivatives)
 #   - .AppImage (portable, runs on most distros without installing anything)
 #   - .tar.gz   (plain binary + desktop file + icon, for anything else)
+#   - .msi      (Windows installer, via cargo-wix)
+#   - .dmg      (macOS disk image containing DeeLip.app, via cargo-bundle --
+#     not code-signed/notarized yet, so Gatekeeper blocks the first launch)
+#
+# The Windows and macOS jobs are newer than the Linux one and haven't had a
+# real Windows/macOS machine available to verify against -- see each job's
+# own comments for specific, disclosed risk areas (audiopus_sys/Opus needing
+# autotools that isn't part of a default runner image; the tray icon's
+# lazy-first-frame construction in crates/ui/src/platform/tray.rs).
 on:
   push:
     tags:
@@ -123,6 +132,149 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: deelip-linux-packages
+          path: dist/*
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+
+  package-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # audiopus_sys (Opus) builds itself from source via autotools
+      # (autoreconf/autogen.sh) rather than cmake in the version this
+      # workspace is pinned to -- not part of a default windows-latest
+      # image, MSYS2 provides it. `path-type: inherit` puts its tools on
+      # PATH for every later step, not just ones run through an msys2 shell.
+      # UNVERIFIED end-to-end -- no Windows runner was available to confirm
+      # the full workspace actually builds cleanly here; this is a targeted
+      # mitigation for the one build-from-source dependency found to need
+      # tooling a default runner doesn't have, not a guarantee nothing else
+      # in the dependency graph needs something similar.
+      - name: Install MSYS2 (autotools for audiopus_sys/Opus)
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            autoconf
+            automake
+            libtool
+            make
+            mingw-w64-x86_64-toolchain
+          path-type: inherit
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-binstall
+        uses: cargo-bins/cargo-binstall@main
+
+      - name: Install cargo-wix
+        shell: bash
+        run: cargo binstall --no-confirm cargo-wix
+        # WiX Toolset itself needs no separate install step -- windows-latest
+        # already ships the Legacy v3.14.1 variant cargo-wix expects.
+
+      - name: Determine version
+        id: version
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=$(grep -m1 '^version' Cargo.toml | cut -d '"' -f2)" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build release binary
+        run: cargo build --release --locked -p deelip
+
+      - name: Build MSI installer
+        shell: bash
+        run: cargo wix -p deelip --nocapture --no-build --target-bin-dir target/release
+
+      - name: Collect artifacts
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp target/wix/*.msi "dist/deelip-${{ steps.version.outputs.version }}-x86_64.msi"
+
+      - name: Checksum artifacts
+        shell: bash
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deelip-windows-package
+          path: dist/*
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+
+  package-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same rationale as the Windows job's MSYS2 step -- audiopus_sys
+      # builds Opus via autotools, which isn't guaranteed present on a
+      # default macos-latest image the way it is on GitHub's Ubuntu images.
+      # Cheap no-op if Homebrew already has current versions.
+      - name: Install autotools (for audiopus_sys/Opus)
+        run: brew install autoconf automake libtool
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-binstall
+        uses: cargo-bins/cargo-binstall@main
+
+      - name: Install cargo-bundle
+        run: cargo binstall --no-confirm cargo-bundle
+
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=$(grep -m1 '^version' Cargo.toml | cut -d '"' -f2)" >> "$GITHUB_OUTPUT"
+          fi
+
+      # `--format dmg` builds the .app bundle first, then wraps it in a DMG
+      # -- one command produces both (see Cargo.toml's
+      # `[package.metadata.bundle]` section for the .app's own metadata).
+      - name: Build .app and .dmg
+        run: cargo bundle -p deelip --release --format dmg
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p dist
+          cp target/release/bundle/osx/*.dmg "dist/deelip-${{ steps.version.outputs.version }}-x86_64.dmg"
+
+      - name: Checksum artifacts
+        run: |
+          cd dist
+          shasum -a 256 * > SHA256SUMS.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deelip-macos-package
           path: dist/*
 
       - name: Create GitHub Release

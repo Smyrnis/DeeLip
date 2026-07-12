@@ -1,9 +1,9 @@
 /**
- * DeeLip docs theme — a modern take on MicroSIP's website: white/near-white
- * nav bar, charcoal body text, plain blue underlined links, utilitarian and
- * content-first — with contemporary spacing, soft shadows, and motion layered
- * on top. No custom components — CSS-variable overrides plus targeted
- * selectors against VitePress's stock default-theme markup.
+ * DeeLip docs theme — a plain, utilitarian look: white/near-white nav bar,
+ * charcoal body text, plain blue underlined links, content-first — with
+ * contemporary spacing, soft shadows, and motion layered on top. No custom
+ * components — CSS-variable overrides plus targeted selectors against
+ * VitePress's stock default-theme markup.
  */
 
 :root {
@@ -31,7 +31,7 @@ body {
 }
 
 /* ---------------------------------------------------------------------- */
-/* Top bar — flat, white, underlined text links (MicroSIP-style)          */
+/* Top bar — flat, white, underlined text links                           */
 /* ---------------------------------------------------------------------- */
 
 .VPNavBar {
@@ -127,7 +127,7 @@ body {
 }
 
 /* ---------------------------------------------------------------------- */
-/* Homepage info band — a modern, horizontal stand-in for MicroSIP's       */
+/* Homepage info band — a horizontal row standing in for a traditional     */
 /* right sidebar (Platforms / Get Involved / Project)                      */
 /* ---------------------------------------------------------------------- */
 

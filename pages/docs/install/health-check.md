@@ -1,5 +1,8 @@
 # Health check
 
+> This page is Linux-only — there's no equivalent script for the Windows/macOS installers yet.
+> Reinstalling from the `.msi`/`.dmg` is the equivalent repair path on those platforms.
+
 `scripts/health-check.sh` verifies the pieces [`install.sh`](/docs/install/install) may have
 placed are still intact, and — with `--fix` — repairs whichever ones aren't. Useful when a user
 (or some cleanup tool) has deleted a file DeeLip depends on existing outside its own control.

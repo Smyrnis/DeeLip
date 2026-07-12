@@ -187,7 +187,7 @@ lost across a transport replacement (unavoidable -- there's no live dialog state
 carry across a torn-down connection), but the account itself now recovers instead of
 staying dead until the whole process restarts.
 
-**`SipAccount::local_account`** (MicroSIP's "Local Account"/serverless mode,
+**`SipAccount::local_account`** (a serverless, direct-IP calling mode,
 `client.rs::connect_local`, `outgoing.rs::resolve_local_call_target`): binds a plain
 UDP listener with no registrar to resolve or connect to. `server_addr` is a
 never-sent-to placeholder; outgoing calls resolve their real destination straight from

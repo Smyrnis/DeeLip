@@ -81,10 +81,10 @@ impl DeelipApp {
 /// Number entry for the Transfer/Attended sub-panels -- a text field (still
 /// directly editable, for a full `sip:user@host` target) plus the same
 /// on-screen dial pad the idle Dialer and in-call DTMF panel use, so picking
-/// a transfer target doesn't require a physical keyboard (matches MicroSIP's
-/// own transfer keypad). Shared by both panels since they're otherwise
-/// identical field+keypad+backspace/clear blocks, just feeding a different
-/// `String` and followed by a different action button.
+/// a transfer target doesn't require a physical keyboard. Shared by both
+/// panels since they're otherwise identical field+keypad+backspace/clear
+/// blocks, just feeding a different `String` and followed by a different
+/// action button.
 pub(crate) fn transfer_target_editor(ui: &mut Ui, palette: Palette, target: &mut String) {
     text_edit_scope(ui, &palette, |ui| {
         ui.add(

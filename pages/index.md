@@ -3,8 +3,8 @@ layout: home
 
 hero:
   name: DeeLip
-  text: A lightweight SIP softphone for Linux
-  tagline: MicroSIP-inspired. Encrypted calls, video, and a clean native desktop UI — no Electron, no bloat.
+  text: A lightweight SIP softphone for Linux, Windows, and macOS
+  tagline: Encrypted calls, video, and a clean native desktop UI — no Electron, no bloat.
   image:
     src: /icon.png
     alt: DeeLip
@@ -50,9 +50,10 @@ features:
   <div class="info-col">
     <h4>Platforms</h4>
     <ul>
-      <li><a href="/downloads/">Linux — .deb / .rpm</a></li>
-      <li><a href="/downloads/">Portable .tar.gz (x86_64)</a></li>
-      <li><a href="/faq/">No mobile, no Windows/macOS build</a></li>
+      <li><a href="/downloads/">Linux — .deb / .rpm / .tar.gz</a></li>
+      <li><a href="/downloads/">Windows — .msi</a></li>
+      <li><a href="/downloads/">macOS — .dmg</a></li>
+      <li><a href="/faq/">No mobile app</a></li>
     </ul>
   </div>
   <div class="info-col">

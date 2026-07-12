@@ -1,3 +1,5 @@
+#[cfg(not(target_os = "linux"))]
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use rand::Rng;
@@ -6,6 +8,7 @@ use crate::app::{DeelipApp, SharedApp};
 use crate::platform::hotkeys::HotkeyAction;
 use crate::platform::notify;
 use crate::platform::ringtone::{RingKind, Ringtone};
+use crate::platform::tray;
 use crate::strings::{t, tf};
 use crate::theme;
 
@@ -123,6 +126,12 @@ impl DeelipApp {
             return;
         };
 
+        // No-op on Linux (the GTK thread's own callback handles badge
+        // updates there); on Windows/macOS this is the only place the tray
+        // icon's badge actually gets redrawn, since there's no separate
+        // main loop to attach a callback to -- see its doc comment.
+        tray::poll_native_tray_badge();
+
         // Only rebuild when the set of live/pending calls actually changed
         // since last frame -- a borrow-only comparison, so the common
         // (unchanged) case costs just a cheap scan, not a full rebuild.
@@ -159,6 +168,44 @@ impl DeelipApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
         }
     }
+
+    /// Build the tray icon lazily on the app's first real frame -- only
+    /// does anything on Windows/macOS. Per `tray_icon`'s own docs, macOS
+    /// strictly requires the tray to be created once its event loop has
+    /// already started (the earliest safe point is winit's
+    /// `StartCause::Init`), and Windows needs it built on whichever
+    /// thread's event loop will pump its messages; by this app's first
+    /// frame, eframe's winit loop is definitely already running on this
+    /// thread, satisfying both. Linux instead builds the tray eagerly in
+    /// `main.rs`, before `eframe::run_native` even starts, since GTK drives
+    /// its own independent event loop on a dedicated thread -- so
+    /// `self.tray` is already `Some`/`None` there by the time this runs,
+    /// and this is a no-op.
+    ///
+    /// UNVERIFIED on real Windows/macOS hardware -- this sandbox is
+    /// Linux-only. See `tray::spawn_tray_icon`'s doc comment for the full
+    /// rationale.
+    #[cfg(not(target_os = "linux"))]
+    fn init_lazy_tray(&mut self) {
+        if self.tray.is_some() {
+            return;
+        }
+        match tray::spawn_tray_icon() {
+            Ok((tray_ids, badge_tx)) => {
+                let quit_state = tray::QuitState {
+                    calls: Arc::new(Mutex::new(Vec::new())),
+                    pending: Arc::new(Mutex::new(None)),
+                    rt: self.rt.clone(),
+                };
+                tray::spawn_tray_event_handlers(tray_ids, self.ctx_slot.clone(), quit_state.clone());
+                self.tray = Some((self.ctx_slot.clone(), quit_state, badge_tx));
+            }
+            Err(e) => tracing::warn!("Tray icon failed to start ({e}), continuing without it"),
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn init_lazy_tray(&mut self) {}
 
     /// Dispatch any global-hotkey presses since the last frame. No-op if
     /// global hotkeys are disabled or failed to register (`self.hotkeys`
@@ -243,13 +290,20 @@ impl DeelipApp {
         // `docs/crates/ui.md`'s "Repaint plumbing" section.
         *self.ctx_slot.lock().unwrap() = Some(ctx.clone());
 
-        if std::mem::take(&mut self.first_frame) && self.config.start_minimized {
-            // Must run on the first frame, not before -- eframe force-shows
-            // the window right after this frame renders regardless of any
-            // NativeOptions visibility hint, so queuing this command here
-            // (applied after that forced show, per eframe's own event-loop
-            // ordering) is what actually makes it stick. See main.rs.
-            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        if std::mem::take(&mut self.first_frame) {
+            // Windows/macOS build the tray icon here rather than in
+            // `main.rs` like Linux does -- see `init_lazy_tray`'s doc
+            // comment for why.
+            self.init_lazy_tray();
+
+            if self.config.start_minimized {
+                // Must run on the first frame, not before -- eframe force-shows
+                // the window right after this frame renders regardless of any
+                // NativeOptions visibility hint, so queuing this command here
+                // (applied after that forced show, per eframe's own event-loop
+                // ordering) is what actually makes it stick. See main.rs.
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            }
         }
 
         self.process_sip_events();
@@ -303,11 +357,11 @@ impl DeelipApp {
                     crate::app::Tab::Directory,
                     format!("{}  {}", egui_phosphor::regular::BUILDINGS, t("nav.directory_tab")),
                 );
-                // Settings lives in its own modal dialog (MicroSIP-style),
-                // not a tab -- opened via this gear button, right-aligned
-                // like MicroSIP's own tab-row "more" affordance. Messages
-                // has no tab-bar entry point at all -- see
-                // `messages_window_open`'s doc comment.
+                // Settings lives in its own modal dialog, not a tab --
+                // opened via this gear button, right-aligned as the
+                // tab-row's "more" affordance. Messages has no tab-bar
+                // entry point at all -- see `messages_window_open`'s doc
+                // comment.
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button(egui_phosphor::regular::GEAR).on_hover_text(t("settings.window_title")).clicked() {
                         self.settings_open = true;
@@ -321,12 +375,11 @@ impl DeelipApp {
             self.sync_tray_badge();
         }
 
-        // ── Status bar (bottom, MicroSIP-style) ───────────────────────────────
+        // ── Status bar (bottom) ────────────────────────────────────────────────
         // One row: connection dot + status text on the left; voicemail badge,
         // DND toggle, and the selected account's label on the right, in that
         // left-to-right order (added right-to-left so the account label lands
-        // pinned to the far right edge, mirroring MicroSIP's "● Online ...
-        // extension" bar).
+        // pinned to the far right edge, e.g. "● Online ... extension").
         let on_hold = self.focused_call.is_none() && !self.calls.is_empty();
         let new_voicemail: u32 =
             self.accounts.iter().filter_map(|a| a.mwi.as_ref()).filter(|m| m.waiting).map(|m| m.new_messages).sum();

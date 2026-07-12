@@ -1,5 +1,8 @@
 # Uninstall
 
+> On Windows, use "Add or remove programs" like any other MSI install. On macOS, drag
+> `DeeLip.app` out of `Applications` to the Trash. This page is Linux-only.
+
 `scripts/uninstall.sh` reverses whichever path [`install.sh`](/docs/install/install) took —
 `apt-get`/`dnf`/`yum`/`zypper remove` for a package-manager install, or deleting the specific
 files the `.tar.gz` fallback placed.

@@ -74,8 +74,8 @@ impl DeelipApp {
         self.edit_account_idx = self.edit_account_idx.min(self.config.accounts.len() - 1);
         let palette = self.palette;
 
-        // MicroSIP-style tab strip -- one section visible at a time, sized
-        // to fit without scrolling, instead of the previous single long
+        // A tab strip -- one section visible at a time, sized to fit
+        // without scrolling, instead of the previous single long
         // `ScrollArea` stacking all 12 sections in one column.
         ui.add_space(6.0);
         ui.horizontal_wrapped(|ui| {

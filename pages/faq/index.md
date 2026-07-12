@@ -7,20 +7,23 @@ pageClass: faq-page
 
 ### What is DeeLip?
 
-A lightweight SIP softphone for Linux, inspired by [MicroSIP](https://www.microsip.org/) — full
-SIP calling, ZRTP end-to-end encrypted audio/video, wide codec support, real NAT traversal, and
-a clean native desktop UI, without Electron.
+A lightweight SIP softphone for Linux, Windows, and macOS — full SIP calling, ZRTP end-to-end
+encrypted audio/video, wide codec support, real NAT traversal, and a clean native desktop UI,
+without Electron.
 
 ### Is it free?
 
 Yes — DeeLip is open source. Get it from [Downloads](/downloads/) or build it yourself from the
 [source on GitHub](https://github.com/Smyrnis/DeeLip).
 
-### Which distros and architectures are supported?
+### Which distros/platforms and architectures are supported?
 
-Prebuilt packages cover Debian/Ubuntu (`.deb`), Fedora/RHEL (`.rpm`), and openSUSE (`.rpm`), plus
-a portable `.tar.gz` for anything else (Arch, Alpine, ...). Only `x86_64` builds are published —
-`scripts/install.sh` exits with an error on other architectures. See [Downloads](/downloads/).
+On Linux, prebuilt packages cover Debian/Ubuntu (`.deb`), Fedora/RHEL (`.rpm`), and openSUSE
+(`.rpm`), plus a portable `.tar.gz` for anything else (Arch, Alpine, ...). Windows (`.msi`) and
+macOS (`.dmg`) installers are also published, though they're newer and less battle-tested than
+the Linux packages. Only `x86_64` builds are published for any platform today —
+`scripts/install.sh` exits with an error on other architectures on Linux. See
+[Downloads](/downloads/).
 
 ### Is there a `curl | bash` one-liner?
 
@@ -39,10 +42,11 @@ you'd rather have a local checkout.
 ### Where does DeeLip store my data?
 
 Everything — accounts, contacts, call history, recordings, logs, crash reports — lives in one
-SQLite database under `~/.config/deelip/`. Every table is created with
-`CREATE TABLE IF NOT EXISTS` on load, so that directory is self-healing; uninstalling normally
-leaves it untouched (see [Uninstall](/docs/install/uninstall)'s `--purge` flag if you want it
-gone too).
+SQLite database under your OS's standard config directory plus a `deelip` folder: `~/.config/deelip/`
+on Linux, `%APPDATA%\deelip\` on Windows, `~/Library/Application Support/deelip/` on macOS. Every
+table is created with `CREATE TABLE IF NOT EXISTS` on load, so that directory is self-healing;
+uninstalling normally leaves it untouched (see [Uninstall](/docs/install/uninstall)'s `--purge`
+flag if you want it gone too, on Linux).
 
 ### Does it work behind NAT / on a real-world network, not just a LAN?
 
