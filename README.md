@@ -1,16 +1,30 @@
-# DeeLip
-Softphone
+<p align="center">
+  <img src="assets/icon.png" width="200" alt="DeeLip logo">
+</p>
 
-## Install
+<h1 align="center">DeeLip</h1>
 
-```sh
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/Smyrnis/DeeLip/main/scripts/install.sh)"
-```
+<p align="center">
+  A lightweight SIP softphone for Linux, Windows, and macOS — encrypted calls, video,<br>
+  and a clean native desktop UI. No Electron, no bloat.
+</p>
 
-Detects your distro's package manager (`apt`/`dnf`/`yum`/`zypper`) and installs the matching
-prebuilt package from GitHub Releases, or falls back to a portable `.tar.gz` for anything else.
-See the [docs](https://smyrnis.github.io/DeeLip/) for flags, uninstalling, and everything else.
+## Features
 
-On Windows or macOS, grab the `.msi`/`.dmg` from the
-[latest release](https://github.com/Smyrnis/DeeLip/releases/latest) instead — see
-[Downloads](https://smyrnis.github.io/DeeLip/downloads/) for details.
+- Full SIP calling — registration, hold/resume, attended transfer, 3-way local conferencing
+- ZRTP end-to-end encryption (RFC 6189, implemented from scratch) alongside SDES-SRTP
+- Video calling, negotiated additively over the same encrypted RTP session as audio
+- Wide codec support — G.711, G.722, G.729, GSM, iLBC, Opus — with acoustic echo cancellation and AGC
+- Real NAT traversal — STUN, TURN relay fallback, and full ICE
+- SIP presence, voicemail (MWI) notifications, and threaded SIP MESSAGE chat
+- Do-not-disturb, call forwarding, a configurable dial plan, and LDAP directory search
+- Self-updating, with a SHA-256-verified download before it swaps in
+
+## Get DeeLip
+
+See **[smyrnis.github.io/DeeLip](https://smyrnis.github.io/DeeLip/)** for downloads, install
+instructions, and full docs.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
