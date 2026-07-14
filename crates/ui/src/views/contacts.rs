@@ -131,11 +131,22 @@ impl DeelipApp {
         if let Some(idx) = delete_idx {
             let removed = self.contacts.contacts.remove(idx);
             self.unsubscribe_contact_presence(&removed);
-            if self.editing_contact_idx == Some(idx) {
-                self.editing_contact_idx = None;
-                self.new_contact = Contact::default();
-                self.contact_dialog_open = false;
-            }
+            // Deleting the contact currently being edited resets the form
+            // (unchanged); deleting a lower-indexed contact instead must
+            // shift the still-open edit target down, matching how
+            // `remove_call` already keeps `focused_call` correct after a
+            // `Vec` shift -- without this, editing contact N then deleting
+            // a different, lower-indexed contact left `editing_contact_idx`
+            // silently pointing at the wrong contact.
+            self.editing_contact_idx = match self.editing_contact_idx {
+                Some(i) if i == idx => {
+                    self.new_contact = Contact::default();
+                    self.contact_dialog_open = false;
+                    None
+                }
+                Some(i) if i > idx => Some(i - 1),
+                other => other,
+            };
             let _ = self.contacts.save(&self.db);
         }
 
