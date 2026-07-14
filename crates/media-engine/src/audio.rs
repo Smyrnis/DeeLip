@@ -10,8 +10,18 @@ use tokio::sync::mpsc;
 pub const SAMPLE_RATE: u32 = 8_000;
 pub const FRAME_SAMPLES: usize = 160; // 20ms at 8000 Hz
 
-/// Captured PCM frames from the microphone.
-pub type CaptureRx = mpsc::UnboundedReceiver<Vec<i16>>;
+/// Captured PCM frames from the microphone. Bounded (unlike the DTMF/ZRTP
+/// channels elsewhere in this crate, which stay unbounded since they're
+/// fed at human/protocol-handshake rates that can never realistically fill
+/// one) -- this one is fed by the realtime capture callback every 20ms
+/// regardless of whether the consumer (the send task, which can stall on a
+/// congested/blocked network `send_to`) is keeping up. `CAPTURE_QUEUE_FRAMES`
+/// matches the jitter/playback buffers' own 1s cap elsewhere in this crate.
+/// The realtime callback uses `try_send`, so a full queue just drops the
+/// newest frame (an audio glitch under sustained congestion) instead of
+/// growing without bound.
+const CAPTURE_QUEUE_FRAMES: usize = 50; // 1s at 20ms/frame
+pub type CaptureRx = mpsc::Receiver<Vec<i16>>;
 /// PCM frames to be played back.
 pub type PlaybackTx = Arc<Mutex<VecDeque<i16>>>;
 /// Far-end reference: a copy of every sample actually written to the output
@@ -57,7 +67,7 @@ pub fn open_streams(
         StreamConfig { channels: 1, sample_rate: SampleRate(SAMPLE_RATE), buffer_size: cpal::BufferSize::Default };
 
     // ── Capture ───────────────────────────────────────────────────────────────
-    let (cap_tx, cap_rx) = mpsc::unbounded_channel::<Vec<i16>>();
+    let (cap_tx, cap_rx) = mpsc::channel::<Vec<i16>>(CAPTURE_QUEUE_FRAMES);
 
     let input_stream = match in_dev.default_input_config()?.sample_format() {
         SampleFormat::I16 => build_input_i16(&in_dev, &config, cap_tx)?,
@@ -130,7 +140,7 @@ fn push_frame_to_echo_ref(echo_ref: &Option<EchoRefBuf>, samples: &[i16]) {
 // ── I16 paths ─────────────────────────────────────────────────────────────────
 
 fn build_input_i16(
-    device: &cpal::Device, config: &StreamConfig, tx: mpsc::UnboundedSender<Vec<i16>>,
+    device: &cpal::Device, config: &StreamConfig, tx: mpsc::Sender<Vec<i16>>,
 ) -> anyhow::Result<cpal::Stream> {
     let mut buf: Vec<i16> = Vec::with_capacity(FRAME_SAMPLES);
     let stream = device
@@ -140,8 +150,17 @@ fn build_input_i16(
                 for &s in data {
                     buf.push(s);
                     if buf.len() >= FRAME_SAMPLES {
-                        let _ = tx.send(buf.clone());
-                        buf.clear();
+                        // `mem::replace` moves the full frame into the
+                        // channel with no copy, leaving a fresh
+                        // pre-allocated Vec in `buf` for the next frame --
+                        // was `buf.clone()` + `buf.clear()`, a real
+                        // allocation+memcpy on this realtime thread.
+                        // `try_send` (non-blocking, unlike the async `send`
+                        // a bounded channel would otherwise require here)
+                        // just drops this frame if the send task has fallen
+                        // behind -- see `CaptureRx`'s doc comment.
+                        let frame = std::mem::replace(&mut buf, Vec::with_capacity(FRAME_SAMPLES));
+                        let _ = tx.try_send(frame);
                     }
                 }
             },
@@ -178,7 +197,7 @@ fn build_output_i16(
 // ── F32 paths (convert to/from i16) ──────────────────────────────────────────
 
 fn build_input_f32(
-    device: &cpal::Device, config: &StreamConfig, tx: mpsc::UnboundedSender<Vec<i16>>,
+    device: &cpal::Device, config: &StreamConfig, tx: mpsc::Sender<Vec<i16>>,
 ) -> anyhow::Result<cpal::Stream> {
     let mut buf: Vec<i16> = Vec::with_capacity(FRAME_SAMPLES);
     let stream = device
@@ -188,8 +207,9 @@ fn build_input_f32(
                 for &s in data {
                     buf.push((s * i16::MAX as f32) as i16);
                     if buf.len() >= FRAME_SAMPLES {
-                        let _ = tx.send(buf.clone());
-                        buf.clear();
+                        // See build_input_i16's matching comment.
+                        let frame = std::mem::replace(&mut buf, Vec::with_capacity(FRAME_SAMPLES));
+                        let _ = tx.try_send(frame);
                     }
                 }
             },
