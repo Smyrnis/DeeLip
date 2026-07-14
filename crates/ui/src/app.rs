@@ -274,6 +274,17 @@ pub struct DeelipApp {
     // Contacts
     pub(crate) contacts: ContactBook,
     pub(crate) contact_search: String,
+    /// Cache of `contact_search`/`contacts.contacts.len()` as last used to
+    /// compute `contact_filtered` -- same "recompute only when actually
+    /// stale" idiom as `history_filter_key`/`history_filtered`. Without
+    /// this, `ContactBook::search` re-lowercased every contact's
+    /// name+URI on every single frame the Contacts tab was open, even
+    /// while idle. An in-place edit (same length) explicitly invalidates
+    /// this in `finish_contact_dialog`, since the length alone can't
+    /// detect that case.
+    pub(crate) contact_filter_key: Option<(String, usize)>,
+    /// Indices into `contacts.contacts` matching the current search.
+    pub(crate) contact_filtered: Vec<usize>,
     pub(crate) new_contact: Contact,
     /// Index into `contacts.contacts` currently loaded into `new_contact`
     /// for editing — `None` means the form is in "Add" mode.
@@ -526,6 +537,8 @@ impl DeelipApp {
             dialplan_replacement_input: String::new(),
             contacts,
             contact_search: String::new(),
+            contact_filter_key: None,
+            contact_filtered: Vec::new(),
             new_contact: Contact::default(),
             editing_contact_idx: None,
             contact_dialog_open: false,

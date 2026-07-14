@@ -27,12 +27,24 @@ impl DeelipApp {
         let mut delete_idx: Option<usize> = None;
         let mut default_action_target: Option<usize> = None;
 
-        // Contact list
+        // Contact list -- recompute the filtered index list only when the
+        // search text or the contact count itself has actually changed
+        // (see `contact_filter_key`'s doc comment); an in-place edit
+        // (same length) is handled by an explicit invalidation in
+        // `finish_contact_dialog` instead, mirroring `history_filter_key`'s
+        // own edit-invalidation case.
+        let key = (self.contact_search.to_lowercase(), self.contacts.contacts.len());
+        if self.contact_filter_key.as_ref() != Some(&key) {
+            self.contact_filtered = self.contacts.search(&self.contact_search).into_iter().map(|(i, _)| i).collect();
+            self.contact_filter_key = Some(key);
+        }
         let results: Vec<(usize, String, String, bool)> = self
-            .contacts
-            .search(&self.contact_search)
-            .into_iter()
-            .map(|(i, c)| (i, c.name.clone(), c.sip_uri.clone(), c.watch_presence))
+            .contact_filtered
+            .iter()
+            .map(|&i| {
+                let c = &self.contacts.contacts[i];
+                (i, c.name.clone(), c.sip_uri.clone(), c.watch_presence)
+            })
             .collect();
 
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
@@ -289,6 +301,9 @@ impl DeelipApp {
             if let Some(idx) = self.editing_contact_idx.take() {
                 let old = self.contacts.contacts[idx].clone();
                 self.contacts.contacts[idx] = c.clone();
+                // Same length as before -- `contact_filter_key` can't
+                // detect this edit on its own, so force a recompute.
+                self.contact_filter_key = None;
                 self.unsubscribe_contact_presence(&old);
                 self.subscribe_contact_presence(&c);
             } else {
