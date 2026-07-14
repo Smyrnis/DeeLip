@@ -4,9 +4,17 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Context;
+use tokio::time::timeout;
 use webrtc_util::Conn;
+
+/// Bounds the TURN listener startup and Allocate request below -- matches
+/// STUN's existing 5s timeout (`stun.rs`). Without this, an unreachable or
+/// silently-dropping TURN server left a call stuck in "Calling…"/"Ringing"
+/// indefinitely with no way to cancel.
+const RELAY_ALLOC_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// A live TURN allocation. Keeps the `Client` alive for the allocation's
 /// lifetime (it manages the allocation refresh internally); dropping this
@@ -39,10 +47,17 @@ pub async fn allocate_relay(turn_server: &str, username: &str, password: &str) -
     };
 
     let client = turn::client::Client::new(config).await.context("Creating TURN client")?;
-    client.listen().await.context("Starting TURN client listener")?;
+    timeout(RELAY_ALLOC_TIMEOUT, client.listen())
+        .await
+        .context("Starting TURN client listener timed out")?
+        .context("Starting TURN client listener")?;
 
-    let relay_conn: Arc<dyn Conn + Send + Sync> =
-        Arc::new(client.allocate().await.context("TURN Allocate request failed")?);
+    let relay_conn: Arc<dyn Conn + Send + Sync> = Arc::new(
+        timeout(RELAY_ALLOC_TIMEOUT, client.allocate())
+            .await
+            .context("TURN Allocate request timed out")?
+            .context("TURN Allocate request failed")?,
+    );
     let relayed_addr = relay_conn.local_addr().context("Reading relayed address")?;
 
     tracing::info!("TURN allocated relay address {relayed_addr}");
