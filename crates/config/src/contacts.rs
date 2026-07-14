@@ -44,17 +44,17 @@ impl ContactBook {
     }
 
     pub fn save(&self, db: &Db) -> anyhow::Result<()> {
-        db.conn.execute("DELETE FROM contacts", []).context("Clearing contacts table")?;
-        for c in &self.contacts {
-            db.conn
-                .execute(
+        db.replace_all_in_transaction("contacts", |tx| {
+            for c in &self.contacts {
+                tx.execute(
                     "INSERT INTO contacts (name, sip_uri, watch_presence, presence_account) \
                  VALUES (?1, ?2, ?3, ?4)",
                     rusqlite::params![c.name, c.sip_uri, bool_to_sql(c.watch_presence), c.presence_account],
                 )
                 .with_context(|| format!("Inserting contact {}", c.name))?;
-        }
-        Ok(())
+            }
+            Ok(())
+        })
     }
 
     /// The saved contact whose `sip_uri` matches `uri`, if any -- used to

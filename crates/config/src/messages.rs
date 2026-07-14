@@ -39,19 +39,19 @@ impl MessageLog {
     }
 
     pub fn save(&self, db: &Db) -> anyhow::Result<()> {
-        db.conn.execute("DELETE FROM messages", []).context("Clearing messages table")?;
-        // `messages` is newest-first (see `push`); capped at 200 there too,
-        // so no separate truncation needed here.
-        for m in &self.messages {
-            db.conn
-                .execute(
+        db.replace_all_in_transaction("messages", |tx| {
+            // `messages` is newest-first (see `push`); capped at 200 there
+            // too, so no separate truncation needed here.
+            for m in &self.messages {
+                tx.execute(
                     "INSERT INTO messages (peer_uri, direction, body, timestamp) \
                  VALUES (?1, ?2, ?3, ?4)",
                     rusqlite::params![m.peer_uri, m.direction.to_str(), m.body, m.timestamp],
                 )
                 .context("Inserting message")?;
-        }
-        Ok(())
+            }
+            Ok(())
+        })
     }
 
     /// Prepend a message, keeping at most 200 entries.

@@ -225,6 +225,26 @@ impl Db {
             None => self.delete_setting(key),
         }
     }
+
+    /// Shared by `CallHistory::save`/`ContactBook::save`/`MessageLog::save`:
+    /// wraps `DELETE FROM <table>` + `insert_all`'s row-by-row inserts in
+    /// one transaction, committed once at the end. Each of those three used
+    /// to run its own delete-then-reinsert as separate autocommit
+    /// statements -- up to ~200 individual synchronous disk writes (a full
+    /// fsync each, by default) per save, all on the render thread. `table`
+    /// is always a hardcoded literal from one of the three call sites,
+    /// never user input, so interpolating it into the DELETE is safe here.
+    /// Uses `unchecked_transaction` (not the usual `&mut self`-taking
+    /// `transaction()`) since every `save()` caller only ever holds `&Db`.
+    pub(crate) fn replace_all_in_transaction(
+        &self, table: &str, insert_all: impl FnOnce(&rusqlite::Transaction) -> anyhow::Result<()>,
+    ) -> anyhow::Result<()> {
+        let tx = self.conn.unchecked_transaction().with_context(|| format!("Starting transaction for {table}"))?;
+        tx.execute(&format!("DELETE FROM {table}"), []).with_context(|| format!("Clearing {table} table"))?;
+        insert_all(&tx)?;
+        tx.commit().with_context(|| format!("Committing {table} transaction"))?;
+        Ok(())
+    }
 }
 
 /// Returns `~/.config/deelip/deelip.db`.
