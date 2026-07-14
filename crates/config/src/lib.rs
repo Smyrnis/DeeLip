@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::Context;
+use serde::{Deserialize, Serialize};
 
 mod account;
 mod autostart;
@@ -18,8 +19,32 @@ pub use autostart::{is_autostart_enabled, set_autostart};
 pub use contacts::{Contact, ContactBook};
 pub use db::{Db, default_db_path};
 pub use dialplan::{DialPlanRule, apply_dial_plan};
-pub use history::{CallDirection, CallHistory, CallRecord, CallStatus};
-pub use messages::{Message, MessageDirection, MessageLog};
+pub use history::{CallHistory, CallRecord, CallStatus};
+pub use messages::{Message, MessageLog};
+
+/// Whether a call or message was placed by us or received from the other
+/// party -- shared by `CallRecord`/`Message`, which previously each
+/// defined their own structurally-identical `Inbound`/`Outbound` enum.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum Direction {
+    Inbound,
+    Outbound,
+}
+
+impl Direction {
+    pub(crate) fn to_str(self) -> &'static str {
+        match self {
+            Self::Inbound => "inbound",
+            Self::Outbound => "outbound",
+        }
+    }
+    pub(crate) fn from_str(s: &str) -> Self {
+        match s {
+            "outbound" => Self::Outbound,
+            _ => Self::Inbound,
+        }
+    }
+}
 
 fn deelip_dir() -> anyhow::Result<PathBuf> {
     let base = dirs::config_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine user config directory"))?;

@@ -728,9 +728,11 @@ impl MediaEngine {
         // ── Recv task (leg 1) ─────────────────────────────────────────────────
         let decoder = AudioDecoder::new(codec, "")?;
         let recv_clock_hz = clock_hz_for(codec);
-        let zrtp_recv_state = zrtp_runtime
-            .take()
-            .map(|runtime| ZrtpRecvState { runtime, encrypt_tx: zrtp_encrypt_tx, sas: zrtp_sas.clone() });
+        let zrtp_recv_state = zrtp_runtime.take().map(|runtime| ZrtpRecvState {
+            runtime,
+            encrypt_tx: zrtp_encrypt_tx,
+            sas: zrtp_sas.clone(),
+        });
 
         let recv_task = tokio::spawn(recv_loop(
             socket,

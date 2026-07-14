@@ -1,9 +1,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use deelip_config::{
-    AppConfig, CallDirection, CallHistory, CallStatus, Contact, ContactBook, Db, MessageLog, SipAccount,
-};
+use deelip_config::{AppConfig, CallHistory, CallStatus, Contact, ContactBook, Db, Direction, MessageLog, SipAccount};
 use deelip_media::MediaEngine;
 use deelip_sip::{CallMediaReady, MwiState, PresenceState, SipHandle};
 use tokio::runtime::Handle;
@@ -377,7 +375,7 @@ pub(crate) struct CallSlot {
     pub(crate) account: usize,
     pub(crate) call_id: String,
     pub(crate) remote_uri: String,
-    pub(crate) direction: CallDirection,
+    pub(crate) direction: Direction,
     pub(crate) start_time: u64,
     pub(crate) is_held: bool,
     /// Whether `start_media` should start this call's `MediaEngine` with

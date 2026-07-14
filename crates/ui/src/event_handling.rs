@@ -1,4 +1,4 @@
-use deelip_config::{CallDirection, CallRecord, CallStatus, Contact, Message, MessageDirection};
+use deelip_config::{CallRecord, CallStatus, Contact, Direction, Message};
 use deelip_sip::{PresenceState, SipEvent};
 
 use crate::app::{AccountSpawnMsg, AccountState, CallSlot, DeelipApp, PendingCall};
@@ -105,7 +105,7 @@ impl DeelipApp {
                         account,
                         call_id,
                         remote_uri: pending.remote_uri.clone(),
-                        direction: CallDirection::Inbound,
+                        direction: Direction::Inbound,
                         start_time: pending.start_time,
                         is_held: false,
                         recording_enabled: self.config.recording_enabled,
@@ -120,7 +120,7 @@ impl DeelipApp {
                         account,
                         call_id,
                         remote_uri: out.remote_uri.clone(),
-                        direction: CallDirection::Outbound,
+                        direction: Direction::Outbound,
                         start_time: out.start_time,
                         is_held: false,
                         recording_enabled: self.config.recording_enabled,
@@ -138,7 +138,7 @@ impl DeelipApp {
                 let caller = extract_user_part(&from);
                 if self.config.blocklist.iter().any(|entry| extract_user_part(entry) == caller) {
                     self.accounts[account].handle.reject_call(&call_id);
-                    self.record_history(from, CallDirection::Inbound, unix_now(), CallStatus::Rejected);
+                    self.record_history(from, Direction::Inbound, unix_now(), CallStatus::Rejected);
                     return;
                 }
                 let acc = &self.accounts[account].account;
@@ -151,7 +151,7 @@ impl DeelipApp {
                 if remote_answer_after.is_some() && acc.deny_incoming_control_button {
                     tracing::debug!(call_id, %from, "Remote auto-answer signal + Deny Incoming (Control Button) active, rejecting");
                     self.accounts[account].handle.reject_call(&call_id);
-                    self.record_history(from, CallDirection::Inbound, unix_now(), CallStatus::Rejected);
+                    self.record_history(from, Direction::Inbound, unix_now(), CallStatus::Rejected);
                     return;
                 }
                 let remote_auto_answer = remote_answer_after.is_some() && acc.auto_answer_control_button;
@@ -164,13 +164,13 @@ impl DeelipApp {
                 if dnd {
                     tracing::debug!(call_id, %from, "DND active, rejecting incoming call");
                     self.accounts[account].handle.reject_call(&call_id);
-                    self.record_history(from, CallDirection::Inbound, unix_now(), CallStatus::Rejected);
+                    self.record_history(from, Direction::Inbound, unix_now(), CallStatus::Rejected);
                     return;
                 }
                 if let Some(target) = forward_always {
                     let target = normalize_target(&target, &server);
                     self.accounts[account].handle.redirect_call(&call_id, target);
-                    self.record_history(from, CallDirection::Inbound, unix_now(), CallStatus::Missed);
+                    self.record_history(from, Direction::Inbound, unix_now(), CallStatus::Missed);
                     return;
                 }
                 let waiting = !self.calls.is_empty();
@@ -178,7 +178,7 @@ impl DeelipApp {
                     if let Some(target) = forward_on_busy {
                         let target = normalize_target(&target, &server);
                         self.accounts[account].handle.redirect_call(&call_id, target);
-                        self.record_history(from, CallDirection::Inbound, unix_now(), CallStatus::Missed);
+                        self.record_history(from, Direction::Inbound, unix_now(), CallStatus::Missed);
                         return;
                     }
                     // Single Call Mode: reject outright as a plain busy
@@ -187,7 +187,7 @@ impl DeelipApp {
                     // `forward_on_busy` of its own, which takes priority.
                     if self.config.single_call_mode && !remote_auto_answer {
                         self.accounts[account].handle.reject_call(&call_id);
-                        self.record_history(from, CallDirection::Inbound, unix_now(), CallStatus::Rejected);
+                        self.record_history(from, Direction::Inbound, unix_now(), CallStatus::Rejected);
                         return;
                     }
                 }
@@ -292,7 +292,7 @@ impl DeelipApp {
             SipEvent::MessageReceived { from, body } => {
                 self.messages.push(Message {
                     peer_uri: from.clone(),
-                    direction: MessageDirection::Inbound,
+                    direction: Direction::Inbound,
                     body: body.clone(),
                     timestamp: unix_now(),
                 });
@@ -384,7 +384,7 @@ impl DeelipApp {
     pub(crate) fn on_call_terminated(&mut self, call_id: &str, failure: Option<(u16, String)>) {
         if let Some(pending) = self.pending_call.take() {
             if pending.call_id == call_id {
-                self.record_history(pending.from, CallDirection::Inbound, pending.start_time, CallStatus::Missed);
+                self.record_history(pending.from, Direction::Inbound, pending.start_time, CallStatus::Missed);
                 self.refresh_call_status();
                 return;
             }
@@ -398,12 +398,7 @@ impl DeelipApp {
                 if let Some((code, reason)) = &failure {
                     self.status_line = tf("status.call_failed", &[("code", &code.to_string()), ("reason", reason)]);
                 }
-                self.record_history(
-                    pending.remote_uri,
-                    CallDirection::Inbound,
-                    pending.start_time,
-                    CallStatus::Rejected,
-                );
+                self.record_history(pending.remote_uri, Direction::Inbound, pending.start_time, CallStatus::Rejected);
                 self.refresh_call_status();
                 return;
             }
@@ -431,7 +426,7 @@ impl DeelipApp {
             if let Some((code, reason)) = &failure {
                 self.status_line = tf("status.call_failed", &[("code", &code.to_string()), ("reason", reason)]);
             }
-            self.record_history(out.remote_uri, CallDirection::Outbound, out.start_time, CallStatus::Failed);
+            self.record_history(out.remote_uri, Direction::Outbound, out.start_time, CallStatus::Failed);
             if failure.is_none() {
                 self.refresh_call_status();
             }
@@ -512,7 +507,7 @@ impl DeelipApp {
     }
 
     pub(crate) fn record_history(
-        &mut self, remote_uri: String, direction: CallDirection, start_time: u64, status: CallStatus,
+        &mut self, remote_uri: String, direction: Direction, start_time: u64, status: CallStatus,
     ) {
         let duration =
             if matches!(status, CallStatus::Answered) { (unix_now().saturating_sub(start_time)) as u32 } else { 0 };

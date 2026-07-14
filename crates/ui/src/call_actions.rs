@@ -1,4 +1,4 @@
-use deelip_config::{CallDirection, CallStatus, DtmfMode};
+use deelip_config::{CallStatus, Direction, DtmfMode};
 
 use crate::app::{DeelipApp, PendingAccept, PendingOutbound, Tab};
 use crate::helpers::{normalize_target_with_prefix, short_uri, unix_now};
@@ -144,7 +144,7 @@ impl DeelipApp {
 
     pub(crate) fn do_reject(&mut self) {
         if let Some(pending) = self.pending_call.take() {
-            self.record_history(pending.from, CallDirection::Inbound, pending.start_time, CallStatus::Rejected);
+            self.record_history(pending.from, Direction::Inbound, pending.start_time, CallStatus::Rejected);
             self.accounts[pending.account].handle.reject_call(&pending.call_id);
             self.refresh_call_status();
         }
@@ -169,7 +169,7 @@ impl DeelipApp {
         let dial_plan = self.accounts[pending.account].account.dial_plan.clone();
         let target = normalize_target_with_prefix(&raw, &domain, &prefix, &dial_plan);
         self.accounts[pending.account].handle.redirect_call(&pending.call_id, target);
-        self.record_history(pending.from, CallDirection::Inbound, pending.start_time, CallStatus::Missed);
+        self.record_history(pending.from, Direction::Inbound, pending.start_time, CallStatus::Missed);
         self.redirect_target.clear();
         self.showing_redirect = false;
         self.refresh_call_status();
@@ -383,7 +383,7 @@ impl DeelipApp {
             return;
         };
         self.accounts[pending.account].handle.redirect_call(&pending.call_id, target);
-        self.record_history(pending.from, CallDirection::Inbound, pending.start_time, CallStatus::Missed);
+        self.record_history(pending.from, Direction::Inbound, pending.start_time, CallStatus::Missed);
         self.refresh_call_status();
     }
 }

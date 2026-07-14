@@ -1,4 +1,4 @@
-use deelip_config::{CallDirection, CallStatus, Contact};
+use deelip_config::{CallStatus, Contact, Direction};
 use egui::{RichText, Ui};
 
 use crate::app::DeelipApp;
@@ -108,8 +108,8 @@ impl DeelipApp {
                         let real_idx = filtered[idx];
                         let record = &records[real_idx];
                         let (dir_icon, dir_color) = match record.direction {
-                            CallDirection::Inbound => (egui_phosphor::regular::PHONE_INCOMING, self.palette.ink_muted),
-                            CallDirection::Outbound => (egui_phosphor::regular::PHONE_OUTGOING, self.palette.signal),
+                            Direction::Inbound => (egui_phosphor::regular::PHONE_INCOMING, self.palette.ink_muted),
+                            Direction::Outbound => (egui_phosphor::regular::PHONE_OUTGOING, self.palette.signal),
                         };
                         let (status_icon, status_color) = call_status_icon_color(&record.status, &self.palette);
                         // `Answered` shows the call duration instead of the
@@ -244,8 +244,8 @@ impl DeelipApp {
         let mut csv = String::from("timestamp,direction,remote_uri,status,duration_secs\n");
         for r in filtered {
             let direction = match r.direction {
-                CallDirection::Inbound => "inbound",
-                CallDirection::Outbound => "outbound",
+                Direction::Inbound => "inbound",
+                Direction::Outbound => "outbound",
             };
             let status = call_status_csv_label(&r.status);
             csv.push_str(&format!(

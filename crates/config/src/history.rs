@@ -1,13 +1,7 @@
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
-use crate::Db;
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum CallDirection {
-    Inbound,
-    Outbound,
-}
+use crate::{Db, Direction};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum CallStatus {
@@ -20,7 +14,7 @@ pub enum CallStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CallRecord {
     pub remote_uri: String,
-    pub direction: CallDirection,
+    pub direction: Direction,
     /// Unix timestamp (seconds) when the call was initiated/received.
     pub timestamp: u64,
     /// Duration in seconds; 0 for unanswered calls.
@@ -31,19 +25,6 @@ pub struct CallRecord {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CallHistory {
     pub records: Vec<CallRecord>,
-}
-
-fn call_direction_to_str(d: &CallDirection) -> &'static str {
-    match d {
-        CallDirection::Inbound => "inbound",
-        CallDirection::Outbound => "outbound",
-    }
-}
-fn call_direction_from_str(s: &str) -> CallDirection {
-    match s {
-        "outbound" => CallDirection::Outbound,
-        _ => CallDirection::Inbound,
-    }
 }
 
 fn call_status_to_str(s: &CallStatus) -> &'static str {
@@ -75,7 +56,7 @@ impl CallHistory {
                 let status_str: String = row.get("status")?;
                 Ok(CallRecord {
                     remote_uri: row.get("remote_uri")?,
-                    direction: call_direction_from_str(&direction_str),
+                    direction: Direction::from_str(&direction_str),
                     timestamp: row.get("timestamp")?,
                     duration_secs: row.get("duration_secs")?,
                     status: call_status_from_str(&status_str),
@@ -97,7 +78,7 @@ impl CallHistory {
                  VALUES (?1, ?2, ?3, ?4, ?5)",
                     rusqlite::params![
                         r.remote_uri,
-                        call_direction_to_str(&r.direction),
+                        r.direction.to_str(),
                         r.timestamp,
                         r.duration_secs,
                         call_status_to_str(&r.status),

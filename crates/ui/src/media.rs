@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use deelip_config::CallDirection;
+use deelip_config::Direction;
 use deelip_media::video_capture::{self, CaptureHandle};
 use deelip_media::video_engine::{VideoConferenceLeg, VideoEngine};
 use deelip_media::{ConferenceLeg, MediaEngine, MediaEngineOptions, RecordingOptions, ZrtpParams};
@@ -54,8 +54,8 @@ impl DeelipApp {
             return None;
         }
         let role = match call.direction {
-            CallDirection::Outbound => Role::Initiator,
-            CallDirection::Inbound => Role::Responder,
+            Direction::Outbound => Role::Initiator,
+            Direction::Inbound => Role::Responder,
         };
         match self.config.zrtp_zid_bytes(&self.db) {
             Ok(local_zid) => Some(ZrtpParams { role, local_zid }),

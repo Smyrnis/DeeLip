@@ -10,7 +10,7 @@ mod stats;
 mod video;
 mod widgets;
 
-use deelip_config::CallDirection;
+use deelip_config::Direction;
 use egui::{RichText, Ui};
 
 use stats::show_leg_stats;
@@ -175,8 +175,8 @@ impl DeelipApp {
             let (dir_icon, uri, start_time) = {
                 let call = &self.calls[idx];
                 let dir_icon = match call.direction {
-                    CallDirection::Inbound => egui_phosphor::regular::PHONE_INCOMING,
-                    CallDirection::Outbound => egui_phosphor::regular::PHONE_OUTGOING,
+                    Direction::Inbound => egui_phosphor::regular::PHONE_INCOMING,
+                    Direction::Outbound => egui_phosphor::regular::PHONE_OUTGOING,
                 };
                 (dir_icon, call.remote_uri.clone(), call.start_time)
             };

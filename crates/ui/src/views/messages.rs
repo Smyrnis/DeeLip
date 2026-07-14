@@ -1,4 +1,4 @@
-use deelip_config::{Message, MessageDirection};
+use deelip_config::{Direction, Message};
 use egui::{RichText, Ui};
 
 use crate::app::{DeelipApp, SharedApp};
@@ -181,7 +181,7 @@ impl DeelipApp {
         let palette = self.palette;
         egui::ScrollArea::vertical().id_salt("messages_thread_scroll").stick_to_bottom(true).show(ui, |ui| {
             for m in thread {
-                let outbound = m.direction == MessageDirection::Outbound;
+                let outbound = m.direction == Direction::Outbound;
                 let fill = if outbound { palette.signal.gamma_multiply(0.28) } else { palette.surface };
                 ui.with_layout(
                     egui::Layout::top_down(if outbound { egui::Align::Max } else { egui::Align::Min }),
@@ -216,7 +216,7 @@ impl DeelipApp {
 
         self.messages.push(Message {
             peer_uri: to.clone(),
-            direction: MessageDirection::Outbound,
+            direction: Direction::Outbound,
             body,
             timestamp: unix_now(),
         });
