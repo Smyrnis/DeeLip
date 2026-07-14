@@ -896,14 +896,26 @@ impl MediaEngine {
         if let Some(t2) = self.recv_task2 {
             let _ = t2.await;
         }
-        // Finalize here (not inside the send task) so it runs deterministically
-        // regardless of the abort race above -- both WAV and MP3 need an
-        // explicit finalize() (RIFF header sizes / final encoder flush);
-        // Drop alone would leave either format malformed/truncated.
-        if let Some(writer) = self.recorder.lock().unwrap().take()
-            && let Err(e) = writer.finalize()
-        {
-            error!("Failed to finalize call recording: {e}");
+        // Take the writer here (not inside the send task) so finalization
+        // happens deterministically regardless of the abort race above --
+        // both WAV and MP3 need an explicit finalize() (RIFF header sizes /
+        // final encoder flush); Drop alone would leave either format
+        // malformed/truncated. The actual finalize() call is blocking disk
+        // I/O, though, and `stop()` itself is commonly awaited via
+        // `rt.block_on` directly on the UI/render thread (hangup/hold/swap)
+        // -- so it's dispatched onto `spawn_blocking` rather than run
+        // inline here, keeping this UI-thread-visible `stop()` fast even on
+        // a slow or antivirus-intercepted disk. Recording is already
+        // best-effort (see `AppConfig::recording_enabled`'s doc comment),
+        // so a finalize that completes a moment after `stop()` itself
+        // returns is an acceptable tradeoff -- unlike the task-await above,
+        // which this function's own doc comment requires stay synchronous.
+        if let Some(writer) = self.recorder.lock().unwrap().take() {
+            tokio::task::spawn_blocking(move || {
+                if let Err(e) = writer.finalize() {
+                    error!("Failed to finalize call recording: {e}");
+                }
+            });
         }
     }
 }
