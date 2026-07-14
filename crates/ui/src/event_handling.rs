@@ -98,12 +98,7 @@ impl DeelipApp {
                     // call's media.
                     if let Some(cur) = self.focused_call {
                         self.send_hold(cur);
-                        if let Some(engine) = self.media.take() {
-                            self.rt.block_on(engine.stop());
-                        }
-                        if let Some(v) = self.video.take() {
-                            self.rt.block_on(v.engine.stop());
-                        }
+                        self.stop_focused_media();
                         self.focused_call = None;
                     }
                     let slot = CallSlot {
@@ -452,12 +447,7 @@ impl DeelipApp {
     pub(crate) fn remove_call(&mut self, idx: usize) -> CallSlot {
         let was_conference = self.in_conference;
         if was_conference || self.focused_call == Some(idx) {
-            if let Some(engine) = self.media.take() {
-                self.rt.block_on(engine.stop());
-            }
-            if let Some(v) = self.video.take() {
-                self.rt.block_on(v.engine.stop());
-            }
+            self.stop_focused_media();
         }
         if was_conference {
             self.focused_call = None;

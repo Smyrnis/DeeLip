@@ -206,12 +206,7 @@ impl DeelipApp {
     pub(crate) fn do_hold_slot(&mut self, idx: usize) {
         self.send_hold(idx);
         if self.focused_call == Some(idx) {
-            if let Some(engine) = self.media.take() {
-                self.rt.block_on(engine.stop());
-            }
-            if let Some(v) = self.video.take() {
-                self.rt.block_on(v.engine.stop());
-            }
+            self.stop_focused_media();
             self.focused_call = None;
         }
         self.refresh_call_status();
@@ -228,12 +223,7 @@ impl DeelipApp {
         }
         if let Some(cur) = self.focused_call {
             self.send_hold(cur);
-            if let Some(engine) = self.media.take() {
-                self.rt.block_on(engine.stop());
-            }
-            if let Some(v) = self.video.take() {
-                self.rt.block_on(v.engine.stop());
-            }
+            self.stop_focused_media();
             self.focused_call = None;
         }
         self.send_resume(idx);

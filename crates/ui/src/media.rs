@@ -12,6 +12,37 @@ use crate::app::{DeelipApp, VideoCallState};
 use crate::strings::t;
 
 impl DeelipApp {
+    /// Stops and discards the focused call's live audio `MediaEngine`, if
+    /// any -- a no-op if nothing is focused. Shared by every call-state
+    /// transition that needs to free the audio device (hold, swap, remove,
+    /// accept-with-another-call-focused) -- previously copy-pasted at each
+    /// of those call sites.
+    pub(crate) fn stop_media_engine(&mut self) {
+        if let Some(engine) = self.media.take() {
+            self.rt.block_on(engine.stop());
+        }
+    }
+
+    /// Stops and discards the focused call's live `VideoEngine`, if any --
+    /// same shape/reuse rationale as `stop_media_engine`. The conference-
+    /// merge path just below (`start_conference`) needs to retain the
+    /// camera handle instead of discarding it, so it stops `self.video`
+    /// inline rather than through this helper.
+    pub(crate) fn stop_video_engine(&mut self) {
+        if let Some(v) = self.video.take() {
+            self.rt.block_on(v.engine.stop());
+        }
+    }
+
+    /// Stops and discards both the focused call's audio and video engines
+    /// -- the common case at every call-state transition except
+    /// `start_conference`'s camera-retaining path (see
+    /// `stop_video_engine`'s doc comment).
+    pub(crate) fn stop_focused_media(&mut self) {
+        self.stop_media_engine();
+        self.stop_video_engine();
+    }
+
     /// Builds `ZrtpParams` for `calls[idx]` if its account has ZRTP enabled
     /// -- `Role::Initiator` for a call we placed (we sent the INVITE),
     /// `Role::Responder` for one we answered, matching
@@ -194,9 +225,7 @@ impl DeelipApp {
             self.rt.block_on(async { tokio::time::sleep(Duration::from_millis(300)).await });
         }
 
-        if let Some(engine) = self.media.take() {
-            self.rt.block_on(engine.stop());
-        }
+        self.stop_media_engine();
         // Stop whichever call's `VideoEngine` was running (only the focused
         // call ever has one) but keep its camera handle -- a conference
         // still only captures from one physical camera, fanned out to both
