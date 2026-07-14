@@ -285,6 +285,7 @@
   "status.ready_local": "Ready (Local Account)",
   "status.registered": "Registered (expires {expires}s)",
   "status.registration_failed": "Registration failed: {reason}",
+  "status.registration_failed_permanent": "Registration failed — check account settings ({reason})",
   "status.ringing": "Ringing…",
   "status.in_call": "In call — {uri}",
   "status.call_waiting": "Call waiting: {uri}",

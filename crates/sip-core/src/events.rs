@@ -52,6 +52,12 @@ pub enum SipEvent {
     },
     RegistrationFailed {
         reason: String,
+        /// `true` if retrying can never fix this (wrong credentials/unknown
+        /// user) -- see `registration::PermanentRegError`. The reconnect
+        /// loop stops re-registering once this fires; `false` covers every
+        /// other case (network blips, 5xx, disconnects), which keep
+        /// retrying with backoff exactly like before this field existed.
+        permanent: bool,
     },
     /// Remote party is ringing (180 received on outgoing call).
     CallRinging {

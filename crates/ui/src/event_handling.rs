@@ -71,9 +71,13 @@ impl DeelipApp {
                 self.subscribe_account_contacts(account);
                 self.subscribe_account_mwi(account);
             }
-            SipEvent::RegistrationFailed { reason } => {
+            SipEvent::RegistrationFailed { reason, permanent } => {
                 self.accounts[account].reg_ok = false;
-                self.accounts[account].status = tf("status.registration_failed", &[("reason", &reason)]);
+                self.accounts[account].status = if permanent {
+                    tf("status.registration_failed_permanent", &[("reason", &reason)])
+                } else {
+                    tf("status.registration_failed", &[("reason", &reason)])
+                };
                 self.refresh_idle_status();
             }
             SipEvent::CallRinging { .. } => {

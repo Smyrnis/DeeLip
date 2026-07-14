@@ -9,6 +9,23 @@ use crate::{
     wire::util::{extract_expires, new_branch, parse_via_received},
 };
 
+/// Marks a REGISTER rejection that retrying will never fix on its own --
+/// wrong credentials (403) or an unknown user/domain (404). Downcast out of
+/// the `anyhow::Error` by `client::run_loop::run`'s reconnect loop to stop
+/// silently retrying forever on an error that can never succeed, instead of
+/// treating it the same as a transient network blip. Every other status
+/// code (including 5xx, which genuinely can be transient) keeps today's
+/// plain-string-error, keep-retrying behavior.
+#[derive(Debug)]
+pub(crate) struct PermanentRegError(pub(crate) u16);
+
+impl std::fmt::Display for PermanentRegError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "REGISTER rejected: {} (permanent, won't retry)", self.0)
+    }
+}
+impl std::error::Error for PermanentRegError {}
+
 impl SipStack {
     pub(crate) async fn register_once(&mut self) -> anyhow::Result<u32> {
         self.send_register(None).await?;
@@ -21,6 +38,7 @@ impl SipStack {
                 return Ok(extract_expires(&resp).unwrap_or(self.account.register_expires));
             }
             Some(401) | Some(407) => {}
+            Some(c @ (403 | 404)) => return Err(PermanentRegError(c).into()),
             Some(c) => return Err(anyhow::anyhow!("REGISTER rejected: {c}")),
             None => return Err(anyhow::anyhow!("Expected response")),
         }
@@ -41,6 +59,7 @@ impl SipStack {
                 self.maybe_rewrite_advertised_ip(&resp2);
                 Ok(extract_expires(&resp2).unwrap_or(self.account.register_expires))
             }
+            Some(c @ (403 | 404)) => Err(PermanentRegError(c).into()),
             Some(c) => Err(anyhow::anyhow!("REGISTER rejected: {c}")),
             None => Err(anyhow::anyhow!("Expected response")),
         }

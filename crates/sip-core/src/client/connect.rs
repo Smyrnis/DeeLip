@@ -256,7 +256,8 @@ impl SipStack {
                     Ok(()) => break,
                     Err((e, cmd_rx)) => {
                         error!("SIP stack disconnected ({e:#}), reconnecting in {retry_delay:?}");
-                        let _ = event_tx.send(SipEvent::RegistrationFailed { reason: format!("Disconnected: {e:#}") });
+                        let _ = event_tx
+                            .send(SipEvent::RegistrationFailed { reason: format!("Disconnected: {e:#}"), permanent: false });
                         pending_cmd_rx = Some(cmd_rx);
                         tokio::time::sleep(retry_delay).await;
                         retry_delay = (retry_delay * 2).min(MAX_RETRY);

@@ -21,6 +21,13 @@ impl SipStack {
         }
         let mut reregister_at = Instant::now();
         let mut retry_delay = Duration::from_secs(5);
+        // Set once a REGISTER is rejected for a reason retrying can never
+        // fix (see `PermanentRegError`) -- stops the `sleep_until` branch
+        // below from ever re-arming for this account again, instead of
+        // backing off forever on an error that will never succeed.
+        // Everything else this loop does (calls, presence, keepalive)
+        // keeps working normally; only re-registration itself stops.
+        let mut permanently_failed = false;
         let mut presence_tick = interval(PRESENCE_TICK);
         // NAT/firewall keepalive -- only ticks when the account has one
         // configured; `if keepalive_tick.is_some()` below guards the whole
@@ -45,7 +52,7 @@ impl SipStack {
                 // send inside it) means `reregister_at`'s initial
                 // `Instant::now()` never fires and no retry/backoff
                 // machinery for it ever engages either.
-                _ = sleep_until(reregister_at), if !self.account.local_account => {
+                _ = sleep_until(reregister_at), if !self.account.local_account && !permanently_failed => {
                     match self.register_once().await {
                         Ok(expires) => {
                             retry_delay   = Duration::from_secs(5);
@@ -60,12 +67,18 @@ impl SipStack {
                             }
                         }
                         Err(e) => {
+                            let permanent = e.downcast_ref::<crate::registration::PermanentRegError>().is_some();
                             error!("Registration failed: {e}");
                             let _ = self.event_tx.send(SipEvent::RegistrationFailed {
                                 reason: e.to_string(),
+                                permanent,
                             });
-                            reregister_at = Instant::now() + retry_delay;
-                            retry_delay   = (retry_delay * 2).min(MAX_RETRY);
+                            if permanent {
+                                permanently_failed = true;
+                            } else {
+                                reregister_at = Instant::now() + retry_delay;
+                                retry_delay   = (retry_delay * 2).min(MAX_RETRY);
+                            }
                         }
                     }
                 }
