@@ -28,7 +28,13 @@ license = "MIT"
 [workspace.dependencies]
 anyhow = "1"
 thiserror = "1"
-tokio = { version = "1", features = ["full"] }
+# Explicit feature list instead of "full" -- "full" pulls in process/fs/
+# signal/test-util/etc that nothing in this workspace uses (a well-known
+# binary-size/compile-time bloat source); this set is the actual real
+# union across every crate (net/time/sync for the SIP/RTP/DTMF machinery,
+# rt+rt-multi-thread for main.rs's runtime, io-util for transport.rs's
+# split TCP/TLS streams, macros for #[tokio::test]).
+tokio = { version = "1", features = ["net", "time", "sync", "rt", "rt-multi-thread", "io-util", "macros"] }
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 tracing = "0.1"
@@ -54,7 +60,10 @@ webrtc-util = "0.17"
 async-trait = "0.1"
 fdaf-aec = "0.1"
 tray-icon = { version = "0.24", default-features = false }
-image = "0.25"
+# Only PNG is ever decoded (all three call sites load an embedded
+# assets/*.png icon) -- default features pull in jpeg/gif/webp/tiff/bmp/
+# ico/avif/etc decoders that are never used.
+image = { version = "0.25", default-features = false, features = ["png"] }
 gtk = "0.18"
 hound = "3"
 egui-phosphor = "0.12"
