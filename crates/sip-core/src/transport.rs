@@ -1,10 +1,12 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Context;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf, split};
 use tokio::net::{TcpSocket, TcpStream, UdpSocket};
 use tokio::sync::Mutex;
+use tokio::time::timeout;
 use tokio_rustls::TlsConnector;
 use tokio_rustls::client::TlsStream;
 use tracing::{debug, warn};
@@ -12,6 +14,12 @@ use tracing::{debug, warn};
 use deelip_config::TransportProtocol;
 
 use crate::wire::framing::MessageFramer;
+
+/// Bounds every TCP connect / TLS handshake below -- matches STUN's existing
+/// 5s timeout (crates/nat/src/stun.rs). Without this, a firewalled or
+/// silently-dropping peer can hang the caller indefinitely; these calls sit
+/// on main()'s startup path (via SipStack::new) before the app window exists.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Unifies UDP (datagram), plain TCP, and TLS (both persistent streams) SIP
 /// transports behind one API.
@@ -139,7 +147,10 @@ impl TcpConn {
         let socket = if bind_addr.is_ipv4() { TcpSocket::new_v4()? } else { TcpSocket::new_v6()? };
         socket.set_reuseaddr(true)?;
         socket.bind(bind_addr).context("Binding TCP socket")?;
-        let stream = socket.connect(server_addr).await.context("Connecting TCP")?;
+        let stream = timeout(CONNECT_TIMEOUT, socket.connect(server_addr))
+            .await
+            .context("Connecting TCP timed out")?
+            .context("Connecting TCP")?;
         let local_addr = stream.local_addr()?;
         debug!("SIP transport (TCP) connected to {server_addr} (local {local_addr})");
 
@@ -185,10 +196,16 @@ impl TlsConn {
         let socket = if bind_addr.is_ipv4() { TcpSocket::new_v4()? } else { TcpSocket::new_v6()? };
         socket.set_reuseaddr(true)?;
         socket.bind(bind_addr).context("Binding TCP socket")?;
-        let tcp = socket.connect(server_addr).await.context("Connecting TCP")?;
+        let tcp = timeout(CONNECT_TIMEOUT, socket.connect(server_addr))
+            .await
+            .context("Connecting TCP timed out")?
+            .context("Connecting TCP")?;
         let local_addr = tcp.local_addr()?;
 
-        let tls_stream = connector.connect(name, tcp).await.context("TLS handshake")?;
+        let tls_stream = timeout(CONNECT_TIMEOUT, connector.connect(name, tcp))
+            .await
+            .context("TLS handshake timed out")?
+            .context("TLS handshake")?;
         debug!("SIP transport (TLS) connected to {server_addr} (local {local_addr})");
 
         Ok(Self { server_addr, halves: StreamHalves::new(tls_stream, local_addr) })

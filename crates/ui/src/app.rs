@@ -45,7 +45,16 @@ pub(crate) enum SettingsTab {
 pub struct DeelipApp {
     /// One registered SIP identity per enabled account in `config.accounts`,
     /// each independently registering/re-registering on its own transport.
+    /// Starts empty and fills in as `account_spawn_rx` delivers results --
+    /// see `AccountSpawnMsg`'s doc comment.
     pub(crate) accounts: Vec<AccountState>,
+    /// Background account-spawn channel from `main()`'s pre-window
+    /// `rt.spawn` task -- `Some` until the task's final `AccountSpawnMsg::Done`
+    /// arrives, then set to `None` (see `process_account_spawn_events`).
+    /// Distinct from "zero accounts configured": `refresh_idle_status` checks
+    /// this to show "connecting" instead of "no accounts configured" while
+    /// results are still arriving.
+    pub(crate) account_spawn_rx: Option<std::sync::mpsc::Receiver<AccountSpawnMsg>>,
     pub(crate) rt: Handle,
 
     pub(crate) tab: Tab,
@@ -392,6 +401,21 @@ pub(crate) struct VideoViewCache {
     pub(crate) texture: Option<egui::TextureHandle>,
 }
 
+/// One result of the background account-spawn task `main()` starts before
+/// `eframe::run_native` (see that doc comment) -- registering every enabled
+/// account used to block the window from ever appearing (an unreachable
+/// server's DNS/TCP/TLS connect could hang indefinitely), so spawning now
+/// happens off to the side and reports back through this channel instead.
+/// `Done` marks the end of the batch (every enabled account attempted,
+/// success or not) so `DeelipApp` can stop showing "connecting" once
+/// nothing more is coming -- see `process_account_spawn_events`.
+pub enum AccountSpawnMsg {
+    // `SipAccount` is large (500+ bytes) relative to `Done`'s zero -- boxed
+    // to keep the enum itself small (clippy::large_enum_variant).
+    Spawned(Box<SipAccount>, SipHandle),
+    Done,
+}
+
 /// A single registered SIP identity: its stack handle plus the registration
 /// status shown next to it in the account picker.
 pub(crate) struct AccountState {
@@ -410,21 +434,9 @@ pub(crate) struct AccountState {
 
 impl DeelipApp {
     pub fn new(
-        accounts: Vec<(SipAccount, SipHandle)>, rt: Handle, config: AppConfig, db: Db,
+        account_spawn_rx: std::sync::mpsc::Receiver<AccountSpawnMsg>, rt: Handle, config: AppConfig, db: Db,
         tray: Option<(CtxSlot, QuitState, tray::BadgeSender)>, ctx_slot: CtxSlot,
     ) -> Self {
-        let accounts = accounts
-            .into_iter()
-            .map(|(account, handle)| AccountState {
-                label: crate::helpers::account_label(&account),
-                account,
-                handle,
-                reg_ok: false,
-                status: t("status.registering"),
-                mwi: None,
-            })
-            .collect();
-
         let history = CallHistory::load(&db).unwrap_or_default();
         let contacts = ContactBook::load(&db).unwrap_or_default();
         let messages = MessageLog::load(&db).unwrap_or_default();
@@ -447,7 +459,8 @@ impl DeelipApp {
         };
 
         let mut app = Self {
-            accounts,
+            accounts: Vec::new(),
+            account_spawn_rx: Some(account_spawn_rx),
             rt,
             tab: Tab::Dialer,
             settings_open: false,

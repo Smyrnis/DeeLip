@@ -6,6 +6,7 @@
 use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 
+use anyhow::Context;
 use deelip_config::TransportProtocol;
 use rand::Rng;
 use tokio::net::UdpSocket;
@@ -90,8 +91,14 @@ async fn resolve_host(host: &str, port: u16, custom_nameserver: Option<&str>) ->
     let Some(server) = custom_nameserver.and_then(parse_nameserver).or_else(system_resolver) else {
         // No custom nameserver configured and no usable /etc/resolv.conf --
         // fall back to the OS resolver exactly like before this module existed.
-        return tokio::net::lookup_host((host, port))
-            .await?
+        // Bounded the same as the hand-rolled query() path below: an
+        // unreachable/misbehaving OS resolver (e.g. no response, common on
+        // Windows without a /etc/resolv.conf-style escape hatch) must not be
+        // able to hang the caller forever -- this sits on main()'s startup
+        // path before the app window exists.
+        return timeout(DNS_TIMEOUT, tokio::net::lookup_host((host, port)))
+            .await
+            .context("DNS lookup timed out")??
             .next()
             .ok_or_else(|| anyhow::anyhow!("DNS lookup failed for {host}"));
     };

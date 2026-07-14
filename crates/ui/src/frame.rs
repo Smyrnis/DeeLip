@@ -184,14 +184,19 @@ impl DeelipApp {
     ///
     /// UNVERIFIED on real Windows/macOS hardware -- this sandbox is
     /// Linux-only. See `tray::spawn_tray_icon`'s doc comment for the full
-    /// rationale.
+    /// rationale. Because of that, `spawn_tray_icon()` is called through
+    /// `catch_unwind`: if it panics rather than returning `Err` under some
+    /// platform-specific condition we've never been able to exercise here,
+    /// a panic from inside this, the very first frame, would otherwise take
+    /// the whole process down silently (no window ever shown) instead of
+    /// just leaving the tray unavailable like the existing `Err` arm does.
     #[cfg(not(target_os = "linux"))]
     fn init_lazy_tray(&mut self) {
         if self.tray.is_some() {
             return;
         }
-        match tray::spawn_tray_icon() {
-            Ok((tray_ids, badge_tx)) => {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(tray::spawn_tray_icon)) {
+            Ok(Ok((tray_ids, badge_tx))) => {
                 let quit_state = tray::QuitState {
                     calls: Arc::new(Mutex::new(Vec::new())),
                     pending: Arc::new(Mutex::new(None)),
@@ -200,7 +205,15 @@ impl DeelipApp {
                 tray::spawn_tray_event_handlers(tray_ids, self.ctx_slot.clone(), quit_state.clone());
                 self.tray = Some((self.ctx_slot.clone(), quit_state, badge_tx));
             }
-            Err(e) => tracing::warn!("Tray icon failed to start ({e}), continuing without it"),
+            Ok(Err(e)) => tracing::warn!("Tray icon failed to start ({e}), continuing without it"),
+            Err(panic_payload) => {
+                let msg = panic_payload
+                    .downcast_ref::<&str>()
+                    .map(|s| s.to_string())
+                    .or_else(|| panic_payload.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| "<non-string panic payload>".into());
+                tracing::warn!("Tray icon failed to start (panicked: {msg}), continuing without it");
+            }
         }
     }
 
@@ -306,6 +319,7 @@ impl DeelipApp {
             }
         }
 
+        self.process_account_spawn_events();
         self.process_sip_events();
         self.check_pending_call_timeout();
         self.sync_ringtone();

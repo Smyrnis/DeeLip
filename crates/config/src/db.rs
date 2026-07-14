@@ -106,6 +106,17 @@ impl Db {
         let path = default_db_path()?;
         let is_fresh = !path.exists();
 
+        // `rusqlite::Connection::open` creates the *file* if missing but
+        // never its parent directory -- on a genuinely fresh profile (no
+        // prior DeeLip run, and nothing else has created `~/.config/deelip`
+        // / `%APPDATA%\deelip` yet), this fails outright with "unable to
+        // open database file" before any window can ever appear. This is
+        // the very first thing `main()` does, before logging is even set
+        // up, so that failure was otherwise silent on a console-subsystem
+        // Windows build (main.rs has no `windows_subsystem = "windows"`).
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).with_context(|| format!("Creating config dir {}", parent.display()))?;
+        }
         let conn = Connection::open(&path).with_context(|| format!("Opening database at {}", path.display()))?;
         conn.execute_batch(SCHEMA).context("Creating database schema")?;
         let db = Db { conn };

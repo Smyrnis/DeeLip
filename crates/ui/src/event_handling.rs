@@ -1,11 +1,45 @@
 use deelip_config::{CallDirection, CallRecord, CallStatus, Contact, Message, MessageDirection};
 use deelip_sip::{PresenceState, SipEvent};
 
-use crate::app::{CallSlot, DeelipApp, PendingCall};
+use crate::app::{AccountSpawnMsg, AccountState, CallSlot, DeelipApp, PendingCall};
 use crate::helpers::{extract_user_part, normalize_target, short_uri, unix_now};
 use crate::strings::{t, tf};
 
 impl DeelipApp {
+    // ── Background account-spawn processing ──────────────────────────────────
+
+    /// Drains the background account-spawn channel (see `main()`'s pre-window
+    /// `rt.spawn` task and `AccountSpawnMsg`'s doc comment), called once per
+    /// frame alongside `process_sip_events`. Newly-spawned accounts are
+    /// appended to `self.accounts` in whatever order they finish
+    /// connecting/timing-out in, not `config.accounts`' original order --
+    /// every existing `self.accounts[i]` access already derives `i` from
+    /// `self.accounts`' own current position (picker selection, tray
+    /// lookups, etc.), never from config order, so this is safe.
+    pub(crate) fn process_account_spawn_events(&mut self) {
+        let Some(rx) = &self.account_spawn_rx else { return };
+        let messages: Vec<AccountSpawnMsg> = rx.try_iter().collect();
+        for msg in messages {
+            match msg {
+                AccountSpawnMsg::Spawned(account, handle) => {
+                    self.accounts.push(AccountState {
+                        label: crate::helpers::account_label(&account),
+                        account: *account,
+                        handle,
+                        reg_ok: false,
+                        status: t("status.registering"),
+                        mwi: None,
+                    });
+                    self.refresh_idle_status();
+                }
+                AccountSpawnMsg::Done => {
+                    self.account_spawn_rx = None;
+                    self.refresh_idle_status();
+                }
+            }
+        }
+    }
+
     // ── SIP event processing ─────────────────────────────────────────────────
 
     /// Drain every account's event queue first, tagging each event with the
@@ -466,6 +500,15 @@ impl DeelipApp {
             Some(acc) => {
                 self.reg_ok = acc.reg_ok;
                 self.status_line = if acc.reg_ok { t("status.ready") } else { t("status.not_registered") };
+            }
+            // Distinct from genuinely having zero enabled accounts (below):
+            // the background spawn task (see `process_account_spawn_events`)
+            // is still working, so accounts configured in Settings just
+            // haven't finished connecting yet -- don't flash "No accounts
+            // configured" while they're on the way.
+            None if self.account_spawn_rx.is_some() => {
+                self.reg_ok = false;
+                self.status_line = t("status.registering");
             }
             None => {
                 self.reg_ok = false;

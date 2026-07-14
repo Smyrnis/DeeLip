@@ -143,24 +143,42 @@ fn main() -> anyhow::Result<()> {
     // configured base port — one process-wide UDP/TCP bind can't serve two
     // accounts at once. A stack that fails to start (bad DNS, refused
     // connection, etc.) is logged and skipped rather than aborting the
-    // others; the app only fails to start if every account failed.
-    let mut account_handles = Vec::new();
-    for (i, account) in enabled_accounts.into_iter().enumerate() {
-        let local_port = config.local_sip_port + i as u16;
-        let username = account.username.clone();
-        match rt.block_on(SipStack::spawn(
-            account.clone(),
-            network.clone(),
-            local_port,
-            external_ip.clone(),
-            repaint_waker.clone(),
-        )) {
-            Ok(handle) => account_handles.push((account, handle)),
-            Err(e) => warn!("Account {username} failed to start ({e}), skipping"),
-        }
-    }
-    if account_handles.is_empty() && had_enabled_accounts {
-        anyhow::bail!("All configured accounts failed to start");
+    // others.
+    //
+    // Spawned entirely in the background, NOT `rt.block_on`'d here, so a
+    // hung/unreachable server can never delay `eframe::run_native` below --
+    // even with crates/sip-core's own DNS/connect timeouts, N accounts on a
+    // bad network could otherwise still add up to a long, silent delay
+    // before the window ever appears (the original bug report this fixes).
+    // `DeelipApp` starts with zero accounts and appends them as this task's
+    // results arrive over `account_rx` -- see `AccountSpawnMsg`'s doc
+    // comment and `DeelipApp::process_account_spawn_events`.
+    let (account_tx, account_rx) = std::sync::mpsc::channel();
+    {
+        let network = network.clone();
+        let external_ip = external_ip.clone();
+        let waker = repaint_waker.clone();
+        let base_port = config.local_sip_port;
+        rt.spawn(async move {
+            for (i, account) in enabled_accounts.into_iter().enumerate() {
+                let local_port = base_port + i as u16;
+                let username = account.username.clone();
+                match SipStack::spawn(account.clone(), network.clone(), local_port, external_ip.clone(), waker.clone())
+                    .await
+                {
+                    Ok(handle) => {
+                        let _ = account_tx.send(deelip_ui::AccountSpawnMsg::Spawned(Box::new(account), handle));
+                    }
+                    Err(e) => warn!("Account {username} failed to start ({e}), skipping"),
+                }
+                // Wake the UI after each attempt (not just at the very end)
+                // so accounts appear in the picker one by one as they
+                // connect, rather than all at once after the slowest one.
+                waker();
+            }
+            let _ = account_tx.send(deelip_ui::AccountSpawnMsg::Done);
+            waker();
+        });
     }
 
     // GTK's tray icon (via libappindicator) pulls in libcanberra for UI
@@ -231,7 +249,7 @@ fn main() -> anyhow::Result<()> {
     // -- see `SharedApp`'s doc comment/SAFETY note in `deelip_ui::app` for
     // why wrapping it in Arc<Mutex<_>> here is still sound.
     #[allow(clippy::arc_with_non_send_sync)]
-    let app = SharedApp(Arc::new(Mutex::new(DeelipApp::new(account_handles, rt_handle, config, db, tray, ctx_slot))));
+    let app = SharedApp(Arc::new(Mutex::new(DeelipApp::new(account_rx, rt_handle, config, db, tray, ctx_slot))));
 
     let native_opts = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
