@@ -28,6 +28,72 @@ use crate::stats::{CallStatsSnapshot, JitterTracker, LegStats, SharedStats};
 use crate::vad::{ComfortNoiseState, VadDecision, VoiceActivityDetector, synthesize_comfort_noise};
 use crate::zrtp_session::{ZrtpOutcome, ZrtpParams, ZrtpRuntime, client_id as zrtp_client_id};
 
+/// Which leg a send/stats update belongs to -- `Two` is a no-op on the
+/// stats side when `CallStatsSnapshot.leg2` is `None` (single-call, not a
+/// conference), matching every call site's previous individual handling.
+enum Leg {
+    One,
+    Two,
+}
+
+/// Encrypts `bytes` via `ctx` (if `Some` -- SRTP negotiated) and sends the
+/// result to `remote` over `sock`, updating `stats`' leg1/leg2
+/// packet/byte counters on a successful send. Returns `Err(())` if either
+/// encryption or the send itself failed (already logged via
+/// `tracing::error!`, tagged with `what`) -- callers decide what "skip this
+/// frame/packet/leg" means for their own loop; this only collapses the
+/// encrypt-log-send-count sequence that was previously copy-pasted 5 times
+/// across the send task below. `ctx.encrypt_rtp` already returns a cheap
+/// refcounted `bytes::Bytes` (not owned `Vec<u8>`) -- borrowed here via
+/// `out`, not `.to_vec()`'d, so this is also one fewer allocation+copy per
+/// encrypted packet than the code it replaces. Note for the DTMF call
+/// sites specifically: unlike the code being replaced, DTMF packets now
+/// also update `stats` on a successful send (previously only voice/comfort-
+/// noise packets did) -- a deliberate, minor side effect of sharing one
+/// path, not an oversight: DTMF is real data on the wire and counting it
+/// makes the leg stats more accurate, not less.
+async fn encrypt_and_send(
+    ctx: Option<&mut SrtpContext>, bytes: &[u8], sock: &RtpSocket, remote: SocketAddr, stats: &SharedStats, leg: Leg,
+    what: &str,
+) -> Result<(), ()> {
+    let encrypted;
+    let out: &[u8] = match ctx {
+        Some(ctx) => match ctx.encrypt_rtp(bytes) {
+            Ok(b) => {
+                encrypted = b;
+                &encrypted
+            }
+            Err(e) => {
+                error!("SRTP encrypt ({what}): {e}");
+                return Err(());
+            }
+        },
+        None => bytes,
+    };
+    match sock.send_to(out, remote).await {
+        Ok(()) => {
+            let mut s = stats.lock().unwrap();
+            match leg {
+                Leg::One => {
+                    s.leg1.packets_sent += 1;
+                    s.leg1.bytes_sent += out.len() as u64;
+                }
+                Leg::Two => {
+                    if let Some(ls) = s.leg2.as_mut() {
+                        ls.packets_sent += 1;
+                        ls.bytes_sent += out.len() as u64;
+                    }
+                }
+            }
+            Ok(())
+        }
+        Err(e) => {
+            error!("RTP send ({what}): {e}");
+            Err(())
+        }
+    }
+}
+
 /// Act on whatever `ZrtpRuntime::handle_incoming`/`tick` just produced --
 /// see `docs/crates/media-engine.md`'s ZRTP section. The two tasks each own their
 /// own `SrtpContext`, so `encrypt_tx` is how a completed handshake's key
@@ -458,39 +524,26 @@ impl MediaEngine {
                             VadDecision::Talking => {
                                 let encoded = encoder.encode(&pcm);
                                 let bytes = rtp_send.next_packet(encoded).encode();
-                                let out = match encrypt_ctx.as_mut() {
-                                    Some(ctx) => match ctx.encrypt_rtp(&bytes) {
-                                        Ok(b) => b.to_vec(),
-                                        Err(e) => { error!("SRTP encrypt: {e}"); continue; }
-                                    },
-                                    None => bytes,
-                                };
-                                match send_sock.send_to(&out, remote_rtp).await {
-                                    Ok(()) => {
-                                        let mut s = send_stats.lock().unwrap();
-                                        s.leg1.packets_sent += 1;
-                                        s.leg1.bytes_sent   += out.len() as u64;
-                                    }
-                                    Err(e) => error!("RTP send: {e}"),
+                                if encrypt_and_send(
+                                    encrypt_ctx.as_mut(), &bytes, &send_sock, remote_rtp, &send_stats, Leg::One, "voice",
+                                )
+                                .await
+                                .is_err()
+                                {
+                                    continue;
                                 }
                             }
                             VadDecision::SendComfortNoise(level) => {
                                 let pt = cn_pt.expect("vad is only Some when cn_pt is Some");
                                 let bytes = rtp_send.next_packet_with_pt(pt, vec![level]).encode();
-                                let out = match encrypt_ctx.as_mut() {
-                                    Some(ctx) => match ctx.encrypt_rtp(&bytes) {
-                                        Ok(b) => b.to_vec(),
-                                        Err(e) => { error!("SRTP encrypt (CN): {e}"); continue; }
-                                    },
-                                    None => bytes,
-                                };
-                                match send_sock.send_to(&out, remote_rtp).await {
-                                    Ok(()) => {
-                                        let mut s = send_stats.lock().unwrap();
-                                        s.leg1.packets_sent += 1;
-                                        s.leg1.bytes_sent   += out.len() as u64;
-                                    }
-                                    Err(e) => error!("RTP send (CN): {e}"),
+                                if encrypt_and_send(
+                                    encrypt_ctx.as_mut(), &bytes, &send_sock, remote_rtp, &send_stats, Leg::One,
+                                    "comfort noise",
+                                )
+                                .await
+                                .is_err()
+                                {
+                                    continue;
                                 }
                             }
                             VadDecision::Skip => rtp_send.skip_tick(),
@@ -504,25 +557,10 @@ impl MediaEngine {
                         {
                             let encoded2 = enc2.encode(&pcm);
                             let bytes2 = sender2.next_packet(encoded2).encode();
-                            let out2 = match leg2_encrypt_ctx.as_mut() {
-                                Some(ctx) => match ctx.encrypt_rtp(&bytes2) {
-                                    Ok(b) => Some(b.to_vec()),
-                                    Err(e) => { error!("SRTP encrypt (leg2): {e}"); None }
-                                },
-                                None => Some(bytes2),
-                            };
-                            if let Some(out2) = out2 {
-                                match sock2.send_to(&out2, remote2).await {
-                                    Ok(()) => {
-                                        let mut s = send_stats.lock().unwrap();
-                                        if let Some(leg2) = s.leg2.as_mut() {
-                                            leg2.packets_sent += 1;
-                                            leg2.bytes_sent   += out2.len() as u64;
-                                        }
-                                    }
-                                    Err(e) => error!("RTP send (leg2): {e}"),
-                                }
-                            }
+                            let _ = encrypt_and_send(
+                                leg2_encrypt_ctx.as_mut(), &bytes2, sock2, remote2, &send_stats, Leg::Two, "leg2",
+                            )
+                            .await;
                         }
 
                         // Drain + mix decoded audio for local playback/recording
@@ -544,17 +582,11 @@ impl MediaEngine {
                                 event, dtmf_ssrc, &mut dtmf_seq,
                                 base_ts, dtmf_payload_type,
                             );
-                            for pkt in pkts {
-                                let out = match encrypt_ctx.as_mut() {
-                                    Some(ctx) => match ctx.encrypt_rtp(&pkt) {
-                                        Ok(b) => b.to_vec(),
-                                        Err(e) => { error!("SRTP encrypt (DTMF): {e}"); continue; }
-                                    },
-                                    None => pkt,
-                                };
-                                if let Err(e) = send_sock.send_to(&out, remote_rtp).await {
-                                    error!("DTMF RTP send: {e}");
-                                }
+                            for pkt in &pkts {
+                                let _ = encrypt_and_send(
+                                    encrypt_ctx.as_mut(), pkt, &send_sock, remote_rtp, &send_stats, Leg::One, "DTMF",
+                                )
+                                .await;
                             }
                             // Broadcast DTMF to both legs during a conference.
                             if let (Some(sock2), Some(remote2), Some(ssrc2), Some(pt2), Some(sender2)) =
@@ -565,17 +597,12 @@ impl MediaEngine {
                                     event, ssrc2, &mut dtmf_seq2,
                                     base_ts2, pt2,
                                 );
-                                for pkt in pkts2 {
-                                    let out = match leg2_encrypt_ctx.as_mut() {
-                                        Some(ctx) => match ctx.encrypt_rtp(&pkt) {
-                                            Ok(b) => b.to_vec(),
-                                            Err(e) => { error!("SRTP encrypt (DTMF leg2): {e}"); continue; }
-                                        },
-                                        None => pkt,
-                                    };
-                                    if let Err(e) = sock2.send_to(&out, remote2).await {
-                                        error!("DTMF RTP send (leg2): {e}");
-                                    }
+                                for pkt in &pkts2 {
+                                    let _ = encrypt_and_send(
+                                        leg2_encrypt_ctx.as_mut(), pkt, sock2, remote2, &send_stats, Leg::Two,
+                                        "DTMF leg2",
+                                    )
+                                    .await;
                                 }
                             }
                         }
