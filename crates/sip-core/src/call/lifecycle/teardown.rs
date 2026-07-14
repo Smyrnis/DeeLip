@@ -34,17 +34,19 @@ impl SipStack {
         let contact = ctx.contact;
         let via_proto = ctx.via_proto;
         let contact_transport = ctx.contact_transport;
+        let via_line = crate::client::build_via(via_proto, local_ip, local_port, &branch);
+        let contact_line = crate::client::build_contact(username, adv_ip, local_port, contact_transport);
         let user_agent = crate::USER_AGENT;
 
         let bye = format!(
             "BYE {to_uri} SIP/2.0\r\n\
-             Via: SIP/2.0/{via_proto} {local_ip}:{local_port};branch={branch};rport\r\n\
+             {via_line}\
              Max-Forwards: 70\r\n\
              To: <{to_uri}>{to_tag}\r\n\
              From: \"{display}\" <sip:{username}@{server}>;tag={from_tag}\r\n\
              Call-ID: {call_id_s}\r\n\
              CSeq: {cseq} BYE\r\n\
-             Contact: <sip:{username}@{adv_ip}:{local_port}{contact_transport}>\r\n\
+             {contact_line}\
              User-Agent: {user_agent}\r\n\
              Content-Length: 0\r\n\r\n"
         );

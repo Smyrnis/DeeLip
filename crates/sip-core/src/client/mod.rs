@@ -14,6 +14,7 @@ mod events;
 mod run_loop;
 
 pub use events::EventSender;
+pub(crate) use builders::{build_contact, build_via};
 pub(crate) use events::{IncomingVideoAnswer, OutgoingVideoConnected, StackEvent};
 
 use std::collections::HashMap;

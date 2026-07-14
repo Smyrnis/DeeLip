@@ -72,17 +72,19 @@ impl SipStack {
         dialog.local_sdp = Some(local_sdp.to_string());
         let via_proto = ctx.via_proto;
         let contact_transport = ctx.contact_transport;
+        let via_line = crate::client::build_via(via_proto, local_ip, local_port, &branch);
+        let contact_line = crate::client::build_contact(username, adv_ip, local_port, contact_transport);
         let user_agent = crate::USER_AGENT;
 
         let reinvite = format!(
             "INVITE {to_uri} SIP/2.0\r\n\
-             Via: SIP/2.0/{via_proto} {local_ip}:{local_port};branch={branch};rport\r\n\
+             {via_line}\
              Max-Forwards: 70\r\n\
              To: <{to_uri}>{to_tag}\r\n\
              From: \"{display}\" <sip:{username}@{server}>;tag={from_tag}\r\n\
              Call-ID: {call_id_s}\r\n\
              CSeq: {cseq} INVITE\r\n\
-             Contact: <sip:{username}@{adv_ip}:{local_port}{contact_transport}>\r\n\
+             {contact_line}\
              Content-Type: application/sdp\r\n\
              User-Agent: {user_agent}\r\n\
              Content-Length: {body_len}\r\n\r\n\
@@ -137,17 +139,19 @@ impl SipStack {
         dialog.session_refresh_pending = true;
         let via_proto = ctx.via_proto;
         let contact_transport = ctx.contact_transport;
+        let via_line = crate::client::build_via(via_proto, local_ip, local_port, &branch);
+        let contact_line = crate::client::build_contact(username, adv_ip, local_port, contact_transport);
         let user_agent = crate::USER_AGENT;
 
         let refresh = format!(
             "INVITE {to_uri} SIP/2.0\r\n\
-             Via: SIP/2.0/{via_proto} {local_ip}:{local_port};branch={branch};rport\r\n\
+             {via_line}\
              Max-Forwards: 70\r\n\
              To: <{to_uri}>{to_tag}\r\n\
              From: \"{display}\" <sip:{username}@{server}>;tag={from_tag}\r\n\
              Call-ID: {call_id_s}\r\n\
              CSeq: {cseq} INVITE\r\n\
-             Contact: <sip:{username}@{adv_ip}:{local_port}{contact_transport}>\r\n\
+             {contact_line}\
              Content-Type: application/sdp\r\n\
              Supported: timer\r\n\
              Session-Expires: {interval};refresher={refresher}\r\n\
@@ -208,18 +212,20 @@ impl SipStack {
         let contact = ctx.contact;
         let via_proto = ctx.via_proto;
         let contact_transport = ctx.contact_transport;
+        let via_line = crate::client::build_via(via_proto, local_ip, local_port, &branch);
+        let contact_line = crate::client::build_contact(username, adv_ip, local_port, contact_transport);
 
         let user_agent = crate::USER_AGENT;
         let body = format!("Signal={digit}\r\nDuration=250\r\n");
         let info = format!(
             "INFO {to_uri} SIP/2.0\r\n\
-             Via: SIP/2.0/{via_proto} {local_ip}:{local_port};branch={branch};rport\r\n\
+             {via_line}\
              Max-Forwards: 70\r\n\
              To: <{to_uri}>{to_tag}\r\n\
              From: \"{display}\" <sip:{username}@{server}>;tag={from_tag}\r\n\
              Call-ID: {call_id_s}\r\n\
              CSeq: {cseq} INFO\r\n\
-             Contact: <sip:{username}@{adv_ip}:{local_port}{contact_transport}>\r\n\
+             {contact_line}\
              Content-Type: application/dtmf-relay\r\n\
              User-Agent: {user_agent}\r\n\
              Content-Length: {}\r\n\r\n{body}",

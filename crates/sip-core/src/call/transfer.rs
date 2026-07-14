@@ -37,17 +37,19 @@ impl SipStack {
             dialog.remote_contact.as_deref().and_then(|s| s.parse().ok()).unwrap_or(self.server_addr);
         let via_proto = self.via_proto();
         let contact_transport = self.contact_transport_param();
+        let via_line = crate::client::build_via(via_proto, &local_ip, local_port, &branch);
+        let contact_line = crate::client::build_contact(&username, &adv_ip, local_port, contact_transport);
         let user_agent = crate::USER_AGENT;
 
         let refer = format!(
             "REFER {to_uri} SIP/2.0\r\n\
-             Via: SIP/2.0/{via_proto} {local_ip}:{local_port};branch={branch};rport\r\n\
+             {via_line}\
              Max-Forwards: 70\r\n\
              To: <{to_uri}>{to_tag}\r\n\
              From: \"{display}\" <sip:{username}@{server}>;tag={from_tag}\r\n\
              Call-ID: {call_id_s}\r\n\
              CSeq: {cseq} REFER\r\n\
-             Contact: <sip:{username}@{adv_ip}:{local_port}{contact_transport}>\r\n\
+             {contact_line}\
              Refer-To: <{target}>\r\n\
              User-Agent: {user_agent}\r\n\
              Content-Length: 0\r\n\r\n"
@@ -98,17 +100,19 @@ impl SipStack {
             dialog.remote_contact.as_deref().and_then(|s| s.parse().ok()).unwrap_or(self.server_addr);
         let via_proto = self.via_proto();
         let contact_transport = self.contact_transport_param();
+        let via_line = crate::client::build_via(via_proto, &local_ip, local_port, &branch);
+        let contact_line = crate::client::build_contact(&username, &adv_ip, local_port, contact_transport);
         let user_agent = crate::USER_AGENT;
 
         let refer = format!(
             "REFER {to_uri} SIP/2.0\r\n\
-             Via: SIP/2.0/{via_proto} {local_ip}:{local_port};branch={branch};rport\r\n\
+             {via_line}\
              Max-Forwards: 70\r\n\
              To: <{to_uri}>{to_tag}\r\n\
              From: \"{display}\" <sip:{username}@{server}>;tag={from_tag}\r\n\
              Call-ID: {call_id_s}\r\n\
              CSeq: {cseq} REFER\r\n\
-             Contact: <sip:{username}@{adv_ip}:{local_port}{contact_transport}>\r\n\
+             {contact_line}\
              Refer-To: <{refer_to}>\r\n\
              User-Agent: {user_agent}\r\n\
              Content-Length: 0\r\n\r\n"

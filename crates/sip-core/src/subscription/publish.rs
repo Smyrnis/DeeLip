@@ -100,12 +100,13 @@ impl SipStack {
         let local_port = self.local_port;
         let display = self.account.display_name.as_deref().unwrap_or(username);
         let via_proto = self.via_proto();
+        let via_line = crate::client::build_via(via_proto, local_ip, local_port, &branch);
         let body_len = body.len();
         let user_agent = crate::USER_AGENT;
 
         let mut msg = format!(
             "PUBLISH {entity} SIP/2.0\r\n\
-             Via: SIP/2.0/{via_proto} {local_ip}:{local_port};branch={branch};rport\r\n\
+             {via_line}\
              Max-Forwards: 70\r\n\
              To: <{entity}>\r\n\
              From: \"{display}\" <sip:{username}@{server}>;tag={from_tag}\r\n\

@@ -80,6 +80,7 @@ impl SipStack {
         let display = self.account.display_name.as_deref().unwrap_or(username);
         let via_proto = self.via_proto();
         let contact_transport = self.contact_transport_param();
+        let contact_line = build_contact(username, adv_ip, local_port, contact_transport);
 
         format!(
             "ACK {to_uri} SIP/2.0\r\n\
@@ -89,10 +90,26 @@ impl SipStack {
              From: \"{display}\" <sip:{username}@{server}>;tag={from_tag}\r\n\
              Call-ID: {call_id}\r\n\
              CSeq: {cseq} ACK\r\n\
-             Contact: <sip:{username}@{adv_ip}:{local_port}{contact_transport}>\r\n\
+             {contact_line}\
              Content-Length: 0\r\n\r\n"
         )
     }
+}
+
+/// Standard request-side `Via:` header line, including `;rport` (so we
+/// learn our actual NAT-mapped port from any device between us and the
+/// server) -- shared by every request builder in this crate. NOT used by
+/// `build_ack` above: ACK is the one request type that never gets a direct
+/// SIP response, so `;rport` serves no purpose there and was never
+/// included -- that's a deliberate difference, not an oversight.
+pub(crate) fn build_via(via_proto: &str, local_ip: &str, local_port: u16, branch: &str) -> String {
+    format!("Via: SIP/2.0/{via_proto} {local_ip}:{local_port};branch={branch};rport\r\n")
+}
+
+/// Standard `Contact:` header line for our own identity -- shared by every
+/// request builder in this crate, and by `build_ack` above.
+pub(crate) fn build_contact(username: &str, adv_ip: &str, local_port: u16, contact_transport: &str) -> String {
+    format!("Contact: <sip:{username}@{adv_ip}:{local_port}{contact_transport}>\r\n")
 }
 
 pub(super) fn via_proto_str(proto: TransportProtocol) -> &'static str {

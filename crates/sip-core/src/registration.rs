@@ -84,18 +84,20 @@ impl SipStack {
         let display = self.account.display_name.as_deref().unwrap_or(username);
         let via_proto = self.via_proto();
         let contact_transport = self.contact_transport_param();
+        let via_line = crate::client::build_via(via_proto, local_ip, local_port, &branch);
+        let contact_line = crate::client::build_contact(username, adv_ip, local_port, contact_transport);
         let expires = self.account.register_expires;
         let user_agent = crate::USER_AGENT;
 
         let mut msg = format!(
             "REGISTER sip:{server} SIP/2.0\r\n\
-             Via: SIP/2.0/{via_proto} {local_ip}:{local_port};branch={branch};rport\r\n\
+             {via_line}\
              Max-Forwards: 70\r\n\
              To: \"{display}\" <sip:{username}@{server}>\r\n\
              From: \"{display}\" <sip:{username}@{server}>;tag={from_tag}\r\n\
              Call-ID: {call_id}\r\n\
              CSeq: {cseq} REGISTER\r\n\
-             Contact: <sip:{username}@{adv_ip}:{local_port}{contact_transport}>\r\n\
+             {contact_line}\
              Expires: {expires}\r\n\
              User-Agent: {user_agent}\r\n"
         );
