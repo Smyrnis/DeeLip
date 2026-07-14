@@ -131,6 +131,17 @@ impl Db {
     /// Idempotent `ALTER TABLE ADD COLUMN` for anything `SCHEMA` expects but
     /// an existing `accounts` table predates -- adding a column here always
     /// needs a matching entry in `SCHEMA` too. Full picture: `docs/crates/config.md`.
+    ///
+    /// Checks `PRAGMA table_info` once up front and only issues `ALTER
+    /// TABLE` for columns that are actually missing, rather than
+    /// unconditionally attempting all of them and string-matching
+    /// "duplicate column name" errors to ignore the ones that already
+    /// exist -- on every single startup (not just a fresh database), that
+    /// used to mean this many round-trips regardless. Also more robust
+    /// than the error-text match it replaces (SQLite's exact wording isn't
+    /// a stable API to depend on); a real existence check needs no
+    /// separately-maintained version number a future column addition
+    /// could forget to bump either.
     fn migrate_accounts_columns(&self) -> anyhow::Result<()> {
         const COLUMNS: &[&str] = &[
             "account_name   TEXT",
@@ -155,12 +166,18 @@ impl Db {
             "local_account INTEGER NOT NULL DEFAULT 0",
             "video_enabled INTEGER NOT NULL DEFAULT 0",
         ];
+        let mut existing = std::collections::HashSet::new();
+        let mut stmt = self.conn.prepare("PRAGMA table_info(accounts)")?;
+        for name in stmt.query_map([], |row| row.get::<_, String>(1))? {
+            existing.insert(name?);
+        }
+
         for col in COLUMNS {
-            if let Err(e) = self.conn.execute(&format!("ALTER TABLE accounts ADD COLUMN {col}"), [])
-                && !e.to_string().contains("duplicate column name")
-            {
-                return Err(e.into());
+            let col_name = col.split_whitespace().next().unwrap_or(col);
+            if existing.contains(col_name) {
+                continue;
             }
+            self.conn.execute(&format!("ALTER TABLE accounts ADD COLUMN {col}"), [])?;
         }
         Ok(())
     }
