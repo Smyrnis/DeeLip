@@ -139,6 +139,101 @@ async fn handle_zrtp_outcomes(
     }
 }
 
+/// Bundles the leg-1-only ZRTP state a `recv_loop` needs -- `None` for leg 2
+/// (conference legs stay SDES/plain-only, never ZRTP -- see
+/// `MediaEngineOptions::zrtp`'s doc comment).
+struct ZrtpRecvState {
+    runtime: ZrtpRuntime,
+    encrypt_tx: mpsc::UnboundedSender<([u8; 16], [u8; 14])>,
+    sas: Arc<Mutex<Option<String>>>,
+}
+
+/// Shared receive-loop body for both legs' RTP recv tasks: recv -> (ZRTP
+/// packet? hand to `zrtp`, if any, and loop) -> SRTP-decrypt (if
+/// `decrypt_ctx` is `Some`) -> parse -> drop DTMF payloads -> stats/jitter
+/// -> decode (voice, or synthesize comfort noise if `cn_pt` matches) ->
+/// push to `playback`. Mirrors `video_engine.rs`'s own `recv_loop`, which
+/// already shares one function between both legs the same way -- this was
+/// previously two hand-duplicated ~35-75 line async blocks, one per leg.
+#[allow(clippy::too_many_arguments)]
+async fn recv_loop(
+    sock: Arc<RtpSocket>, mut decrypt_ctx: Option<SrtpContext>, mut decoder: AudioDecoder, dtmf_pt: u8,
+    cn_pt: Option<u8>, clock_hz: f64, playback: PlaybackTx, stats: SharedStats, leg: Leg,
+    mut zrtp: Option<ZrtpRecvState>, remote_rtp: SocketAddr, mut stop_rx: watch::Receiver<bool>, what: &'static str,
+) {
+    let mut jitter = JitterTracker::default();
+    let mut cn_state = ComfortNoiseState::new();
+    let mut buf = vec![0u8; 2048];
+    // Always constructed (needed unconditionally for `tokio::select!`'s
+    // branch below to type-check) but only actually ticks meaningfully when
+    // `zrtp.is_some()`, matching the `if zrtp_runtime.is_some()` guard this
+    // replaces.
+    let mut zrtp_retransmit_tick = tokio::time::interval(Duration::from_millis(100));
+    loop {
+        tokio::select! {
+            Ok((len, _from)) = sock.recv_from(&mut buf) => {
+                if is_zrtp_packet(&buf[..len]) {
+                    if let Some(z) = zrtp.as_mut() {
+                        let outcomes = z.runtime.handle_incoming(&buf[..len]);
+                        handle_zrtp_outcomes(outcomes, &sock, remote_rtp, &mut decrypt_ctx, &z.encrypt_tx, &z.sas).await;
+                    }
+                    continue;
+                }
+                let decrypted;
+                let plain: &[u8] = if let Some(ctx) = decrypt_ctx.as_mut() {
+                    match ctx.decrypt_rtp(&buf[..len]) {
+                        Ok(b) => { decrypted = b; &decrypted[..] }
+                        Err(e) => { warn!("SRTP decrypt ({what}): {e}"); continue; }
+                    }
+                } else {
+                    &buf[..len]
+                };
+                if let Some(pkt) = RtpPacket::decode(plain) {
+                    if pkt.payload_type == DTMF_PAYLOAD_TYPE || pkt.payload_type == dtmf_pt {
+                        continue;
+                    }
+                    {
+                        let mut s = stats.lock().unwrap();
+                        match leg {
+                            Leg::One => {
+                                s.leg1.packets_received += 1;
+                                s.leg1.bytes_received   += len as u64;
+                                jitter.observe(&mut s.leg1, &pkt, clock_hz);
+                            }
+                            Leg::Two => {
+                                if let Some(ls) = s.leg2.as_mut() {
+                                    ls.packets_received += 1;
+                                    ls.bytes_received   += len as u64;
+                                    jitter.observe(ls, &pkt, clock_hz);
+                                }
+                            }
+                        }
+                    }
+                    let pcm = if cn_pt == Some(pkt.payload_type) {
+                        // Comfort-noise/SID packet -- see `vad`'s module doc
+                        // for the inter-SID-gap simplification this represents.
+                        let level = pkt.payload.first().copied().unwrap_or(127);
+                        synthesize_comfort_noise(level, FRAME_SAMPLES, &mut cn_state)
+                    } else {
+                        decoder.decode(&pkt.payload)
+                    };
+                    push_to_jitter(&playback, &pcm);
+                }
+            }
+            _ = zrtp_retransmit_tick.tick(), if zrtp.is_some() => {
+                if let Some(z) = zrtp.as_mut() {
+                    let outcomes = z.runtime.tick(Instant::now());
+                    handle_zrtp_outcomes(outcomes, &sock, remote_rtp, &mut decrypt_ctx, &z.encrypt_tx, &z.sas).await;
+                }
+            }
+            Ok(()) = stop_rx.changed() => {
+                if *stop_rx.borrow() { break; }
+            }
+        }
+    }
+    debug!("RTP recv task ({what}) stopped");
+}
+
 /// The RTP wire transport: a plain local UDP socket, or a TURN-relayed `Conn`
 /// (see `deelip_nat::allocate_relay`). Both shapes speak send_to/recv_from, so
 /// everything downstream (codec dispatch, SRTP, DTMF, jitter buffer) is
@@ -323,7 +418,7 @@ impl MediaEngine {
             .map(|s| SrtpContext::new(&s.local.key, &s.local.salt, ProtectionProfile::Aes128CmHmacSha1_80, None, None))
             .transpose()
             .context("Creating SRTP encrypt context")?;
-        let mut decrypt_ctx: Option<SrtpContext> = srtp
+        let decrypt_ctx: Option<SrtpContext> = srtp
             .as_ref()
             .map(|s| {
                 SrtpContext::new(
@@ -423,7 +518,7 @@ impl MediaEngine {
 
         let (stop_tx, stop_rx) = watch::channel(false);
         let mut stop_send = stop_rx.clone();
-        let mut stop_recv = stop_rx;
+        let stop_recv = stop_rx;
 
         let (dtmf_tx, mut dtmf_rx) = mpsc::unbounded_channel::<char>();
         let (inband_dtmf_tx, mut inband_dtmf_rx) = mpsc::unbounded_channel::<char>();
@@ -631,139 +726,51 @@ impl MediaEngine {
         });
 
         // ── Recv task (leg 1) ─────────────────────────────────────────────────
-        let recv_sock = socket;
-        let mut decoder = AudioDecoder::new(codec, "")?;
-        let recv_stats = stats.clone();
+        let decoder = AudioDecoder::new(codec, "")?;
         let recv_clock_hz = clock_hz_for(codec);
-        let zrtp_sas_recv = zrtp_sas.clone();
-        let mut zrtp_retransmit_tick = tokio::time::interval(Duration::from_millis(100));
+        let zrtp_recv_state = zrtp_runtime
+            .take()
+            .map(|runtime| ZrtpRecvState { runtime, encrypt_tx: zrtp_encrypt_tx, sas: zrtp_sas.clone() });
 
-        let recv_task = tokio::spawn(async move {
-            let mut jitter = JitterTracker::default();
-            let mut cn_state = ComfortNoiseState::new();
-            let mut buf = vec![0u8; 2048];
-            loop {
-                tokio::select! {
-                    Ok((len, _from)) = recv_sock.recv_from(&mut buf) => {
-                        if is_zrtp_packet(&buf[..len]) {
-                            if let Some(runtime) = zrtp_runtime.as_mut() {
-                                let outcomes = runtime.handle_incoming(&buf[..len]);
-                                handle_zrtp_outcomes(
-                                    outcomes,
-                                    &recv_sock,
-                                    remote_rtp,
-                                    &mut decrypt_ctx,
-                                    &zrtp_encrypt_tx,
-                                    &zrtp_sas_recv,
-                                ).await;
-                            }
-                            continue;
-                        }
-                        let decrypted;
-                        let plain: &[u8] = if let Some(ctx) = decrypt_ctx.as_mut() {
-                            match ctx.decrypt_rtp(&buf[..len]) {
-                                Ok(b) => { decrypted = b; &decrypted[..] }
-                                Err(e) => { warn!("SRTP decrypt: {e}"); continue; }
-                            }
-                        } else {
-                            &buf[..len]
-                        };
-                        if let Some(pkt) = RtpPacket::decode(plain) {
-                            // Ignore DTMF packets; only decode voice frames
-                            if pkt.payload_type == DTMF_PAYLOAD_TYPE
-                                || pkt.payload_type == dtmf_payload_type
-                            {
-                                continue;
-                            }
-                            {
-                                let mut s = recv_stats.lock().unwrap();
-                                s.leg1.packets_received += 1;
-                                s.leg1.bytes_received   += len as u64;
-                                jitter.observe(&mut s.leg1, &pkt, recv_clock_hz);
-                            }
-                            let pcm = if cn_pt == Some(pkt.payload_type) {
-                                // Comfort-noise/SID packet -- see `vad`'s
-                                // module doc for the inter-SID-gap
-                                // simplification this represents.
-                                let level = pkt.payload.first().copied().unwrap_or(127);
-                                synthesize_comfort_noise(level, FRAME_SAMPLES, &mut cn_state)
-                            } else {
-                                decoder.decode(&pkt.payload)
-                            };
-                            push_to_jitter(&leg1_buf, &pcm);
-                        }
-                    }
-                    _ = zrtp_retransmit_tick.tick(), if zrtp_runtime.is_some() => {
-                        if let Some(runtime) = zrtp_runtime.as_mut() {
-                            let outcomes = runtime.tick(Instant::now());
-                            handle_zrtp_outcomes(
-                                outcomes,
-                                &recv_sock,
-                                remote_rtp,
-                                &mut decrypt_ctx,
-                                &zrtp_encrypt_tx,
-                                &zrtp_sas_recv,
-                            ).await;
-                        }
-                    }
-                    Ok(()) = stop_recv.changed() => {
-                        if *stop_recv.borrow() { break; }
-                    }
-                }
-            }
-            debug!("RTP recv task stopped");
-        });
+        let recv_task = tokio::spawn(recv_loop(
+            socket,
+            decrypt_ctx,
+            decoder,
+            dtmf_payload_type,
+            cn_pt,
+            recv_clock_hz,
+            leg1_buf.clone(),
+            stats.clone(),
+            Leg::One,
+            zrtp_recv_state,
+            remote_rtp,
+            stop_recv,
+            "leg1",
+        ));
 
         // ── Recv task (leg 2, conference only) ────────────────────────────────
         let recv_task2 = if let Some(leg) = &second_leg {
             let recv_sock2 = leg2_socket.clone().unwrap();
-            let mut decoder2 = AudioDecoder::new(leg.codec, " (leg2)")?;
-            let codec2 = leg.codec;
+            let decoder2 = AudioDecoder::new(leg.codec, " (leg2)")?;
             let pt2 = leg2_dtmf_pt.unwrap();
-            let mut decrypt_ctx2 = leg2_decrypt_ctx;
             let leg2_buf_recv = leg2_buf.clone().unwrap();
-            let mut stop_recv2 = stop_tx.subscribe();
-            let recv_stats2 = stats.clone();
-            let recv_clock_hz2 = clock_hz_for(codec2);
+            let recv_clock_hz2 = clock_hz_for(leg.codec);
 
-            Some(tokio::spawn(async move {
-                let mut jitter2 = JitterTracker::default();
-                let mut buf = vec![0u8; 2048];
-                loop {
-                    tokio::select! {
-                        Ok((len, _from)) = recv_sock2.recv_from(&mut buf) => {
-                            let decrypted;
-                            let plain: &[u8] = if let Some(ctx) = decrypt_ctx2.as_mut() {
-                                match ctx.decrypt_rtp(&buf[..len]) {
-                                    Ok(b) => { decrypted = b; &decrypted[..] }
-                                    Err(e) => { warn!("SRTP decrypt (leg2): {e}"); continue; }
-                                }
-                            } else {
-                                &buf[..len]
-                            };
-                            if let Some(pkt) = RtpPacket::decode(plain) {
-                                if pkt.payload_type == DTMF_PAYLOAD_TYPE || pkt.payload_type == pt2 {
-                                    continue;
-                                }
-                                {
-                                    let mut s = recv_stats2.lock().unwrap();
-                                    if let Some(leg2) = s.leg2.as_mut() {
-                                        leg2.packets_received += 1;
-                                        leg2.bytes_received   += len as u64;
-                                        jitter2.observe(leg2, &pkt, recv_clock_hz2);
-                                    }
-                                }
-                                let pcm = decoder2.decode(&pkt.payload);
-                                push_to_jitter(&leg2_buf_recv, &pcm);
-                            }
-                        }
-                        Ok(()) = stop_recv2.changed() => {
-                            if *stop_recv2.borrow() { break; }
-                        }
-                    }
-                }
-                debug!("RTP recv task (leg2) stopped");
-            }))
+            Some(tokio::spawn(recv_loop(
+                recv_sock2,
+                leg2_decrypt_ctx,
+                decoder2,
+                pt2,
+                None, // leg 2 never does comfort noise -- unchanged from before this refactor
+                recv_clock_hz2,
+                leg2_buf_recv,
+                stats.clone(),
+                Leg::Two,
+                None, // leg 2 is never ZRTP -- unchanged from before this refactor
+                leg.remote_rtp,
+                stop_tx.subscribe(),
+                "leg2",
+            )))
         } else {
             None
         };
