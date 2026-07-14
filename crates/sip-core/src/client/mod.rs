@@ -33,7 +33,6 @@ use crate::{
 };
 
 const REG_MARGIN: u32 = 60;
-pub(crate) const REG_RECV_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_RETRY: Duration = Duration::from_secs(300);
 pub(crate) const SUBSCRIBE_EXPIRES: u32 = 3600;
 const PRESENCE_TICK: Duration = Duration::from_secs(30);

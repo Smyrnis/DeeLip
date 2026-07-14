@@ -10,6 +10,7 @@ mod db;
 mod dialplan;
 mod history;
 mod messages;
+pub mod timeouts;
 
 pub use account::{
     AppConfig, AudioConfig, DefaultListAction, DtmfMode, Language, MediaEncryption, RecordingFormat, SipAccount,

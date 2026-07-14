@@ -2,8 +2,10 @@ use anyhow::Context;
 use std::sync::atomic::Ordering;
 use tracing::{debug, info, warn};
 
+use deelip_config::timeouts::REG_RECV_TIMEOUT;
+
 use crate::{
-    client::{REG_RECV_TIMEOUT, SipStack},
+    client::SipStack,
     wire::auth::build_challenge_response,
     wire::message::SipMessage,
     wire::util::{extract_expires, new_branch, parse_via_received},

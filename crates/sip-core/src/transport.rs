@@ -1,6 +1,5 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::Context;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf, split};
@@ -12,14 +11,9 @@ use tokio_rustls::client::TlsStream;
 use tracing::{debug, warn};
 
 use deelip_config::TransportProtocol;
+use deelip_config::timeouts::CONNECT_TIMEOUT;
 
 use crate::wire::framing::MessageFramer;
-
-/// Bounds every TCP connect / TLS handshake below -- matches STUN's existing
-/// 5s timeout (crates/nat/src/stun.rs). Without this, a firewalled or
-/// silently-dropping peer can hang the caller indefinitely; these calls sit
-/// on main()'s startup path (via SipStack::new) before the app window exists.
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Wraps `fut` in `CONNECT_TIMEOUT`, distinguishing the timeout itself from
 /// a normal `io::Error` in the `.context(...)` message so a hang and a real

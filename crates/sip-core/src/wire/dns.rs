@@ -4,16 +4,15 @@
 //! "Wire layer" section.
 
 use std::net::{IpAddr, SocketAddr};
-use std::time::Duration;
 
 use anyhow::Context;
 use deelip_config::TransportProtocol;
+use deelip_config::timeouts::DNS_TIMEOUT;
 use rand::Rng;
 use tokio::net::UdpSocket;
 use tokio::time::timeout;
 use tracing::debug;
 
-const DNS_TIMEOUT: Duration = Duration::from_secs(3);
 const QTYPE_A: u16 = 1;
 const QTYPE_AAAA: u16 = 28;
 const QTYPE_SRV: u16 = 33;

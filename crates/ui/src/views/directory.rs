@@ -5,6 +5,9 @@
 //! settings.
 
 use anyhow::Context as _;
+use deelip_config::timeouts::{
+    DIRECTORY_CONNECT_TIMEOUT as CONNECT_TIMEOUT, DIRECTORY_SEARCH_TIMEOUT as SEARCH_TIMEOUT,
+};
 use egui::{RichText, Ui};
 
 use crate::app::DeelipApp;
@@ -30,9 +33,6 @@ pub(crate) enum DirectoryState {
 pub(crate) enum DirectoryMsg {
     Done(anyhow::Result<Vec<DirectoryEntry>>),
 }
-
-const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
-const SEARCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// Attribute names tried, in priority order, for a result's display name /
 /// phone number -- covers both common `inetOrgPerson` (OpenLDAP) and Active

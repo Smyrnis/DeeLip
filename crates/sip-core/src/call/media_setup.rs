@@ -3,21 +3,15 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
 
 use deelip_config::SipAccount;
+use deelip_config::timeouts::ICE_GATHER_TIMEOUT;
 use deelip_nat::{IceConnection, IceGathered, TurnRelay};
 use webrtc_util::Conn;
 
 use crate::call::dialog::{CallMedia, VideoMedia};
 use crate::events::{CallMediaReady, VideoMediaReady};
 use crate::wire::sdp::{ALL_CODECS, AudioCodec, IceAttrs, ParsedSdp, SrtpParams, SrtpSession, VideoCodec};
-
-/// Bounded wait for ICE candidate gathering (host candidates are instant;
-/// server-reflexive/relay each cost one STUN/TURN round trip) -- generous
-/// enough for a live network's worst case without stalling call setup for
-/// long if a configured STUN/TURN server is simply unreachable.
-const ICE_GATHER_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Network settings a `SipStack` needs for call setup -- separate from
 /// `SipAccount` since STUN/TURN server config is process-wide (Settings'

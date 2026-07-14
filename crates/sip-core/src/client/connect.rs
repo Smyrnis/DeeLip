@@ -13,6 +13,7 @@ use tokio::sync::mpsc;
 use tokio::time::Instant;
 use tracing::{debug, error, info};
 
+use deelip_config::timeouts::AUTO_PROBE_TIMEOUT;
 use deelip_config::{SipAccount, TransportProtocol};
 
 use super::builders::{build_contact, build_via, contact_transport_param_str, via_proto_str};
@@ -270,8 +271,6 @@ impl SipStack {
         Ok(SipHandle { event_rx, cmd_tx, advertised_ip, secure, domain })
     }
 }
-
-const AUTO_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// One-shot, unauthenticated `REGISTER` used only to test whether a
 /// just-connected transport candidate in `connect_transport_auto` actually
