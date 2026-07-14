@@ -110,6 +110,13 @@ image = { workspace = true }
 
 [profile.release]
 strip = true
+lto = true
+codegen-units = 1
+# Do NOT add `panic = "abort"` here: crates/ui/src/frame.rs's Windows tray
+# panic-safety fix depends on `std::panic::catch_unwind`, which silently
+# becomes a no-op under `panic = "abort"` (the process just aborts instead
+# of being caught) -- that would quietly reintroduce the exact
+# silent-crash-on-Windows-tray-init risk that fix closed.
 
 # Packaging metadata consumed by `cargo deb` / `cargo generate-rpm`
 # (see .github/workflows/package.yml). Asset paths are relative to this
