@@ -21,6 +21,18 @@ use crate::wire::framing::MessageFramer;
 /// on main()'s startup path (via SipStack::new) before the app window exists.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Wraps `fut` in `CONNECT_TIMEOUT`, distinguishing the timeout itself from
+/// a normal `io::Error` in the `.context(...)` message so a hang and a real
+/// connect failure still read differently in logs. Shared by every
+/// connect-shaped call in this file (plain TCP connect, TLS's TCP connect,
+/// TLS handshake) -- previously each hand-wrapped the same
+/// `timeout(...).await.context(...)?.context(...)?` shape independently.
+async fn connect_with_timeout<T>(
+    fut: impl std::future::Future<Output = std::io::Result<T>>, what: &str,
+) -> anyhow::Result<T> {
+    timeout(CONNECT_TIMEOUT, fut).await.with_context(|| format!("{what} timed out"))?.with_context(|| what.to_string())
+}
+
 /// Unifies UDP (datagram), plain TCP, and TLS (both persistent streams) SIP
 /// transports behind one API.
 pub enum SipTransport {
@@ -147,10 +159,7 @@ impl TcpConn {
         let socket = if bind_addr.is_ipv4() { TcpSocket::new_v4()? } else { TcpSocket::new_v6()? };
         socket.set_reuseaddr(true)?;
         socket.bind(bind_addr).context("Binding TCP socket")?;
-        let stream = timeout(CONNECT_TIMEOUT, socket.connect(server_addr))
-            .await
-            .context("Connecting TCP timed out")?
-            .context("Connecting TCP")?;
+        let stream = connect_with_timeout(socket.connect(server_addr), "Connecting TCP").await?;
         let local_addr = stream.local_addr()?;
         debug!("SIP transport (TCP) connected to {server_addr} (local {local_addr})");
 
@@ -196,16 +205,10 @@ impl TlsConn {
         let socket = if bind_addr.is_ipv4() { TcpSocket::new_v4()? } else { TcpSocket::new_v6()? };
         socket.set_reuseaddr(true)?;
         socket.bind(bind_addr).context("Binding TCP socket")?;
-        let tcp = timeout(CONNECT_TIMEOUT, socket.connect(server_addr))
-            .await
-            .context("Connecting TCP timed out")?
-            .context("Connecting TCP")?;
+        let tcp = connect_with_timeout(socket.connect(server_addr), "Connecting TCP").await?;
         let local_addr = tcp.local_addr()?;
 
-        let tls_stream = timeout(CONNECT_TIMEOUT, connector.connect(name, tcp))
-            .await
-            .context("TLS handshake timed out")?
-            .context("TLS handshake")?;
+        let tls_stream = connect_with_timeout(connector.connect(name, tcp), "TLS handshake").await?;
         debug!("SIP transport (TLS) connected to {server_addr} (local {local_addr})");
 
         Ok(Self { server_addr, halves: StreamHalves::new(tls_stream, local_addr) })
