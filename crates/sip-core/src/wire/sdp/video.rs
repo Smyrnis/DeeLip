@@ -137,6 +137,17 @@ pub fn split_media_sections(sdp: &str) -> Vec<(&str, Vec<&str>)> {
     sections
 }
 
+/// Whether an `a=rtpmap` name matches `codec`'s expected rtpmap prefix --
+/// an exhaustive match over `VideoCodec` (not an if/else over the raw
+/// string), so a future second variant forces a new arm here rather than
+/// silently falling through. See `resolve` (in `parse_video_section`) for
+/// the one call site.
+fn matches_rtpmap_name(codec: VideoCodec, name: &str) -> bool {
+    match codec {
+        VideoCodec::H264 => name.starts_with("h264"),
+    }
+}
+
 /// Parse one already-isolated video section (as produced by
 /// `split_media_sections`) into a `ParsedVideoMedia`. `m_line` is the raw
 /// `"m=video <port> <profile> <pt...>"` line; `attr_lines` are that
@@ -195,7 +206,7 @@ pub fn parse_video_section(m_line: &str, attr_lines: &[&str], allowed: &[VideoCo
 
     let resolve = |pt: u8| -> Option<VideoCodec> {
         let (_, name) = rtpmaps.iter().find(|(p, _)| *p == pt)?;
-        if name.starts_with("h264") { Some(VideoCodec::H264) } else { None }
+        [VideoCodec::H264].into_iter().find(|&c| matches_rtpmap_name(c, name))
     };
     let (codec, payload_type) =
         pt_list.iter().find_map(|&pt| resolve(pt).filter(|c| allowed.contains(c)).map(|c| (c, pt)))?;

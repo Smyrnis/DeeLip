@@ -13,6 +13,7 @@ mod stats;
 pub mod vad;
 pub mod video_capture;
 pub mod video_codec;
+mod video_codec_dispatch;
 pub mod video_engine;
 pub mod video_rtp;
 pub mod zrtp_session;

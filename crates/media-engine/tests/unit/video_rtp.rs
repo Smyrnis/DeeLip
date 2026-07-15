@@ -1,3 +1,5 @@
+use deelip_sip::sdp::VideoCodec;
+
 use super::*;
 use crate::video_codec::{H264Decoder, H264Encoder, Yuv420Frame};
 
@@ -82,4 +84,22 @@ fn encode_fragment_reassemble_decode_round_trip() {
     // `video_rtp`'s output is still valid H.264 that `video_codec`'s
     // decoder accepts, not just byte-identical to itself.
     decoder.decode(&reassembled).unwrap();
+}
+
+#[test]
+fn dispatch_functions_route_h264_to_the_same_result_as_calling_it_directly() {
+    let sps = make_nal(7, 20);
+    let idr = make_nal(5, 3000); // forces FU-A for this one NAL
+    let bitstream = annex_b(&[sps, idr]);
+
+    let direct_packets = fragment_nal_units(&bitstream, 1200);
+    let dispatched_packets = fragment_video_frame(VideoCodec::H264, &bitstream, 1200);
+    assert_eq!(dispatched_packets, direct_packets, "fragment_video_frame(H264, ..) must match fragment_nal_units(..)");
+
+    let direct_reassembled = reassemble_nal_units(&direct_packets);
+    let dispatched_reassembled = reassemble_video_frame(VideoCodec::H264, &dispatched_packets);
+    assert_eq!(
+        dispatched_reassembled, direct_reassembled,
+        "reassemble_video_frame(H264, ..) must match reassemble_nal_units(..)"
+    );
 }

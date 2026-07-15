@@ -181,6 +181,7 @@ impl DeelipApp {
         let conference_leg = second_leg.map(|v| VideoConferenceLeg {
             local_rtp_port: v.local_rtp,
             remote_rtp: v.remote_rtp,
+            codec: v.codec,
             srtp: v.srtp,
             relay: v.relay,
         });
@@ -188,6 +189,7 @@ impl DeelipApp {
         let engine = self.rt.block_on(VideoEngine::start(
             primary.local_rtp,
             primary.remote_rtp,
+            primary.codec,
             primary.srtp,
             primary.relay,
             frame_source,

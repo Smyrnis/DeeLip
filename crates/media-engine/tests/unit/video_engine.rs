@@ -1,7 +1,7 @@
 use super::*;
 use crate::rtp::RtpSender;
 use deelip_sip::SrtpSession;
-use deelip_sip::sdp::{H264_PAYLOAD_TYPE, SrtpParams};
+use deelip_sip::sdp::{H264_PAYLOAD_TYPE, SrtpParams, VideoCodec};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -54,6 +54,7 @@ async fn run_pair(
     let alice = VideoEngine::start(
         alice_port,
         format!("127.0.0.1:{bob_port}").parse().unwrap(),
+        VideoCodec::H264,
         alice_srtp,
         None,
         alice_source.clone(),
@@ -66,6 +67,7 @@ async fn run_pair(
     let bob = VideoEngine::start(
         bob_port,
         format!("127.0.0.1:{alice_port}").parse().unwrap(),
+        VideoCodec::H264,
         bob_srtp,
         None,
         bob_source,
@@ -181,6 +183,7 @@ async fn conference_fans_out_to_both_legs_and_decodes_both_independently() {
     let peer1 = VideoEngine::start(
         peer1_port,
         format!("127.0.0.1:{host_port}").parse().unwrap(),
+        VideoCodec::H264,
         None,
         None,
         peer1_source,
@@ -194,6 +197,7 @@ async fn conference_fans_out_to_both_legs_and_decodes_both_independently() {
     let peer2 = VideoEngine::start(
         peer2_port,
         format!("127.0.0.1:{host_leg2_port}").parse().unwrap(),
+        VideoCodec::H264,
         None,
         None,
         peer2_source,
@@ -206,6 +210,7 @@ async fn conference_fans_out_to_both_legs_and_decodes_both_independently() {
     let host = VideoEngine::start(
         host_port,
         format!("127.0.0.1:{peer1_port}").parse().unwrap(),
+        VideoCodec::H264,
         None,
         None,
         host_source,
@@ -214,6 +219,7 @@ async fn conference_fans_out_to_both_legs_and_decodes_both_independently() {
         Some(VideoConferenceLeg {
             local_rtp_port: host_leg2_port,
             remote_rtp: format!("127.0.0.1:{peer2_port}").parse().unwrap(),
+            codec: VideoCodec::H264,
             srtp: None,
             relay: None,
         }),

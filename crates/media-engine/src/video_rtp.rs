@@ -5,6 +5,28 @@
 //! each one into an actual `RtpPacket` (one shared timestamp per video
 //! frame, marker bit on the last packet). Full picture: `docs/crates/media-engine.md`.
 
+use deelip_sip::sdp::VideoCodec;
+
+/// Codec-dispatching counterpart of `fragment_nal_units` -- mirrors
+/// `codec_dispatch.rs`'s enum-dispatch pattern for video. Only `H264`
+/// exists today; a future VP8 arm would call its own RFC 7741 fragmenter
+/// here instead -- VP8's framing has no NAL/start-code concept at all, so
+/// there's no shared logic to factor out of `fragment_nal_units` itself,
+/// only a shared entry point to route through.
+pub fn fragment_video_frame(codec: VideoCodec, bitstream: &[u8], mtu: usize) -> Vec<Vec<u8>> {
+    match codec {
+        VideoCodec::H264 => fragment_nal_units(bitstream, mtu),
+    }
+}
+
+/// Codec-dispatching counterpart of `reassemble_nal_units` -- see
+/// `fragment_video_frame`'s doc comment.
+pub fn reassemble_video_frame(codec: VideoCodec, rtp_payloads: &[Vec<u8>]) -> Vec<u8> {
+    match codec {
+        VideoCodec::H264 => reassemble_nal_units(rtp_payloads),
+    }
+}
+
 /// RFC 6184 §5.8: the NAL-unit-type value (5 low bits of the first byte)
 /// that marks a packet as an FU-A fragment rather than a plain NAL unit.
 const FU_A_TYPE: u8 = 28;
