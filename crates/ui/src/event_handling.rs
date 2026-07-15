@@ -11,18 +11,18 @@ impl DeelipApp {
     /// Drains the background account-spawn channel (see `main()`'s pre-window
     /// `rt.spawn` task and `AccountSpawnMsg`'s doc comment), called once per
     /// frame alongside `process_sip_events`. Newly-spawned accounts are
-    /// appended to `self.accounts` in whatever order they finish
+    /// appended to `self.accounts_state.accounts` in whatever order they finish
     /// connecting/timing-out in, not `config.accounts`' original order --
-    /// every existing `self.accounts[i]` access already derives `i` from
-    /// `self.accounts`' own current position (picker selection, tray
+    /// every existing `self.accounts_state.accounts[i]` access already derives `i` from
+    /// `self.accounts_state.accounts`' own current position (picker selection, tray
     /// lookups, etc.), never from config order, so this is safe.
     pub(crate) fn process_account_spawn_events(&mut self) {
-        let Some(rx) = &self.account_spawn_rx else { return };
+        let Some(rx) = &self.accounts_state.account_spawn_rx else { return };
         let messages: Vec<AccountSpawnMsg> = rx.try_iter().collect();
         for msg in messages {
             match msg {
                 AccountSpawnMsg::Spawned(account, handle) => {
-                    self.accounts.push(AccountState {
+                    self.accounts_state.accounts.push(AccountState {
                         label: crate::helpers::account_label(&account),
                         account: *account,
                         handle,
@@ -33,7 +33,7 @@ impl DeelipApp {
                     self.refresh_idle_status();
                 }
                 AccountSpawnMsg::Done => {
-                    self.account_spawn_rx = None;
+                    self.accounts_state.account_spawn_rx = None;
                     self.refresh_idle_status();
                 }
             }
@@ -44,11 +44,11 @@ impl DeelipApp {
 
     /// Drain every account's event queue first, tagging each event with the
     /// account index it came from, then process them — a single loop can't
-    /// borrow `self.accounts[i].handle.event_rx` mutably while also calling
+    /// borrow `self.accounts_state.accounts[i].handle.event_rx` mutably while also calling
     /// `&mut self` methods to react to what it received.
     pub(crate) fn process_sip_events(&mut self) {
         let mut events: Vec<(usize, SipEvent)> = Vec::new();
-        for (i, acc) in self.accounts.iter_mut().enumerate() {
+        for (i, acc) in self.accounts_state.accounts.iter_mut().enumerate() {
             while let Ok(event) = acc.handle.event_rx.try_recv() {
                 events.push((i, event));
             }
@@ -61,19 +61,20 @@ impl DeelipApp {
     pub(crate) fn handle_sip_event(&mut self, account: usize, event: SipEvent) {
         match event {
             SipEvent::Registered { expires } => {
-                self.accounts[account].reg_ok = true;
-                self.accounts[account].status = if self.accounts[account].account.local_account {
-                    t("status.ready_local")
-                } else {
-                    tf("status.registered", &[("expires", &expires.to_string())])
-                };
+                self.accounts_state.accounts[account].reg_ok = true;
+                self.accounts_state.accounts[account].status =
+                    if self.accounts_state.accounts[account].account.local_account {
+                        t("status.ready_local")
+                    } else {
+                        tf("status.registered", &[("expires", &expires.to_string())])
+                    };
                 self.refresh_idle_status();
                 self.subscribe_account_contacts(account);
                 self.subscribe_account_mwi(account);
             }
             SipEvent::RegistrationFailed { reason, permanent } => {
-                self.accounts[account].reg_ok = false;
-                self.accounts[account].status = if permanent {
+                self.accounts_state.accounts[account].reg_ok = false;
+                self.accounts_state.accounts[account].status = if permanent {
                     tf("status.registration_failed_permanent", &[("reason", &reason)])
                 } else {
                     tf("status.registration_failed", &[("reason", &reason)])
@@ -81,7 +82,7 @@ impl DeelipApp {
                 self.refresh_idle_status();
             }
             SipEvent::CallRinging { .. } => {
-                self.status_line = t("status.ringing");
+                self.accounts_state.status_line = t("status.ringing");
             }
             SipEvent::CallConnected { call_id, media } => {
                 // `pending_accept` (an inbound call we told `SipStack` to
@@ -113,7 +114,7 @@ impl DeelipApp {
                     };
                     self.calls.push(slot);
                     let idx = self.calls.len() - 1;
-                    self.status_line = tf("status.in_call", &[("uri", &short_uri(&pending.remote_uri))]);
+                    self.accounts_state.status_line = tf("status.in_call", &[("uri", &short_uri(&pending.remote_uri))]);
                     self.start_media(idx);
                 } else if let Some(out) = self.pending_outbound.take() {
                     let slot = CallSlot {
@@ -128,7 +129,7 @@ impl DeelipApp {
                     };
                     self.calls.push(slot);
                     let idx = self.calls.len() - 1;
-                    self.status_line = tf("status.in_call", &[("uri", &short_uri(&out.remote_uri))]);
+                    self.accounts_state.status_line = tf("status.in_call", &[("uri", &short_uri(&out.remote_uri))]);
                     self.start_media(idx);
                 } else {
                     tracing::warn!(call_id, "CallConnected with no pending call — ignoring");
@@ -137,11 +138,11 @@ impl DeelipApp {
             SipEvent::IncomingCall { call_id, from, remote_answer_after } => {
                 let caller = extract_user_part(&from);
                 if self.config.blocklist.iter().any(|entry| extract_user_part(entry) == caller) {
-                    self.accounts[account].handle.reject_call(&call_id);
+                    self.accounts_state.accounts[account].handle.reject_call(&call_id);
                     self.record_history(from, Direction::Inbound, unix_now(), CallStatus::Rejected);
                     return;
                 }
-                let acc = &self.accounts[account].account;
+                let acc = &self.accounts_state.accounts[account].account;
                 // "Deny/Auto Answer (Control Button)": both react to the
                 // same remote answer-after signal (see
                 // `deelip_sip::wire::util::parse_call_info_answer_after`).
@@ -150,7 +151,7 @@ impl DeelipApp {
                 // blocklist above and the capacity check below still apply.
                 if remote_answer_after.is_some() && acc.deny_incoming_control_button {
                     tracing::debug!(call_id, %from, "Remote auto-answer signal + Deny Incoming (Control Button) active, rejecting");
-                    self.accounts[account].handle.reject_call(&call_id);
+                    self.accounts_state.accounts[account].handle.reject_call(&call_id);
                     self.record_history(from, Direction::Inbound, unix_now(), CallStatus::Rejected);
                     return;
                 }
@@ -163,13 +164,13 @@ impl DeelipApp {
                 let server = acc.server.clone();
                 if dnd {
                     tracing::debug!(call_id, %from, "DND active, rejecting incoming call");
-                    self.accounts[account].handle.reject_call(&call_id);
+                    self.accounts_state.accounts[account].handle.reject_call(&call_id);
                     self.record_history(from, Direction::Inbound, unix_now(), CallStatus::Rejected);
                     return;
                 }
                 if let Some(target) = forward_always {
                     let target = normalize_target(&target, &server);
-                    self.accounts[account].handle.redirect_call(&call_id, target);
+                    self.accounts_state.accounts[account].handle.redirect_call(&call_id, target);
                     self.record_history(from, Direction::Inbound, unix_now(), CallStatus::Missed);
                     return;
                 }
@@ -177,7 +178,7 @@ impl DeelipApp {
                 if waiting {
                     if let Some(target) = forward_on_busy {
                         let target = normalize_target(&target, &server);
-                        self.accounts[account].handle.redirect_call(&call_id, target);
+                        self.accounts_state.accounts[account].handle.redirect_call(&call_id, target);
                         self.record_history(from, Direction::Inbound, unix_now(), CallStatus::Missed);
                         return;
                     }
@@ -186,7 +187,7 @@ impl DeelipApp {
                     // call -- only reached when this account has no
                     // `forward_on_busy` of its own, which takes priority.
                     if self.config.single_call_mode && !remote_auto_answer {
-                        self.accounts[account].handle.reject_call(&call_id);
+                        self.accounts_state.accounts[account].handle.reject_call(&call_id);
                         self.record_history(from, Direction::Inbound, unix_now(), CallStatus::Rejected);
                         return;
                     }
@@ -199,15 +200,15 @@ impl DeelipApp {
                 let occupied = self.calls.len() + usize::from(self.pending_accept.is_some());
                 if occupied >= 2 || self.pending_call.is_some() {
                     // Already at capacity (2 concurrent + at most 1 ringing) — decline immediately.
-                    self.accounts[account].handle.reject_call(&call_id);
+                    self.accounts_state.accounts[account].handle.reject_call(&call_id);
                     return;
                 }
-                self.status_line = if waiting {
+                self.accounts_state.status_line = if waiting {
                     tf("status.call_waiting", &[("uri", &short_uri(&from))])
                 } else {
                     tf("status.incoming_from", &[("uri", &short_uri(&from))])
                 };
-                let acc = &self.accounts[account].account;
+                let acc = &self.accounts_state.accounts[account].account;
                 let forward = acc.no_answer_forward.clone().filter(|s| !s.is_empty()).map(|target| {
                     let target = normalize_target(&target, &acc.server);
                     (unix_now() + acc.no_answer_timeout_secs as u64, target)
@@ -240,14 +241,14 @@ impl DeelipApp {
                 self.refresh_call_status();
             }
             SipEvent::RemoteHeld { .. } => {
-                self.status_line = t("status.remote_held");
+                self.accounts_state.status_line = t("status.remote_held");
             }
             SipEvent::RemoteResumed { .. } => {
-                self.status_line = t("status.remote_resumed");
+                self.accounts_state.status_line = t("status.remote_resumed");
             }
             SipEvent::TransferAccepted { call_id } => {
                 tracing::info!(call_id, "Transfer accepted");
-                self.status_line = t("status.transfer_accepted");
+                self.accounts_state.status_line = t("status.transfer_accepted");
                 // Attended transfer only (blind transfer never sets this):
                 // both legs are done once the transferee re-INVITEs the
                 // target directly via Replaces, so hang up both ourselves
@@ -267,7 +268,7 @@ impl DeelipApp {
             }
             SipEvent::TransferFailed { call_id, reason } => {
                 tracing::warn!(call_id, reason, "Transfer failed");
-                self.status_line = tf("status.transfer_failed", &[("reason", &reason)]);
+                self.accounts_state.status_line = tf("status.transfer_failed", &[("reason", &reason)]);
                 self.attended_transfer_original = None;
             }
             SipEvent::PresenceSubscribed { uri, expires } => {
@@ -287,7 +288,7 @@ impl DeelipApp {
                 tracing::warn!(uri, reason, "MWI subscribe failed");
             }
             SipEvent::MwiUpdate { state, .. } => {
-                self.accounts[account].mwi = Some(state);
+                self.accounts_state.accounts[account].mwi = Some(state);
             }
             SipEvent::MessageReceived { from, body } => {
                 self.messages_state.messages.push(Message {
@@ -303,7 +304,7 @@ impl DeelipApp {
             }
             SipEvent::MessageSendResult { to, ok, reason } => {
                 if !ok {
-                    self.status_line = tf(
+                    self.accounts_state.status_line = tf(
                         "status.message_send_failed",
                         &[("uri", &short_uri(&to)), ("reason", &reason.unwrap_or_default())],
                     );
@@ -318,9 +319,9 @@ impl DeelipApp {
     /// with no extra clicks.
     pub(crate) fn resolve_presence_account(&self, contact: &Contact) -> Option<usize> {
         match &contact.presence_account {
-            Some(username) => self.accounts.iter().position(|a| &a.account.username == username),
+            Some(username) => self.accounts_state.accounts.iter().position(|a| &a.account.username == username),
             None => {
-                if self.accounts.is_empty() {
+                if self.accounts_state.accounts.is_empty() {
                     None
                 } else {
                     Some(0)
@@ -329,23 +330,23 @@ impl DeelipApp {
         }
     }
 
-    /// Flip DND for the live account at `idx` (into `self.accounts`) --
+    /// Flip DND for the live account at `idx` (into `self.accounts_state.accounts`) --
     /// takes effect immediately, since incoming-call handling reads DND from
-    /// `self.accounts[i].account.dnd`, not the `self.config.accounts` Settings
+    /// `self.accounts_state.accounts[i].account.dnd`, not the `self.config.accounts` Settings
     /// draft. Those two lists aren't the same or in the same order (`config`
     /// includes disabled accounts too), so the matching config entry is
     /// found by username -- same cross-referencing idiom as
     /// `resolve_presence_account` -- and kept in sync so Settings reflects
     /// the change and it survives a restart.
     pub(crate) fn toggle_dnd(&mut self, idx: usize) {
-        let new_dnd = !self.accounts[idx].account.dnd;
-        self.accounts[idx].account.dnd = new_dnd;
-        let username = self.accounts[idx].account.username.clone();
+        let new_dnd = !self.accounts_state.accounts[idx].account.dnd;
+        self.accounts_state.accounts[idx].account.dnd = new_dnd;
+        let username = self.accounts_state.accounts[idx].account.username.clone();
         if let Some(cfg_acc) = self.config.accounts.iter_mut().find(|a| a.username == username) {
             cfg_acc.dnd = new_dnd;
         }
-        if self.accounts[idx].account.publish_presence {
-            self.accounts[idx].handle.publish_presence(!new_dnd);
+        if self.accounts_state.accounts[idx].account.publish_presence {
+            self.accounts_state.accounts[idx].handle.publish_presence(!new_dnd);
         }
         self.save_config_quietly();
     }
@@ -363,7 +364,7 @@ impl DeelipApp {
             .map(|c| c.sip_uri.clone())
             .collect();
         for uri in targets {
-            self.accounts[account].handle.subscribe_presence(uri);
+            self.accounts_state.accounts[account].handle.subscribe_presence(uri);
         }
     }
 
@@ -371,12 +372,12 @@ impl DeelipApp {
     /// configured — called once that account has actually registered, same
     /// reasoning as `subscribe_account_contacts`.
     pub(crate) fn subscribe_account_mwi(&mut self, account: usize) {
-        let acc = &self.accounts[account].account;
+        let acc = &self.accounts_state.accounts[account].account;
         let Some(mailbox) = acc.mailbox.clone().filter(|s| !s.is_empty()) else {
             return;
         };
         let uri = normalize_target(&mailbox, &acc.server);
-        self.accounts[account].handle.subscribe_mwi(uri);
+        self.accounts_state.accounts[account].handle.subscribe_mwi(uri);
     }
 
     /// A call in `calls` ended or an outstanding attempt failed — figure out
@@ -397,7 +398,8 @@ impl DeelipApp {
         if let Some(pending) = self.pending_accept.take() {
             if pending.call_id == call_id {
                 if let Some((code, reason)) = &failure {
-                    self.status_line = tf("status.call_failed", &[("code", &code.to_string()), ("reason", reason)]);
+                    self.accounts_state.status_line =
+                        tf("status.call_failed", &[("code", &code.to_string()), ("reason", reason)]);
                 }
                 self.record_history(pending.remote_uri, Direction::Inbound, pending.start_time, CallStatus::Rejected);
                 self.refresh_call_status();
@@ -407,7 +409,8 @@ impl DeelipApp {
         }
         if let Some(idx) = self.calls.iter().position(|c| c.call_id == call_id) {
             let status = if let Some((code, reason)) = &failure {
-                self.status_line = tf("status.call_failed", &[("code", &code.to_string()), ("reason", reason)]);
+                self.accounts_state.status_line =
+                    tf("status.call_failed", &[("code", &code.to_string()), ("reason", reason)]);
                 CallStatus::Failed
             } else {
                 CallStatus::Answered
@@ -425,7 +428,8 @@ impl DeelipApp {
         }
         if let Some(out) = self.pending_outbound.take() {
             if let Some((code, reason)) = &failure {
-                self.status_line = tf("status.call_failed", &[("code", &code.to_string()), ("reason", reason)]);
+                self.accounts_state.status_line =
+                    tf("status.call_failed", &[("code", &code.to_string()), ("reason", reason)]);
             }
             self.record_history(out.remote_uri, Direction::Outbound, out.start_time, CallStatus::Failed);
             if failure.is_none() {
@@ -469,9 +473,9 @@ impl DeelipApp {
     /// focused, or the idle registration summary once everything's cleared.
     pub(crate) fn refresh_call_status(&mut self) {
         if let Some(idx) = self.focused_call {
-            self.status_line = tf("status.in_call", &[("uri", &short_uri(&self.calls[idx].remote_uri))]);
+            self.accounts_state.status_line = tf("status.in_call", &[("uri", &short_uri(&self.calls[idx].remote_uri))]);
         } else if !self.calls.is_empty() {
-            self.status_line = t("status.on_hold");
+            self.accounts_state.status_line = t("status.on_hold");
         } else if self.pending_call.is_none() {
             self.refresh_idle_status();
         }
@@ -486,23 +490,24 @@ impl DeelipApp {
         if !self.calls.is_empty() || self.pending_call.is_some() {
             return;
         }
-        match self.accounts.get(self.selected_account) {
+        match self.accounts_state.accounts.get(self.accounts_state.selected_account) {
             Some(acc) => {
-                self.reg_ok = acc.reg_ok;
-                self.status_line = if acc.reg_ok { t("status.ready") } else { t("status.not_registered") };
+                self.accounts_state.reg_ok = acc.reg_ok;
+                self.accounts_state.status_line =
+                    if acc.reg_ok { t("status.ready") } else { t("status.not_registered") };
             }
             // Distinct from genuinely having zero enabled accounts (below):
             // the background spawn task (see `process_account_spawn_events`)
             // is still working, so accounts configured in Settings just
             // haven't finished connecting yet -- don't flash "No accounts
             // configured" while they're on the way.
-            None if self.account_spawn_rx.is_some() => {
-                self.reg_ok = false;
-                self.status_line = t("status.registering");
+            None if self.accounts_state.account_spawn_rx.is_some() => {
+                self.accounts_state.reg_ok = false;
+                self.accounts_state.status_line = t("status.registering");
             }
             None => {
-                self.reg_ok = false;
-                self.status_line = t("status.no_accounts_configured");
+                self.accounts_state.reg_ok = false;
+                self.accounts_state.status_line = t("status.no_accounts_configured");
             }
         }
     }

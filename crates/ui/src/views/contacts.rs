@@ -261,18 +261,20 @@ impl DeelipApp {
         });
         ui.add_space(6.0);
         ui.checkbox(&mut self.contacts_state.new_contact.watch_presence, t("contacts.watch_presence"));
-        if self.accounts.len() > 1 {
+        if self.accounts_state.accounts.len() > 1 {
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 field_label(ui, &palette, &t("contacts.via_label"));
                 let (current_reg_ok, current_text) = match &self.contacts_state.new_contact.presence_account {
                     Some(username) => self
+                        .accounts_state
                         .accounts
                         .iter()
                         .find(|a| &a.account.username == username)
                         .map(|a| (a.reg_ok, a.label.clone()))
                         .unwrap_or((false, username.clone())),
                     None => self
+                        .accounts_state
                         .accounts
                         .first()
                         .map(|a| (a.reg_ok, tf("contacts.default_account_suffix", &[("label", &a.label)])))
@@ -283,7 +285,7 @@ impl DeelipApp {
                 egui::ComboBox::from_id_salt("contact_presence_account_picker").selected_text(selected_label).show_ui(
                     ui,
                     |ui| {
-                        for acc in &self.accounts {
+                        for acc in &self.accounts_state.accounts {
                             let is_sel = self.contacts_state.new_contact.presence_account.as_deref()
                                 == Some(acc.account.username.as_str());
                             let label = account_status_label(ui, &palette, acc.reg_ok, &acc.label);
@@ -339,7 +341,7 @@ impl DeelipApp {
             return;
         }
         if let Some(idx) = self.resolve_presence_account(contact) {
-            self.accounts[idx].handle.subscribe_presence(contact.sip_uri.clone());
+            self.accounts_state.accounts[idx].handle.subscribe_presence(contact.sip_uri.clone());
         }
     }
 
@@ -347,7 +349,7 @@ impl DeelipApp {
         if contact.watch_presence
             && let Some(idx) = self.resolve_presence_account(contact)
         {
-            self.accounts[idx].handle.unsubscribe_presence(contact.sip_uri.clone());
+            self.accounts_state.accounts[idx].handle.unsubscribe_presence(contact.sip_uri.clone());
         }
         self.contacts_state.presence.remove(&contact.sip_uri);
     }

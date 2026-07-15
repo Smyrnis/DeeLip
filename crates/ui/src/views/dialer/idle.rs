@@ -15,21 +15,21 @@ impl DeelipApp {
     // ── Idle: number entry + keypad ───────────────────────────────────────
 
     pub(super) fn show_dialer_idle(&mut self, ui: &mut Ui) {
-        if self.accounts.len() > 1 {
+        if self.accounts_state.accounts.len() > 1 {
             ui.horizontal(|ui| {
                 ui.label(RichText::new(t("dialer.call_from")).color(self.palette.ink_muted).small());
                 let current = self.selected_account_idx().unwrap_or(0);
                 let palette = self.palette;
                 let selected_label = {
-                    let acc = &self.accounts[current];
+                    let acc = &self.accounts_state.accounts[current];
                     account_status_label(ui, &palette, acc.reg_ok, &acc.label)
                 };
                 egui::ComboBox::from_id_salt("dialer_account_picker").selected_text(selected_label).show_ui(ui, |ui| {
-                    for i in 0..self.accounts.len() {
-                        let acc = &self.accounts[i];
+                    for i in 0..self.accounts_state.accounts.len() {
+                        let acc = &self.accounts_state.accounts[i];
                         let label = account_status_label(ui, &palette, acc.reg_ok, &acc.label);
                         if ui.add(egui::Button::selectable(current == i, label)).clicked() {
-                            self.selected_account = i;
+                            self.accounts_state.selected_account = i;
                             self.refresh_idle_status();
                         }
                     }
@@ -101,7 +101,7 @@ impl DeelipApp {
                     self.do_call(None);
                 }
 
-                let can_redial = self.reg_ok && self.last_dialed.is_some();
+                let can_redial = self.accounts_state.reg_ok && self.last_dialed.is_some();
                 if can_redial {
                     ui.add_space(8.0);
                     ui.vertical_centered(|ui| {

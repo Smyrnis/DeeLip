@@ -71,7 +71,7 @@ impl DeelipApp {
     /// persists this installation's ZID on first use.
     fn zrtp_params_for(&mut self, idx: usize) -> Option<ZrtpParams> {
         let call = &self.calls[idx];
-        if !self.accounts[call.account].account.wants_zrtp() {
+        if !self.accounts_state.accounts[call.account].account.wants_zrtp() {
             return None;
         }
         let role = match call.direction {
@@ -311,7 +311,7 @@ impl DeelipApp {
                 self.calls[1].is_held = false;
                 self.in_conference = true;
                 self.attended_transfer_original = None;
-                self.status_line = t("status.in_conference_line");
+                self.accounts_state.status_line = t("status.in_conference_line");
 
                 // Both legs negotiated video -> real 2-remote-party
                 // conference video (fan-out, see `video_engine.rs`'s doc

@@ -41,33 +41,15 @@ pub(crate) enum SettingsTab {
 // ── App state ─────────────────────────────────────────────────────────────────
 
 pub struct DeelipApp {
-    /// One registered SIP identity per enabled account in `config.accounts`,
-    /// each independently registering/re-registering on its own transport.
-    /// Starts empty and fills in as `account_spawn_rx` delivers results --
-    /// see `AccountSpawnMsg`'s doc comment.
-    pub(crate) accounts: Vec<AccountState>,
-    /// Background account-spawn channel from `main()`'s pre-window
-    /// `rt.spawn` task -- `Some` until the task's final `AccountSpawnMsg::Done`
-    /// arrives, then set to `None` (see `process_account_spawn_events`).
-    /// Distinct from "zero accounts configured": `refresh_idle_status` checks
-    /// this to show "connecting" instead of "no accounts configured" while
-    /// results are still arriving.
-    pub(crate) account_spawn_rx: Option<std::sync::mpsc::Receiver<AccountSpawnMsg>>,
+    pub(crate) accounts_state: AccountsState,
     pub(crate) rt: Handle,
 
     pub(crate) tab: Tab,
 
     // Dialer
     pub(crate) call_target: String,
-    /// Index into `accounts` — which identity new outgoing calls are placed
-    /// from. Irrelevant (and hidden in the UI) when there's only one account.
-    pub(crate) selected_account: usize,
     /// Last successfully-dialed target (already normalized), for Redial.
     pub(crate) last_dialed: Option<String>,
-
-    // Status
-    pub(crate) status_line: String,
-    pub(crate) reg_ok: bool,
 
     /// Confirmed (connected) calls — capped at 2 (one focused + one held),
     /// matching a simple "call waiting" model rather than arbitrary
@@ -155,11 +137,6 @@ pub struct DeelipApp {
     pub(crate) ctx_slot: CtxSlot,
     pub(crate) tray_state: TrayState,
 
-    /// System-wide Answer/Hangup/Mute hotkeys (see `hotkeys` module docs) --
-    /// `None` if disabled in config, or if registration failed (logged, not
-    /// fatal — the app works fine without global hotkeys).
-    pub(crate) hotkeys: Option<Hotkeys>,
-
     pub(crate) history_state: HistoryState,
 
     pub(crate) messages_state: MessagesState,
@@ -170,6 +147,32 @@ pub struct DeelipApp {
 
     // Directory (LDAP) -- see `views::directory`.
     pub(crate) directory_ui: DirectoryUiState,
+}
+
+/// One registered SIP identity per enabled account, plus the top-level
+/// registration status line/hotkeys tied to the account set as a whole.
+pub(crate) struct AccountsState {
+    /// One registered SIP identity per enabled account in `config.accounts`,
+    /// each independently registering/re-registering on its own transport.
+    /// Starts empty and fills in as `account_spawn_rx` delivers results --
+    /// see `AccountSpawnMsg`'s doc comment.
+    pub(crate) accounts: Vec<AccountState>,
+    /// Background account-spawn channel from `main()`'s pre-window
+    /// `rt.spawn` task -- `Some` until the task's final `AccountSpawnMsg::Done`
+    /// arrives, then set to `None` (see `process_account_spawn_events`).
+    /// Distinct from "zero accounts configured": `refresh_idle_status` checks
+    /// this to show "connecting" instead of "no accounts configured" while
+    /// results are still arriving.
+    pub(crate) account_spawn_rx: Option<std::sync::mpsc::Receiver<AccountSpawnMsg>>,
+    /// Index into `accounts` — which identity new outgoing calls are placed
+    /// from. Irrelevant (and hidden in the UI) when there's only one account.
+    pub(crate) selected_account: usize,
+    pub(crate) status_line: String,
+    pub(crate) reg_ok: bool,
+    /// System-wide Answer/Hangup/Mute hotkeys (see `hotkeys` module docs) --
+    /// `None` if disabled in config, or if registration failed (logged, not
+    /// fatal — the app works fine without global hotkeys).
+    pub(crate) hotkeys: Option<Hotkeys>,
 }
 
 /// Settings dialog UI state -- see `views::settings`.
@@ -505,15 +508,18 @@ impl DeelipApp {
         };
 
         let mut app = Self {
-            accounts: Vec::new(),
-            account_spawn_rx: Some(account_spawn_rx),
+            accounts_state: AccountsState {
+                accounts: Vec::new(),
+                account_spawn_rx: Some(account_spawn_rx),
+                selected_account: 0,
+                status_line: t("status.registering"),
+                reg_ok: false,
+                hotkeys,
+            },
             rt,
             tab: Tab::Dialer,
             call_target: String::new(),
-            selected_account: 0,
             last_dialed: None,
-            status_line: t("status.registering"),
-            reg_ok: false,
             calls: Vec::new(),
             focused_call: None,
             media: None,
@@ -558,7 +564,6 @@ impl DeelipApp {
             tray,
             ctx_slot,
             tray_state: TrayState { unseen_missed_calls: 0, tray_calls_key: Vec::new(), tray_pending_key: None },
-            hotkeys,
             history_state: HistoryState {
                 history,
                 history_search: String::new(),

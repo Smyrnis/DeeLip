@@ -147,7 +147,9 @@ impl DeelipApp {
                 .tray_state
                 .tray_calls_key
                 .iter()
-                .map(|(account, call_id)| (self.accounts[*account].handle.cmd_tx.clone(), call_id.clone()))
+                .map(|(account, call_id)| {
+                    (self.accounts_state.accounts[*account].handle.cmd_tx.clone(), call_id.clone())
+                })
                 .collect();
         }
 
@@ -158,11 +160,10 @@ impl DeelipApp {
         };
         if pending_changed {
             self.tray_state.tray_pending_key = self.pending_call.as_ref().map(|p| (p.account, p.call_id.clone()));
-            *quit_state.pending.lock().unwrap() = self
-                .tray_state
-                .tray_pending_key
-                .as_ref()
-                .map(|(account, call_id)| (self.accounts[*account].handle.cmd_tx.clone(), call_id.clone()));
+            *quit_state.pending.lock().unwrap() =
+                self.tray_state.tray_pending_key.as_ref().map(|(account, call_id)| {
+                    (self.accounts_state.accounts[*account].handle.cmd_tx.clone(), call_id.clone())
+                });
         }
 
         if ctx.input(|i| i.viewport().close_requested()) {
@@ -227,10 +228,10 @@ impl DeelipApp {
     fn init_lazy_tray(&mut self) {}
 
     /// Dispatch any global-hotkey presses since the last frame. No-op if
-    /// global hotkeys are disabled or failed to register (`self.hotkeys`
+    /// global hotkeys are disabled or failed to register (`self.accounts_state.hotkeys`
     /// is `None`).
     pub(crate) fn process_hotkey_events(&mut self) {
-        let Some(hotkeys) = &self.hotkeys else { return };
+        let Some(hotkeys) = &self.accounts_state.hotkeys else { return };
         for action in hotkeys.poll() {
             match action {
                 HotkeyAction::Answer => {
@@ -408,16 +409,32 @@ impl DeelipApp {
         // left-to-right order (added right-to-left so the account label lands
         // pinned to the far right edge, e.g. "● Online ... extension").
         let on_hold = self.focused_call.is_none() && !self.calls.is_empty();
-        let new_voicemail: u32 =
-            self.accounts.iter().filter_map(|a| a.mwi.as_ref()).filter(|m| m.waiting).map(|m| m.new_messages).sum();
+        let new_voicemail: u32 = self
+            .accounts_state
+            .accounts
+            .iter()
+            .filter_map(|a| a.mwi.as_ref())
+            .filter(|m| m.waiting)
+            .map(|m| m.new_messages)
+            .sum();
         egui::Panel::bottom("status").show_inside(ui, |ui| {
             ui.horizontal(|ui| {
-                crate::helpers::status_bar(ui, &self.palette, &self.status_line, self.reg_ok, on_hold);
+                crate::helpers::status_bar(
+                    ui,
+                    &self.palette,
+                    &self.accounts_state.status_line,
+                    self.accounts_state.reg_ok,
+                    on_hold,
+                );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if let Some(idx) = self.selected_account_idx() {
-                        ui.label(egui::RichText::new(&self.accounts[idx].label).color(self.palette.ink_muted).small());
+                        ui.label(
+                            egui::RichText::new(&self.accounts_state.accounts[idx].label)
+                                .color(self.palette.ink_muted)
+                                .small(),
+                        );
                         ui.add_space(8.0);
-                        let dnd = self.accounts[idx].account.dnd;
+                        let dnd = self.accounts_state.accounts[idx].account.dnd;
                         let (icon, color) = if dnd {
                             (egui_phosphor::regular::BELL_SLASH, self.palette.danger)
                         } else {
@@ -478,11 +495,11 @@ impl DeelipApp {
     fn hangup_before_exit(&mut self) {
         let mut sent = false;
         for call in &self.calls {
-            self.accounts[call.account].handle.hang_up(&call.call_id);
+            self.accounts_state.accounts[call.account].handle.hang_up(&call.call_id);
             sent = true;
         }
         if let Some(pending) = self.pending_call.take() {
-            self.accounts[pending.account].handle.reject_call(&pending.call_id);
+            self.accounts_state.accounts[pending.account].handle.reject_call(&pending.call_id);
             sent = true;
         }
         if sent {

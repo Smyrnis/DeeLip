@@ -170,7 +170,7 @@ impl DeelipApp {
             });
             ui.add_space(4.0);
             let can_send = !self.messages_state.message_body.trim().is_empty()
-                && self.reg_ok
+                && self.accounts_state.reg_ok
                 && self.selected_account_idx().is_some();
             if ui.add_enabled(can_send, egui::Button::new(t("common.send_button"))).clicked() {
                 self.do_send_message(peer.clone());
@@ -215,7 +215,7 @@ impl DeelipApp {
             return;
         };
         let body = self.messages_state.message_body.trim().to_string();
-        self.accounts[acc].handle.send_message(&to, &body);
+        self.accounts_state.accounts[acc].handle.send_message(&to, &body);
 
         self.messages_state.messages.push(Message {
             peer_uri: to.clone(),

@@ -48,8 +48,9 @@ impl DeelipApp {
         // it matches a currently-running identity by username -- a
         // freshly-added or just-edited entry has no such match yet
         // (accurately reads as "not registered" until Save + restart).
-        let is_registered =
-            |acc: &SipAccount| self.accounts.iter().any(|a| a.account.username == acc.username && a.reg_ok);
+        let is_registered = |acc: &SipAccount| {
+            self.accounts_state.accounts.iter().any(|a| a.account.username == acc.username && a.reg_ok)
+        };
         let selected_text = account_status_label(
             ui,
             palette,
