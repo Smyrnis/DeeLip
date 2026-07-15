@@ -212,7 +212,17 @@ pub struct DeelipApp {
     pub(crate) dialplan_pattern_input: String,
     pub(crate) dialplan_replacement_input: String,
 
-    // Contacts
+    pub(crate) contacts_state: ContactsState,
+
+    pub(crate) update_check: UpdateCheckState,
+
+    // Directory (LDAP) -- see `views::directory`.
+    pub(crate) directory_ui: DirectoryUiState,
+}
+
+/// Contacts tab + shared create/edit-contact dialog + presence state -- see
+/// `views::contacts`.
+pub(crate) struct ContactsState {
     pub(crate) contacts: ContactBook,
     pub(crate) contact_search: String,
     /// Cache of `contact_search`/`contacts.contacts.len()` as last used to
@@ -238,11 +248,6 @@ pub struct DeelipApp {
     /// Last-known presence state per watched contact, keyed by `sip_uri`
     /// (presence isn't call-scoped, so it doesn't fit any per-call state).
     pub(crate) presence: HashMap<String, PresenceState>,
-
-    pub(crate) update_check: UpdateCheckState,
-
-    // Directory (LDAP) -- see `views::directory`.
-    pub(crate) directory_ui: DirectoryUiState,
 }
 
 /// Call History tab search/filter state -- see `views::history`.
@@ -566,14 +571,16 @@ impl DeelipApp {
             blocklist_input: String::new(),
             dialplan_pattern_input: String::new(),
             dialplan_replacement_input: String::new(),
-            contacts,
-            contact_search: String::new(),
-            contact_filter_key: None,
-            contact_filtered: Vec::new(),
-            new_contact: Contact::default(),
-            editing_contact_idx: None,
-            contact_dialog_open: false,
-            presence: HashMap::new(),
+            contacts_state: ContactsState {
+                contacts,
+                contact_search: String::new(),
+                contact_filter_key: None,
+                contact_filtered: Vec::new(),
+                new_contact: Contact::default(),
+                editing_contact_idx: None,
+                contact_dialog_open: false,
+                presence: HashMap::new(),
+            },
             update_check: UpdateCheckState { update_state: crate::update::UpdateState::Idle, update_rx: None },
             directory_ui: DirectoryUiState {
                 directory_query: String::new(),

@@ -261,8 +261,8 @@ impl DeelipApp {
             self.message_from_list(target);
         }
         if let Some((name, sip_uri)) = add_contact {
-            self.contacts.contacts.push(deelip_config::Contact { name, sip_uri, ..Default::default() });
-            let _ = self.contacts.save(&self.db);
+            self.contacts_state.contacts.contacts.push(deelip_config::Contact { name, sip_uri, ..Default::default() });
+            let _ = self.contacts_state.contacts.save(&self.db);
         }
     }
 }

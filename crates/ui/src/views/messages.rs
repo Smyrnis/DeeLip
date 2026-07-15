@@ -118,7 +118,7 @@ impl DeelipApp {
         let palette = self.palette;
         for peer in peers {
             let selected = self.messages_state.messages_window_peer.as_deref() == Some(peer.as_str());
-            let (name, _) = resolve_caller(&self.contacts, peer);
+            let (name, _) = resolve_caller(&self.contacts_state.contacts, peer);
             let bg_idx = ui.painter().add(egui::Shape::Noop);
             let row = ui
                 .push_id(peer.as_str(), |ui| {
@@ -150,7 +150,7 @@ impl DeelipApp {
         };
 
         egui::Panel::top("messages_thread_header").show_inside(ui, |ui| {
-            let (name, _) = resolve_caller(&self.contacts, &peer);
+            let (name, _) = resolve_caller(&self.contacts_state.contacts, &peer);
             ui.add_space(4.0);
             ui.label(RichText::new(name).font(crate::theme::font_heading(14.0)));
             ui.add_space(2.0);

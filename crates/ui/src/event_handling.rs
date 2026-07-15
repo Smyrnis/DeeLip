@@ -275,10 +275,10 @@ impl DeelipApp {
             }
             SipEvent::PresenceSubscribeFailed { uri, reason } => {
                 tracing::warn!(uri, reason, "Presence subscribe failed");
-                self.presence.insert(uri, PresenceState::Unknown);
+                self.contacts_state.presence.insert(uri, PresenceState::Unknown);
             }
             SipEvent::PresenceUpdate { uri, state } => {
-                self.presence.insert(uri, state);
+                self.contacts_state.presence.insert(uri, state);
             }
             SipEvent::MwiSubscribed { uri, expires } => {
                 tracing::debug!(uri, expires, "MWI subscribed");
@@ -355,6 +355,7 @@ impl DeelipApp {
     /// then would just hit the same 401/407 retry path unnecessarily).
     pub(crate) fn subscribe_account_contacts(&mut self, account: usize) {
         let targets: Vec<String> = self
+            .contacts_state
             .contacts
             .contacts
             .iter()

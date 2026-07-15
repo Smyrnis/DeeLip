@@ -153,7 +153,7 @@ impl DeelipApp {
     /// Inter and a bare address in JetBrains Mono (the redesign's one
     /// typographic rule: numbers/addresses are mono, names are Inter).
     pub(crate) fn caller_display(&self, uri: &str) -> (String, bool) {
-        resolve_caller(&self.contacts, uri)
+        resolve_caller(&self.contacts_state.contacts, uri)
     }
 
     fn show_active_calls(&mut self, ui: &mut Ui) {

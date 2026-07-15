@@ -132,7 +132,7 @@ impl DeelipApp {
                         } else {
                             call_status_label(&record.status)
                         };
-                        let (display_name, is_name) = resolve_caller(&self.contacts, &record.remote_uri);
+                        let (display_name, is_name) = resolve_caller(&self.contacts_state.contacts, &record.remote_uri);
 
                         let palette = self.palette;
                         let remote_uri = record.remote_uri.clone();
@@ -235,9 +235,9 @@ impl DeelipApp {
             }
         }
         if let Some((remote_uri, display_name)) = add_contact_target {
-            self.editing_contact_idx = None;
-            self.new_contact = Contact { name: display_name, sip_uri: remote_uri, ..Default::default() };
-            self.contact_dialog_open = true;
+            self.contacts_state.editing_contact_idx = None;
+            self.contacts_state.new_contact = Contact { name: display_name, sip_uri: remote_uri, ..Default::default() };
+            self.contacts_state.contact_dialog_open = true;
         }
     }
 
