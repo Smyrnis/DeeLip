@@ -345,8 +345,8 @@ impl DeelipApp {
         // History's label is recomputed only when its unseen count actually
         // changed (see `docs/crates/ui.md`'s list-view caching note), not rebuilt
         // every frame at this loop's ~20fps.
-        if self.history_tab_label_cache.0 != self.tray_state.unseen_missed_calls {
-            self.history_tab_label_cache = (
+        if self.history_state.history_tab_label_cache.0 != self.tray_state.unseen_missed_calls {
+            self.history_state.history_tab_label_cache = (
                 self.tray_state.unseen_missed_calls,
                 if self.tray_state.unseen_missed_calls > 0 {
                     format!(
@@ -369,7 +369,11 @@ impl DeelipApp {
                     crate::app::Tab::Dialer,
                     format!("{}  {}", egui_phosphor::regular::PHONE, t("nav.dialer_tab")),
                 );
-                ui.selectable_value(&mut self.tab, crate::app::Tab::History, self.history_tab_label_cache.1.as_str());
+                ui.selectable_value(
+                    &mut self.tab,
+                    crate::app::Tab::History,
+                    self.history_state.history_tab_label_cache.1.as_str(),
+                );
                 ui.selectable_value(
                     &mut self.tab,
                     crate::app::Tab::Contacts,

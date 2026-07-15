@@ -12,7 +12,7 @@ use crate::strings::t;
 impl DeelipApp {
     pub(crate) fn show_history(&mut self, ui: &mut Ui, _ctx: &egui::Context) {
         ui.add_space(8.0);
-        if self.history.records.is_empty() {
+        if self.history_state.history.records.is_empty() {
             empty_state(ui, &self.palette, &t("history.no_history"));
             return;
         }
@@ -20,29 +20,35 @@ impl DeelipApp {
         // ── Search / filter / export bar ─────────────────────────────────────
         let palette = self.palette;
         ui.horizontal(|ui| {
-            search_field(ui, &palette, &mut self.history_search, &t("common.search_hint_name_or_number"), 140.0);
+            search_field(
+                ui,
+                &palette,
+                &mut self.history_state.history_search,
+                &t("common.search_hint_name_or_number"),
+                140.0,
+            );
             ui.label(t("history.status_label"));
             egui::ComboBox::from_id_salt("history_status_filter")
-                .selected_text(status_filter_label(&self.history_status_filter))
+                .selected_text(status_filter_label(&self.history_state.history_status_filter))
                 .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut self.history_status_filter, None, t("history.status_all"));
+                    ui.selectable_value(&mut self.history_state.history_status_filter, None, t("history.status_all"));
                     ui.selectable_value(
-                        &mut self.history_status_filter,
+                        &mut self.history_state.history_status_filter,
                         Some(CallStatus::Answered),
                         call_status_label(&CallStatus::Answered),
                     );
                     ui.selectable_value(
-                        &mut self.history_status_filter,
+                        &mut self.history_state.history_status_filter,
                         Some(CallStatus::Missed),
                         call_status_label(&CallStatus::Missed),
                     );
                     ui.selectable_value(
-                        &mut self.history_status_filter,
+                        &mut self.history_state.history_status_filter,
                         Some(CallStatus::Rejected),
                         call_status_label(&CallStatus::Rejected),
                     );
                     ui.selectable_value(
-                        &mut self.history_status_filter,
+                        &mut self.history_state.history_status_filter,
                         Some(CallStatus::Failed),
                         call_status_label(&CallStatus::Failed),
                     );
@@ -57,19 +63,24 @@ impl DeelipApp {
         // much faster than that during a scroll drag), which was the actual
         // cause of this tab dropping frames while scrolling. Mirrors the
         // existing `audio_device_cache` idiom.
-        let key = (self.history_search.to_lowercase(), self.history_status_filter.clone(), self.history.records.len());
-        if self.history_filter_key.as_ref() != Some(&key) {
+        let key = (
+            self.history_state.history_search.to_lowercase(),
+            self.history_state.history_status_filter.clone(),
+            self.history_state.history.records.len(),
+        );
+        if self.history_state.history_filter_key.as_ref() != Some(&key) {
             let query = &key.0;
-            self.history_filtered = self
+            self.history_state.history_filtered = self
+                .history_state
                 .history
                 .records
                 .iter()
                 .enumerate()
-                .filter(|(_, r)| self.history_status_filter.as_ref().is_none_or(|s| *s == r.status))
+                .filter(|(_, r)| self.history_state.history_status_filter.as_ref().is_none_or(|s| *s == r.status))
                 .filter(|(_, r)| query.is_empty() || r.remote_uri.to_lowercase().contains(query))
                 .map(|(i, _)| i)
                 .collect();
-            self.history_filter_key = Some(key);
+            self.history_state.history_filter_key = Some(key);
         }
 
         let mut call_target: Option<String> = None;
@@ -80,7 +91,7 @@ impl DeelipApp {
         let mut default_action_target: Option<String> = None;
         let mut add_contact_target: Option<(String, String)> = None;
 
-        if self.history_filtered.is_empty() {
+        if self.history_state.history_filtered.is_empty() {
             empty_state(ui, &self.palette, &t("history.no_matching_calls"));
         } else {
             // `show_rows` only lays out the rows actually scrolled into view
@@ -97,8 +108,8 @@ impl DeelipApp {
             // scroll jitter, not raw row count.
             let row_height = ui.spacing().interact_size.y.max(ui.text_style_height(&egui::TextStyle::Body))
                 + ui.spacing().item_spacing.y;
-            let filtered = &self.history_filtered;
-            let records = &self.history.records;
+            let filtered = &self.history_state.history_filtered;
+            let records = &self.history_state.history.records;
             egui::ScrollArea::vertical().auto_shrink([false, false]).show_rows(
                 ui,
                 row_height,
@@ -207,9 +218,9 @@ impl DeelipApp {
             ui.ctx().copy_text(target);
         }
         if let Some(idx) = delete_idx {
-            self.history.records.remove(idx);
-            self.history_filter_key = None; // force the filtered list to recompute against the new indices
-            if let Err(e) = self.history.save(&self.db) {
+            self.history_state.history.records.remove(idx);
+            self.history_state.history_filter_key = None; // force the filtered list to recompute against the new indices
+            if let Err(e) = self.history_state.history.save(&self.db) {
                 tracing::error!("Failed to save call history: {e}");
             }
         }
@@ -233,12 +244,13 @@ impl DeelipApp {
     /// Export the currently filtered history view (respecting the search box
     /// and status dropdown) to a CSV file via a native save dialog.
     pub(crate) fn export_history_csv(&self) {
-        let query = self.history_search.to_lowercase();
+        let query = self.history_state.history_search.to_lowercase();
         let filtered = self
+            .history_state
             .history
             .records
             .iter()
-            .filter(|r| self.history_status_filter.as_ref().is_none_or(|s| *s == r.status))
+            .filter(|r| self.history_state.history_status_filter.as_ref().is_none_or(|s| *s == r.status))
             .filter(|r| query.is_empty() || r.remote_uri.to_lowercase().contains(&query));
 
         let mut csv = String::from("timestamp,direction,remote_uri,status,duration_secs\n");

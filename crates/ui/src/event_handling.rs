@@ -513,8 +513,8 @@ impl DeelipApp {
             if matches!(status, CallStatus::Answered) { (unix_now().saturating_sub(start_time)) as u32 } else { 0 };
         let is_missed = status == CallStatus::Missed;
         let record = CallRecord { remote_uri, direction, timestamp: start_time, duration_secs: duration, status };
-        self.history.push(record);
-        let _ = self.history.save(&self.db);
+        self.history_state.history.push(record);
+        let _ = self.history_state.history.save(&self.db);
         if is_missed {
             self.tray_state.unseen_missed_calls += 1;
             self.sync_tray_badge();

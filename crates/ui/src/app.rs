@@ -200,26 +200,7 @@ pub struct DeelipApp {
     /// fatal — the app works fine without global hotkeys).
     pub(crate) hotkeys: Option<Hotkeys>,
 
-    // History
-    pub(crate) history: CallHistory,
-    pub(crate) history_search: String,
-    /// `None` = show every status.
-    pub(crate) history_status_filter: Option<CallStatus>,
-    /// Cache of `history_search`/`history_status_filter`/`history.records.len()`
-    /// as last used to compute `history_filtered`, so a search string that
-    /// allocates a lowercased copy of every record's URI isn't redone on
-    /// every single frame (egui repaints continuously, and much faster than
-    /// that during a scroll drag) -- only recomputed when one of the three
-    /// actually changes. Mirrors the existing `audio_device_cache` idiom.
-    pub(crate) history_filter_key: Option<(String, Option<CallStatus>, usize)>,
-    /// Indices into `history.records` matching the current search/status
-    /// filter, most-recent-first (same order as `history.records` itself).
-    pub(crate) history_filtered: Vec<usize>,
-    /// `(unseen_missed_calls, label)` as last rendered for the tab bar --
-    /// recomputed only when the count changes, instead of `format!()`ing a
-    /// fresh label every frame regardless. Same cache-and-compare idiom as
-    /// `history_filter_key`.
-    pub(crate) history_tab_label_cache: (u32, String),
+    pub(crate) history_state: HistoryState,
 
     pub(crate) messages_state: MessagesState,
 
@@ -262,6 +243,29 @@ pub struct DeelipApp {
 
     // Directory (LDAP) -- see `views::directory`.
     pub(crate) directory_ui: DirectoryUiState,
+}
+
+/// Call History tab search/filter state -- see `views::history`.
+pub(crate) struct HistoryState {
+    pub(crate) history: CallHistory,
+    pub(crate) history_search: String,
+    /// `None` = show every status.
+    pub(crate) history_status_filter: Option<CallStatus>,
+    /// Cache of `history_search`/`history_status_filter`/`history.records.len()`
+    /// as last used to compute `history_filtered`, so a search string that
+    /// allocates a lowercased copy of every record's URI isn't redone on
+    /// every single frame (egui repaints continuously, and much faster than
+    /// that during a scroll drag) -- only recomputed when one of the three
+    /// actually changes. Mirrors the existing `audio_device_cache` idiom.
+    pub(crate) history_filter_key: Option<(String, Option<CallStatus>, usize)>,
+    /// Indices into `history.records` matching the current search/status
+    /// filter, most-recent-first (same order as `history.records` itself).
+    pub(crate) history_filtered: Vec<usize>,
+    /// `(unseen_missed_calls, label)` as last rendered for the tab bar --
+    /// recomputed only when the count changes, instead of `format!()`ing a
+    /// fresh label every frame regardless. Same cache-and-compare idiom as
+    /// `history_filter_key`.
+    pub(crate) history_tab_label_cache: (u32, String),
 }
 
 /// In-app SIP MESSAGE state -- see `views::messages`.
@@ -542,15 +546,17 @@ impl DeelipApp {
             ctx_slot,
             tray_state: TrayState { unseen_missed_calls: 0, tray_calls_key: Vec::new(), tray_pending_key: None },
             hotkeys,
-            history,
-            history_search: String::new(),
-            history_status_filter: None,
-            history_filter_key: None,
-            history_filtered: Vec::new(),
-            // `u32::MAX` is a "never computed yet" sentinel, not a real
-            // count -- guarantees the very first frame's mismatch check
-            // computes the real label instead of leaving it empty.
-            history_tab_label_cache: (u32::MAX, String::new()),
+            history_state: HistoryState {
+                history,
+                history_search: String::new(),
+                history_status_filter: None,
+                history_filter_key: None,
+                history_filtered: Vec::new(),
+                // `u32::MAX` is a "never computed yet" sentinel, not a real
+                // count -- guarantees the very first frame's mismatch check
+                // computes the real label instead of leaving it empty.
+                history_tab_label_cache: (u32::MAX, String::new()),
+            },
             messages_state: MessagesState {
                 messages,
                 messages_window_open: false,
