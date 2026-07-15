@@ -50,7 +50,7 @@ impl DeelipApp {
         };
 
         let is_ringing = desired.is_some();
-        if is_ringing && !self.was_ringing {
+        if is_ringing && !self.notify.was_ringing {
             // Rising edge — attempt exactly once per ringing episode. A
             // failure here must NOT leave room for a retry next frame (see
             // `was_ringing` doc comment) — it's still `None` either way.
@@ -58,13 +58,13 @@ impl DeelipApp {
             let file = self.config.audio.ringtone_file.as_deref();
             let volume = self.config.audio.ringtone_volume;
             match Ringtone::start(desired.unwrap(), device, file, volume) {
-                Ok(r) => self.ringtone = Some(r),
+                Ok(r) => self.notify.ringtone = Some(r),
                 Err(e) => tracing::warn!("Ringtone failed to start: {e}"),
             }
         } else if !is_ringing {
-            self.ringtone = None;
+            self.notify.ringtone = None;
         }
-        self.was_ringing = is_ringing;
+        self.notify.was_ringing = is_ringing;
     }
 
     /// Raise/focus the main window once per incoming call -- deliberately
@@ -72,8 +72,8 @@ impl DeelipApp {
     /// edge rather than reusing `sync_notifications`'s. Called once per frame.
     pub(crate) fn sync_window_raise(&mut self, ctx: &egui::Context) {
         match &self.pending_call {
-            Some(p) if self.last_raised_call.as_deref() != Some(p.call_id.as_str()) => {
-                self.last_raised_call = Some(p.call_id.clone());
+            Some(p) if self.notify.last_raised_call.as_deref() != Some(p.call_id.as_str()) => {
+                self.notify.last_raised_call = Some(p.call_id.clone());
                 if self.config.random_popup_position
                     && let Some(cmd) = random_position_on_screen(ctx)
                 {
@@ -82,7 +82,7 @@ impl DeelipApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
                 ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             }
-            None => self.last_raised_call = None,
+            None => self.notify.last_raised_call = None,
             _ => {}
         }
     }
@@ -91,15 +91,15 @@ impl DeelipApp {
     /// it's still ringing). Called once per frame.
     pub(crate) fn sync_notifications(&mut self) {
         if !self.config.notifications_enabled {
-            self.last_notified_call = None;
+            self.notify.last_notified_call = None;
             return;
         }
         match &self.pending_call {
-            Some(p) if self.last_notified_call.as_deref() != Some(p.call_id.as_str()) => {
-                self.last_notified_call = Some(p.call_id.clone());
+            Some(p) if self.notify.last_notified_call.as_deref() != Some(p.call_id.as_str()) => {
+                self.notify.last_notified_call = Some(p.call_id.clone());
                 notify::notify_incoming_call(&p.call_id, &p.from, self.ctx_slot.clone());
             }
-            None => self.last_notified_call = None,
+            None => self.notify.last_notified_call = None,
             _ => {}
         }
     }

@@ -133,22 +133,7 @@ pub struct DeelipApp {
     /// both slots are simultaneously un-held.
     pub(crate) in_conference: bool,
 
-    /// Live while a call is ringing (incoming) or dialing out (outgoing) —
-    /// see `sync_ringtone`. `None` whenever neither applies.
-    pub(crate) ringtone: Option<Ringtone>,
-    /// Whether something was ringing/dialing as of last frame — used to
-    /// attempt `Ringtone::start` only once per ringing episode (on the
-    /// false→true edge), not on every frame a failed start left `ringtone`
-    /// as `None` (that retried the audio backend 20x/sec on any real device
-    /// failure — the ALSA/jack probe spam this was fixed after).
-    pub(crate) was_ringing: bool,
-    /// The `call_id` last notified about, so `sync_notifications` fires once
-    /// per incoming call rather than every frame it's still ringing.
-    pub(crate) last_notified_call: Option<String>,
-    /// Same idiom as `last_notified_call`, for `sync_window_raise` -- kept
-    /// as a separate field since window-raising isn't gated on
-    /// `notifications_enabled` and so can't share the same edge tracking.
-    pub(crate) last_raised_call: Option<String>,
+    pub(crate) notify: NotifyState,
 
     /// Live-edited settings draft, shown/edited in the Settings tab and
     /// saved to `db` on demand — takes effect on next restart.
@@ -300,6 +285,27 @@ pub struct DeelipApp {
 
     // Directory (LDAP) -- see `views::directory`.
     pub(crate) directory_ui: DirectoryUiState,
+}
+
+/// Ringing/dialing sound + incoming-call notification/window-raise
+/// edge-tracking -- see `frame.rs::sync_ringtone`/`sync_notifications`.
+pub(crate) struct NotifyState {
+    /// Live while a call is ringing (incoming) or dialing out (outgoing) —
+    /// see `sync_ringtone`. `None` whenever neither applies.
+    pub(crate) ringtone: Option<Ringtone>,
+    /// Whether something was ringing/dialing as of last frame — used to
+    /// attempt `Ringtone::start` only once per ringing episode (on the
+    /// false→true edge), not on every frame a failed start left `ringtone`
+    /// as `None` (that retried the audio backend 20x/sec on any real device
+    /// failure — the ALSA/jack probe spam this was fixed after).
+    pub(crate) was_ringing: bool,
+    /// The `call_id` last notified about, so `sync_notifications` fires once
+    /// per incoming call rather than every frame it's still ringing.
+    pub(crate) last_notified_call: Option<String>,
+    /// Same idiom as `last_notified_call`, for `sync_window_raise` -- kept
+    /// as a separate field since window-raising isn't gated on
+    /// `notifications_enabled` and so can't share the same edge tracking.
+    pub(crate) last_raised_call: Option<String>,
 }
 
 /// Startup GitHub-release check / auto-update state -- see `update.rs`.
@@ -504,10 +510,12 @@ impl DeelipApp {
             showing_dtmf: false,
             attended_transfer_original: None,
             in_conference: false,
-            ringtone: None,
-            was_ringing: false,
-            last_notified_call: None,
-            last_raised_call: None,
+            notify: NotifyState {
+                ringtone: None,
+                was_ringing: false,
+                last_notified_call: None,
+                last_raised_call: None,
+            },
             config,
             db,
             settings_saved_notice: false,
