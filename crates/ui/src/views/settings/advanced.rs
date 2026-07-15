@@ -57,7 +57,7 @@ impl DeelipApp {
                     if ui.button(t("settings.advanced.check_now_button")).clicked() {
                         self.start_update_check();
                     }
-                    let status = match &self.update_state {
+                    let status = match &self.update_check.update_state {
                         crate::update::UpdateState::Idle => t("settings.advanced.update_idle"),
                         crate::update::UpdateState::Checking => t("settings.advanced.update_checking"),
                         crate::update::UpdateState::Available(r) => {

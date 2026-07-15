@@ -296,15 +296,19 @@ pub struct DeelipApp {
     /// (presence isn't call-scoped, so it doesn't fit any per-call state).
     pub(crate) presence: HashMap<String, PresenceState>,
 
-    /// Startup GitHub-release check / auto-update state (see `update.rs`).
+    pub(crate) update_check: UpdateCheckState,
+
+    // Directory (LDAP) -- see `views::directory`.
+    pub(crate) directory_ui: DirectoryUiState,
+}
+
+/// Startup GitHub-release check / auto-update state -- see `update.rs`.
+pub(crate) struct UpdateCheckState {
     pub(crate) update_state: crate::update::UpdateState,
     /// Channel the background check/download thread reports back on --
     /// re-created (old one just dropped) each time a new one is spawned,
     /// same one-shot-channel-per-async-op idiom as elsewhere in this app.
     pub(crate) update_rx: Option<std::sync::mpsc::Receiver<crate::update::UpdateMsg>>,
-
-    // Directory (LDAP) -- see `views::directory`.
-    pub(crate) directory_ui: DirectoryUiState,
 }
 
 /// Directory (LDAP) search UI state -- see `views::directory`.
@@ -546,8 +550,7 @@ impl DeelipApp {
             editing_contact_idx: None,
             contact_dialog_open: false,
             presence: HashMap::new(),
-            update_state: crate::update::UpdateState::Idle,
-            update_rx: None,
+            update_check: UpdateCheckState { update_state: crate::update::UpdateState::Idle, update_rx: None },
             directory_ui: DirectoryUiState {
                 directory_query: String::new(),
                 directory_state: crate::views::directory::DirectoryState::default(),
