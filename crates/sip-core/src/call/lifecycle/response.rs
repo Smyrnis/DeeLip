@@ -188,6 +188,22 @@ impl SipStack {
                                     dialog.state = DialogState::Confirmed;
                                     dialog.remote_tag = crate::wire::util::parse_tag(msg.header("To").unwrap_or(""));
                                     dialog.remote_sdp = Some(String::from_utf8_lossy(&msg.body).into_owned());
+                                    // The callee side already captures this (`incoming.rs`'s
+                                    // `on_invite`, seeded from the INVITE's own UDP source
+                                    // address) -- the caller side never did, so every
+                                    // mid-dialog request from the caller (`hang_up`'s BYE,
+                                    // hold/resume re-INVITEs, transfer) fell back to
+                                    // `identity.server_addr` instead of the far end's real
+                                    // `Contact:` (see `DialogRequestContext::new`). Harmless
+                                    // for a real registrar+proxy account (the proxy still
+                                    // routes it), but a dead end for `local_account`/proxy-less
+                                    // calls -- confirmed live: a caller's BYE never reached the
+                                    // callee in exactly that setup.
+                                    dialog.remote_contact = msg
+                                        .header("Contact")
+                                        .and_then(crate::wire::util::parse_uri)
+                                        .and_then(|uri| crate::wire::util::uri_host_port(&uri))
+                                        .map(|(host, port)| format!("{host}:{port}"));
                                     Act::Connected {
                                         call_id: dialog.call_id.clone(),
                                         remote_sdp: dialog.remote_sdp.clone().unwrap_or_default(),
