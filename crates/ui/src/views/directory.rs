@@ -137,7 +137,7 @@ impl DeelipApp {
     /// from that background thread instead of `rt.spawn`, so nothing here
     /// ever runs on (or blocks) the UI thread.
     pub(crate) fn start_directory_search(&mut self) {
-        let query = self.directory_query.trim().to_string();
+        let query = self.directory_ui.directory_query.trim().to_string();
         if query.is_empty() {
             return;
         }
@@ -155,8 +155,8 @@ impl DeelipApp {
         };
         let rt = self.rt.clone();
         let (tx, rx) = std::sync::mpsc::channel();
-        self.directory_rx = Some(rx);
-        self.directory_state = DirectoryState::Searching;
+        self.directory_ui.directory_rx = Some(rx);
+        self.directory_ui.directory_state = DirectoryState::Searching;
         let ctx_slot = self.ctx_slot.clone();
         std::thread::spawn(move || {
             let result = rt.block_on(run_ldap_search(cfg, query));
@@ -169,14 +169,16 @@ impl DeelipApp {
 
     /// Drains the directory-search channel, called once per frame.
     pub(crate) fn process_directory_events(&mut self) {
-        let Some(rx) = &self.directory_rx else {
+        let Some(rx) = &self.directory_ui.directory_rx else {
             return;
         };
         let messages: Vec<DirectoryMsg> = rx.try_iter().collect();
         for msg in messages {
             match msg {
-                DirectoryMsg::Done(Ok(entries)) => self.directory_state = DirectoryState::Results(entries),
-                DirectoryMsg::Done(Err(e)) => self.directory_state = DirectoryState::Failed(format!("{e:#}")),
+                DirectoryMsg::Done(Ok(entries)) => self.directory_ui.directory_state = DirectoryState::Results(entries),
+                DirectoryMsg::Done(Err(e)) => {
+                    self.directory_ui.directory_state = DirectoryState::Failed(format!("{e:#}"))
+                }
             }
         }
     }
@@ -190,7 +192,8 @@ impl DeelipApp {
 
         let palette = self.palette;
         ui.horizontal(|ui| {
-            let resp = search_field(ui, &palette, &mut self.directory_query, &t("directory.search_hint"), 200.0);
+            let resp =
+                search_field(ui, &palette, &mut self.directory_ui.directory_query, &t("directory.search_hint"), 200.0);
             let enter_pressed = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             let search_clicked = ui.button(t("directory.search_button")).clicked();
             if search_clicked || enter_pressed {
@@ -203,7 +206,7 @@ impl DeelipApp {
         let mut message_target: Option<String> = None;
         let mut add_contact: Option<(String, String)> = None;
 
-        match &self.directory_state {
+        match &self.directory_ui.directory_state {
             DirectoryState::Idle => {
                 empty_state(ui, &self.palette, &t("directory.search_above"));
             }

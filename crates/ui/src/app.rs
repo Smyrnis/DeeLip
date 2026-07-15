@@ -304,6 +304,11 @@ pub struct DeelipApp {
     pub(crate) update_rx: Option<std::sync::mpsc::Receiver<crate::update::UpdateMsg>>,
 
     // Directory (LDAP) -- see `views::directory`.
+    pub(crate) directory_ui: DirectoryUiState,
+}
+
+/// Directory (LDAP) search UI state -- see `views::directory`.
+pub(crate) struct DirectoryUiState {
     pub(crate) directory_query: String,
     pub(crate) directory_state: crate::views::directory::DirectoryState,
     pub(crate) directory_rx: Option<std::sync::mpsc::Receiver<crate::views::directory::DirectoryMsg>>,
@@ -543,9 +548,11 @@ impl DeelipApp {
             presence: HashMap::new(),
             update_state: crate::update::UpdateState::Idle,
             update_rx: None,
-            directory_query: String::new(),
-            directory_state: crate::views::directory::DirectoryState::default(),
-            directory_rx: None,
+            directory_ui: DirectoryUiState {
+                directory_query: String::new(),
+                directory_state: crate::views::directory::DirectoryState::default(),
+                directory_rx: None,
+            },
         };
 
         let now = crate::helpers::unix_now();
