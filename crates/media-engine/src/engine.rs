@@ -17,16 +17,19 @@ use deelip_sip::{AudioCodec, SrtpSession};
 
 use crate::aec::EchoCanceller;
 use crate::agc::AutomaticGainControl;
-use crate::audio::{AudioStreams, FRAME_SAMPLES, PlaybackTx, open_streams};
+use crate::audio::{AudioStreams, PlaybackTx, open_streams};
 use crate::codec_dispatch::{AudioDecoder, AudioEncoder, clock_hz_for, ts_increment_for};
 use crate::dtls_demux::DemuxConn;
 use crate::dtls_srtp_session::{DtlsSrtpParams, run_dtls_handshake};
-use crate::dtmf::{DTMF_PAYLOAD_TYPE, INBAND_FRAME_COUNT, build_dtmf_burst, char_to_event, dtmf_tone_frame};
+use crate::dtmf::DTMF_PAYLOAD_TYPE;
 use crate::recording::{RecordingOptions, RecordingWriter};
 use crate::rtp::RtpSender;
 use crate::stats::{CallStatsSnapshot, LegStats, SharedStats};
-use crate::tasks::{DtlsRecvState, Leg, ZrtpRecvState, encrypt_and_send, push_to_jitter, recv_loop};
-use crate::vad::{VadDecision, VoiceActivityDetector};
+use crate::tasks::{
+    DtlsRecvState, Leg, SendDspState, SendDtmfState, SendLeg2State, SendPlaybackState, SendTaskState, ZrtpRecvState,
+    recv_loop, send_loop,
+};
+use crate::vad::VoiceActivityDetector;
 use crate::zrtp_session::{ZrtpOutcome, ZrtpParams, ZrtpRuntime, client_id as zrtp_client_id};
 
 /// The RTP wire transport: a plain local UDP socket, or a TURN-relayed `Conn`
@@ -185,7 +188,7 @@ impl MediaEngine {
             dtls_srtp,
         } = opts;
 
-        let (audio_streams, mut cap_rx, hw_playback_tx, echo_ref, output_gain) =
+        let (audio_streams, cap_rx, hw_playback_tx, echo_ref, output_gain) =
             open_streams(input_device, output_device, echo_cancellation).context("Opening audio streams")?;
         let input_gain = crate::audio::new_shared_gain();
 
@@ -215,7 +218,7 @@ impl MediaEngine {
         // encrypt what it sends; the peer decrypts with that same key. So we encrypt
         // outgoing traffic with our OWN declared (local) key, and decrypt incoming
         // traffic with the REMOTE's declared key.
-        let mut encrypt_ctx: Option<SrtpContext> = srtp
+        let encrypt_ctx: Option<SrtpContext> = srtp
             .as_ref()
             .map(|s| SrtpContext::new(&s.local.key, &s.local.salt, ProtectionProfile::Aes128CmHmacSha1_80, None, None))
             .transpose()
@@ -236,7 +239,7 @@ impl MediaEngine {
 
         // ── ZRTP (leg 1 only -- see `start`'s doc comment) ───────────────────────
         let zrtp_sas: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
-        let (zrtp_encrypt_tx, mut zrtp_encrypt_rx) = mpsc::unbounded_channel::<([u8; 16], [u8; 14])>();
+        let (zrtp_encrypt_tx, zrtp_encrypt_rx) = mpsc::unbounded_channel::<([u8; 16], [u8; 14])>();
         let mut zrtp_runtime: Option<ZrtpRuntime> = None;
         let mut zrtp_pending_sends: Vec<Vec<u8>> = Vec::new();
         if let Some(params) = zrtp {
@@ -283,7 +286,7 @@ impl MediaEngine {
         // `zrtp_encrypt_tx`/`rx` above) so the send task's `tokio::select!`
         // arm below type-checks unconditionally; it simply never fires when
         // `dtls_srtp` was `None`.
-        let (dtls_encrypt_tx, mut dtls_encrypt_rx) = mpsc::unbounded_channel::<([u8; 16], [u8; 14])>();
+        let (dtls_encrypt_tx, dtls_encrypt_rx) = mpsc::unbounded_channel::<([u8; 16], [u8; 14])>();
         let dtls_recv_state = dtls_srtp.map(|params| {
             let (demux, inbound_tx) = DemuxConn::new(socket.clone(), remote_rtp);
             let (outcome_tx, outcome_rx) = mpsc::unbounded_channel();
@@ -344,11 +347,11 @@ impl MediaEngine {
         let leg1_buf: PlaybackTx = Arc::new(Mutex::new(VecDeque::new()));
         let leg2_buf: Option<PlaybackTx> = second_leg.as_ref().map(|_| Arc::new(Mutex::new(VecDeque::new())));
 
-        let mut stop_send = stop_rx.clone();
+        let stop_send = stop_rx.clone();
         let stop_recv = stop_rx;
 
-        let (dtmf_tx, mut dtmf_rx) = mpsc::unbounded_channel::<char>();
-        let (inband_dtmf_tx, mut inband_dtmf_rx) = mpsc::unbounded_channel::<char>();
+        let (dtmf_tx, dtmf_rx) = mpsc::unbounded_channel::<char>();
+        let (inband_dtmf_tx, inband_dtmf_rx) = mpsc::unbounded_channel::<char>();
 
         let recorder: Arc<Mutex<Option<RecordingWriter>>> = Arc::new(Mutex::new(if recording.enabled {
             match RecordingWriter::create(call_id, recording.dir_override.as_deref(), recording.format) {
@@ -363,203 +366,63 @@ impl MediaEngine {
         }));
 
         // ── Send task ─────────────────────────────────────────────────────────
-        let send_sock = socket.clone();
-        let send_sock2 = leg2_socket.clone();
-        let mut rtp_send = RtpSender::new(payload_type, ts_increment_for(codec));
+        let rtp_send = RtpSender::new(payload_type, ts_increment_for(codec));
         let dtmf_ssrc = rtp_send.ssrc;
-        let mut dtmf_seq = 0u16;
-        let mut encoder = AudioEncoder::new(codec, "")?;
-        let mut encoder2 = leg2_codec.map(|c| AudioEncoder::new(c, " (leg2)")).transpose()?;
-        let mut rtp_send2 = leg2_codec.map(|c| RtpSender::new(c.payload_type(), ts_increment_for(c)));
-        let dtmf_ssrc2 = rtp_send2.as_ref().map(|r| r.ssrc);
-        let mut dtmf_seq2 = 0u16;
+        let encoder = AudioEncoder::new(codec, "")?;
 
-        let mut echo_canceller = echo_ref.as_ref().map(|_| EchoCanceller::new());
-        let mut agc = agc_enabled.then(AutomaticGainControl::new);
-        let mut vad = cn_pt.map(|_| VoiceActivityDetector::new());
-        let muted = Arc::new(AtomicBool::new(false));
-        let send_muted = muted.clone();
-        let send_input_gain = input_gain.clone();
-        let send_recorder = recorder.clone();
-        let send_leg1_buf = leg1_buf.clone();
-        let send_leg2_buf = leg2_buf.clone();
-        let send_stats = stats.clone();
-
-        // Inband-DTMF state: `Some((digit, frames_remaining))` while a tone
-        // is actively overriding captured mic audio; `inband_phase` tracks
-        // samples-so-far for this press so consecutive tone frames don't
-        // click at the frame boundary (reset to 0 on each new digit press,
-        // not carried across presses -- keeps it small/safe over a long call).
-        let mut inband_active: Option<(char, u32)> = None;
-        let mut inband_phase: u32 = 0;
-
-        let send_task = tokio::spawn(async move {
-            loop {
-                tokio::select! {
-                    Some(pcm) = cap_rx.recv() => {
-                        let is_dtmf_tone = inband_active.is_some();
-                        let pcm = if let Some((digit, remaining)) = inband_active {
-                            let tone = dtmf_tone_frame(digit, inband_phase)
-                                .expect("inband_active only ever holds a valid DTMF character");
-                            inband_phase = inband_phase.wrapping_add(FRAME_SAMPLES as u32);
-                            inband_active = if remaining <= 1 { None } else { Some((digit, remaining - 1)) };
-                            tone
-                        } else {
-                            let pcm = if send_muted.load(Ordering::Relaxed) {
-                                vec![0i16; pcm.len()]
-                            } else {
-                                pcm
-                            };
-                            let pcm = match (echo_canceller.as_mut(), echo_ref.as_ref()) {
-                                (Some(canceller), Some(echo_ref)) => canceller.process(&pcm, echo_ref),
-                                _ => pcm,
-                            };
-                            let mut pcm = match agc.as_mut() {
-                                Some(agc) => agc.process(&pcm),
-                                None => pcm,
-                            };
-                            // Scale in place (pcm is already owned) rather
-                            // than collecting into a fresh Vec.
-                            let g = crate::audio::load_gain(&send_input_gain);
-                            if g != 1.0 {
-                                for s in pcm.iter_mut() {
-                                    *s = (*s as f32 * g).clamp(i16::MIN as f32, i16::MAX as f32) as i16;
-                                }
-                            }
-                            pcm
-                        };
-
-                        // A DTMF tone is never subject to VAD gating -- it's
-                        // deliberately generated audio, not silence to detect.
-                        let vad_decision = if is_dtmf_tone {
-                            VadDecision::Talking
-                        } else {
-                            match vad.as_mut() {
-                                Some(v) => v.process(&pcm),
-                                None => VadDecision::Talking,
-                            }
-                        };
-
-                        // Leg 1: encode + send (or send comfort noise, or
-                        // skip entirely -- see `vad_decision`).
-                        match vad_decision {
-                            VadDecision::Talking => {
-                                let encoded = encoder.encode(&pcm);
-                                let bytes = rtp_send.next_packet(encoded).encode();
-                                if encrypt_and_send(
-                                    encrypt_ctx.as_mut(), &bytes, &send_sock, remote_rtp, &send_stats, Leg::One, "voice",
-                                )
-                                .await
-                                .is_err()
-                                {
-                                    continue;
-                                }
-                            }
-                            VadDecision::SendComfortNoise(level) => {
-                                let pt = cn_pt.expect("vad is only Some when cn_pt is Some");
-                                let bytes = rtp_send.next_packet_with_pt(pt, vec![level]).encode();
-                                if encrypt_and_send(
-                                    encrypt_ctx.as_mut(), &bytes, &send_sock, remote_rtp, &send_stats, Leg::One,
-                                    "comfort noise",
-                                )
-                                .await
-                                .is_err()
-                                {
-                                    continue;
-                                }
-                            }
-                            VadDecision::Skip => rtp_send.skip_tick(),
-                        }
-
-                        // Leg 2 (conference): encode independently (may differ
-                        // codec) + send, without aborting leg 1's already-sent
-                        // packet or the mix/playback step below on failure.
-                        if let (Some(sock2), Some(remote2), Some(enc2), Some(sender2)) =
-                            (send_sock2.as_ref(), leg2_remote, encoder2.as_mut(), rtp_send2.as_mut())
-                        {
-                            let encoded2 = enc2.encode(&pcm);
-                            let bytes2 = sender2.next_packet(encoded2).encode();
-                            let _ = encrypt_and_send(
-                                leg2_encrypt_ctx.as_mut(), &bytes2, sock2, remote2, &send_stats, Leg::Two, "leg2",
-                            )
-                            .await;
-                        }
-
-                        // Drain + mix decoded audio for local playback/recording
-                        // -- single-leg case is just leg1's buffer, unchanged
-                        // in effect from the old direct recv-to-playback push.
-                        let leg1_frame = drain_leg(&send_leg1_buf);
-                        let mixed = if let Some(buf2) = send_leg2_buf.as_ref() {
-                            mix_frames(&leg1_frame, &drain_leg(buf2))
-                        } else {
-                            leg1_frame
-                        };
-                        write_recording(&send_recorder, &pcm, &mixed);
-                        push_to_jitter(&hw_playback_tx, &mixed);
-                    }
-                    Some(ch) = dtmf_rx.recv() => {
-                        if let Some(event) = char_to_event(ch) {
-                            let base_ts = rtp_send.timestamp;
-                            let pkts = build_dtmf_burst(
-                                event, dtmf_ssrc, &mut dtmf_seq,
-                                base_ts, dtmf_payload_type,
-                            );
-                            for pkt in &pkts {
-                                let _ = encrypt_and_send(
-                                    encrypt_ctx.as_mut(), pkt, &send_sock, remote_rtp, &send_stats, Leg::One, "DTMF",
-                                )
-                                .await;
-                            }
-                            // Broadcast DTMF to both legs during a conference.
-                            if let (Some(sock2), Some(remote2), Some(ssrc2), Some(pt2), Some(sender2)) =
-                                (send_sock2.as_ref(), leg2_remote, dtmf_ssrc2, leg2_dtmf_pt, rtp_send2.as_ref())
-                            {
-                                let base_ts2 = sender2.timestamp;
-                                let pkts2 = build_dtmf_burst(
-                                    event, ssrc2, &mut dtmf_seq2,
-                                    base_ts2, pt2,
-                                );
-                                for pkt in &pkts2 {
-                                    let _ = encrypt_and_send(
-                                        leg2_encrypt_ctx.as_mut(), pkt, sock2, remote2, &send_stats, Leg::Two,
-                                        "DTMF leg2",
-                                    )
-                                    .await;
-                                }
-                            }
-                        }
-                    }
-                    Some(ch) = inband_dtmf_rx.recv() => {
-                        if char_to_event(ch).is_some() {
-                            inband_active = Some((ch, INBAND_FRAME_COUNT));
-                            inband_phase = 0;
-                        }
-                    }
-                    Some((key, salt)) = zrtp_encrypt_rx.recv() => {
-                        match SrtpContext::new(&key, &salt, ProtectionProfile::Aes128CmHmacSha1_80, None, None) {
-                            Ok(ctx) => {
-                                debug!("ZRTP: switching to SRTP-encrypted send");
-                                encrypt_ctx = Some(ctx);
-                            }
-                            Err(e) => error!("ZRTP: failed to build SRTP encrypt context: {e}"),
-                        }
-                    }
-                    Some((key, salt)) = dtls_encrypt_rx.recv() => {
-                        match SrtpContext::new(&key, &salt, ProtectionProfile::Aes128CmHmacSha1_80, None, None) {
-                            Ok(ctx) => {
-                                debug!("DTLS-SRTP: switching to SRTP-encrypted send");
-                                encrypt_ctx = Some(ctx);
-                            }
-                            Err(e) => error!("DTLS-SRTP: failed to build SRTP encrypt context: {e}"),
-                        }
-                    }
-                    Ok(()) = stop_send.changed() => {
-                        if *stop_send.borrow() { break; }
-                    }
-                }
+        let leg2_send = match (&leg2_socket, leg2_remote, leg2_codec) {
+            (Some(sock2), Some(remote2), Some(c2)) => {
+                let rtp_send2 = RtpSender::new(c2.payload_type(), ts_increment_for(c2));
+                Some(SendLeg2State {
+                    sock2: sock2.clone(),
+                    remote2,
+                    encoder2: AudioEncoder::new(c2, " (leg2)")?,
+                    dtmf_ssrc2: rtp_send2.ssrc,
+                    rtp_send2,
+                    dtmf_seq2: 0,
+                    dtmf_payload_type2: leg2_dtmf_pt.unwrap_or(DTMF_PAYLOAD_TYPE),
+                    encrypt_ctx2: leg2_encrypt_ctx,
+                })
             }
-            debug!("RTP send task stopped");
-        });
+            _ => None,
+        };
+
+        let echo_canceller = echo_ref.as_ref().map(|_| EchoCanceller::new());
+        let agc = agc_enabled.then(AutomaticGainControl::new);
+        let vad = cn_pt.map(|_| VoiceActivityDetector::new());
+        let muted = Arc::new(AtomicBool::new(false));
+
+        let send_task = tokio::spawn(send_loop(SendTaskState {
+            sock: socket.clone(),
+            remote_rtp,
+            rtp_send,
+            encoder,
+            encrypt_ctx,
+            leg2: leg2_send,
+            dsp: SendDspState {
+                echo_canceller,
+                echo_ref,
+                agc,
+                vad,
+                cn_pt,
+                muted: muted.clone(),
+                input_gain: input_gain.clone(),
+                inband_active: None,
+                inband_phase: 0,
+            },
+            dtmf: SendDtmfState { dtmf_rx, inband_dtmf_rx, dtmf_ssrc, dtmf_seq: 0, dtmf_payload_type },
+            playback: SendPlaybackState {
+                leg1_buf: leg1_buf.clone(),
+                leg2_buf: leg2_buf.clone(),
+                hw_playback_tx,
+                recorder: recorder.clone(),
+                stats: stats.clone(),
+            },
+            cap_rx,
+            zrtp_encrypt_rx,
+            dtls_encrypt_rx,
+            stop_rx: stop_send,
+        }));
 
         // ── Recv task (leg 1) ─────────────────────────────────────────────────
         let decoder = AudioDecoder::new(codec, "")?;
@@ -757,39 +620,6 @@ impl MediaEngine {
                 }
             });
         }
-    }
-}
-
-/// Drain up to `FRAME_SAMPLES` from a per-leg decode buffer, zero-padding on
-/// underrun so mixing stays aligned to the near-end's real-time capture
-/// cadence (same idiom as `write_recording`'s near/far pairing).
-fn drain_leg(buf: &PlaybackTx) -> Vec<i16> {
-    let mut b = buf.lock().unwrap();
-    (0..FRAME_SAMPLES).map(|_| b.pop_front().unwrap_or(0)).collect()
-}
-
-/// Sum two PCM frames sample-by-sample, halving each first so two
-/// simultaneously-loud sources (e.g. a live mic vs. a pre-recorded
-/// announcement at a different natural level) can't clip and don't have
-/// one leg drown out the other by default, then clamping to `i16` range.
-fn mix_frames(a: &[i16], b: &[i16]) -> Vec<i16> {
-    a.iter()
-        .zip(b.iter())
-        .map(|(&x, &y)| {
-            let mixed = (x as i32) / 2 + (y as i32) / 2;
-            mixed.clamp(i16::MIN as i32, i16::MAX as i32) as i16
-        })
-        .collect()
-}
-
-/// Write one interleaved stereo frame (left = near-end `pcm`, right = the
-/// already-mixed far-end audio for this same frame). No-op if recording
-/// isn't enabled for this call.
-fn write_recording(recorder: &Mutex<Option<RecordingWriter>>, near: &[i16], far: &[i16]) {
-    let mut guard = recorder.lock().unwrap();
-    let Some(writer) = guard.as_mut() else { return };
-    if let Err(e) = writer.write_frame(near, far) {
-        warn!("Failed to write call recording frame: {e}");
     }
 }
 
