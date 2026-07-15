@@ -73,8 +73,8 @@ impl DeelipApp {
     /// already-open window to a different peer just as well as opening a
     /// fresh one.
     pub(crate) fn message_from_list(&mut self, target: String) {
-        self.messages_window_open = true;
-        self.messages_window_peer = Some(target);
+        self.messages_state.messages_window_open = true;
+        self.messages_state.messages_window_peer = Some(target);
     }
 
     /// Start the consultation call for an attended transfer: holds the

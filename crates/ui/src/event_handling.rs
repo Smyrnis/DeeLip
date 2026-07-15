@@ -290,13 +290,13 @@ impl DeelipApp {
                 self.accounts[account].mwi = Some(state);
             }
             SipEvent::MessageReceived { from, body } => {
-                self.messages.push(Message {
+                self.messages_state.messages.push(Message {
                     peer_uri: from.clone(),
                     direction: Direction::Inbound,
                     body: body.clone(),
                     timestamp: unix_now(),
                 });
-                let _ = self.messages.save(&self.db);
+                let _ = self.messages_state.messages.save(&self.db);
                 if self.config.notifications_enabled {
                     crate::platform::notify::notify_message_received(&short_uri(&from), &body);
                 }

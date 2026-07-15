@@ -221,19 +221,7 @@ pub struct DeelipApp {
     /// `history_filter_key`.
     pub(crate) history_tab_label_cache: (u32, String),
 
-    // Messages
-    pub(crate) messages: MessageLog,
-    /// Whether the Messages window is open -- same separate-native-window
-    /// pattern as `settings_open`, except there's no tab-bar entry point at
-    /// all: the only way to set this `true` is `message_from_list` (a
-    /// right-click "Message" action on a History/Contacts/Directory row).
-    pub(crate) messages_window_open: bool,
-    /// Which peer's thread the Messages window is showing -- always a full
-    /// SIP URI sourced from a right-click target or an existing `peer_uri`,
-    /// never freehand-typed (there's no more manual "To:" field). `None`
-    /// only when the window has never been scoped to anyone yet.
-    pub(crate) messages_window_peer: Option<String>,
-    pub(crate) message_body: String,
+    pub(crate) messages_state: MessagesState,
 
     // Blocklist
     pub(crate) blocklist_input: String,
@@ -274,6 +262,22 @@ pub struct DeelipApp {
 
     // Directory (LDAP) -- see `views::directory`.
     pub(crate) directory_ui: DirectoryUiState,
+}
+
+/// In-app SIP MESSAGE state -- see `views::messages`.
+pub(crate) struct MessagesState {
+    pub(crate) messages: MessageLog,
+    /// Whether the Messages window is open -- same separate-native-window
+    /// pattern as `settings_open`, except there's no tab-bar entry point at
+    /// all: the only way to set this `true` is `message_from_list` (a
+    /// right-click "Message" action on a History/Contacts/Directory row).
+    pub(crate) messages_window_open: bool,
+    /// Which peer's thread the Messages window is showing -- always a full
+    /// SIP URI sourced from a right-click target or an existing `peer_uri`,
+    /// never freehand-typed (there's no more manual "To:" field). `None`
+    /// only when the window has never been scoped to anyone yet.
+    pub(crate) messages_window_peer: Option<String>,
+    pub(crate) message_body: String,
 }
 
 /// Tray-icon badge/menu mirroring -- see `frame.rs::sync_tray_badge`/
@@ -547,10 +551,12 @@ impl DeelipApp {
             // count -- guarantees the very first frame's mismatch check
             // computes the real label instead of leaving it empty.
             history_tab_label_cache: (u32::MAX, String::new()),
-            messages,
-            messages_window_open: false,
-            messages_window_peer: None,
-            message_body: String::new(),
+            messages_state: MessagesState {
+                messages,
+                messages_window_open: false,
+                messages_window_peer: None,
+                message_body: String::new(),
+            },
             blocklist_input: String::new(),
             dialplan_pattern_input: String::new(),
             dialplan_replacement_input: String::new(),
