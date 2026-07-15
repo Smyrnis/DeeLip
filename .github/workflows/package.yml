@@ -6,7 +6,17 @@ name: Package
 #   - .rpm      (Fedora / RHEL / openSUSE and derivatives)
 #   - .AppImage (portable, runs on most distros without installing anything)
 #   - .tar.gz   (plain binary + desktop file + icon, for anything else)
-#   - .msi      (Windows installer, via cargo-wix)
+#   - .msi      (Windows installer, via cargo-wix -- Authenticode-signed via
+#     SignPath.io's free-for-OSS signing service if the SIGNPATH_API_TOKEN
+#     repo secret is set, otherwise ships unsigned and SmartScreen will warn
+#     on first run. Requires a SignPath.io account with this repo linked as
+#     a project (see signpath.io), plus these repo secrets:
+#       SIGNPATH_API_TOKEN, SIGNPATH_ORGANIZATION_ID, SIGNPATH_PROJECT_SLUG,
+#       SIGNPATH_SIGNING_POLICY_SLUG, SIGNPATH_ARTIFACT_CONFIGURATION_SLUG
+#     The org/project/policy/artifact-config slugs come from SignPath's own
+#     portal once the project exists there -- the artifact configuration in
+#     particular must be set up there to point at the .msi inside the
+#     uploaded zip. See the "Sign MSI via SignPath" step in package-windows.)
 #   - .dmg      (macOS disk image containing DeeLip.app, via cargo-bundle --
 #     not code-signed/notarized yet, so Gatekeeper blocks the first launch)
 #
@@ -174,6 +184,14 @@ jobs:
 
   package-windows:
     runs-on: windows-latest
+    env:
+      # Job-level env mirror of the secret so step `if:` conditions below can
+      # check `env.SIGNPATH_API_TOKEN != ''` -- secrets themselves aren't
+      # readable from `if:` expressions, only from `env`/`with`. Signing is
+      # entirely skipped (dist/ keeps the plain unsigned .msi) whenever this
+      # secret isn't set, so this workflow works unmodified before SignPath
+      # is provisioned.
+      SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 
@@ -270,6 +288,43 @@ jobs:
         run: |
           mkdir -p dist
           cp target/wix/*.msi "dist/deelip-${{ steps.version.outputs.version }}-x86_64.msi"
+
+      # The three steps below Authenticode-sign the .msi via SignPath.io's
+      # free-for-open-source cloud signing service, and are entirely skipped
+      # (see the job-level env comment above) until SIGNPATH_API_TOKEN and
+      # its sibling secrets are provisioned -- see this file's top-of-file
+      # comment for the full secret list and setup steps.
+      - name: Upload unsigned MSI for SignPath
+        if: ${{ env.SIGNPATH_API_TOKEN != '' }}
+        id: upload-unsigned-msi
+        uses: actions/upload-artifact@v4
+        with:
+          name: deelip-unsigned-msi
+          path: dist/*.msi
+          # Short-lived: this is only an intermediate hand-off to SignPath,
+          # not a real release artifact -- the final signed .msi is what
+          # actually gets published further down in this job.
+          retention-days: 1
+
+      - name: Sign MSI via SignPath
+        if: ${{ env.SIGNPATH_API_TOKEN != '' }}
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: '${{ secrets.SIGNPATH_API_TOKEN }}'
+          organization-id: '${{ secrets.SIGNPATH_ORGANIZATION_ID }}'
+          project-slug: '${{ secrets.SIGNPATH_PROJECT_SLUG }}'
+          signing-policy-slug: '${{ secrets.SIGNPATH_SIGNING_POLICY_SLUG }}'
+          artifact-configuration-slug: '${{ secrets.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}'
+          github-artifact-id: '${{ steps.upload-unsigned-msi.outputs.artifact-id }}'
+          wait-for-completion: true
+          output-artifact-directory: dist-signed
+
+      - name: Replace unsigned MSI with SignPath-signed copy
+        if: ${{ env.SIGNPATH_API_TOKEN != '' }}
+        shell: bash
+        run: |
+          rm dist/*.msi
+          cp dist-signed/*.msi dist/
 
       - name: Checksum artifacts
         shell: bash
