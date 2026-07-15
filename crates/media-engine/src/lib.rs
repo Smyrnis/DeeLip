@@ -10,6 +10,7 @@ pub mod engine;
 pub mod recording;
 pub mod rtp;
 mod stats;
+mod tasks;
 pub mod vad;
 pub mod video_capture;
 pub mod video_codec;
