@@ -4,9 +4,30 @@ use std::time::Duration;
 use deelip_config::Direction;
 use deelip_media::video_capture::{self, CaptureHandle};
 use deelip_media::video_engine::{VideoConferenceLeg, VideoEngine};
-use deelip_media::{ConferenceLeg, MediaEngine, MediaEngineOptions, RecordingOptions, ZrtpParams};
-use deelip_sip::VideoMediaReady;
+use deelip_media::{ConferenceLeg, DtlsSrtpParams, MediaEngine, MediaEngineOptions, RecordingOptions, ZrtpParams};
 use deelip_sip::zrtp::Role;
+use deelip_sip::{DtlsCallParams, Setup, VideoMediaReady};
+
+/// Maps a call's resolved `DtlsCallParams` (see that type's doc comment)
+/// into what `media-engine::dtls_srtp_session` actually needs to run the
+/// handshake -- unlike `zrtp_params_for`, there's no extra role/ZID-loading
+/// logic here, since `role`/`remote_fingerprint` are already fully resolved
+/// by the time this is called (sip-core's outgoing/incoming/response
+/// lifecycle code resolves them during offer/answer exchange, before
+/// `CallConnected`/`CallMediaReady` is ever emitted). `None` if DTLS-SRTP
+/// wasn't actually negotiated for this call (including the defensive case
+/// where `role`/`remote_fingerprint` are unexpectedly still unresolved).
+fn dtls_srtp_params_for(local_dtls: Option<DtlsCallParams>) -> Option<DtlsSrtpParams> {
+    let params = local_dtls?;
+    let role = params.role?;
+    let expected_remote_fingerprint = params.remote_fingerprint?;
+    Some(DtlsSrtpParams {
+        cert_der: params.cert_der,
+        private_key_der: params.private_key_der,
+        is_client: role == Setup::Active,
+        expected_remote_fingerprint,
+    })
+}
 
 use crate::app::{DeelipApp, VideoCallState};
 use crate::strings::t;
@@ -77,6 +98,7 @@ impl DeelipApp {
         let input_device = self.config.audio.input_device.clone();
         let output_device = self.config.audio.output_device.clone();
         let zrtp = self.zrtp_params_for(idx);
+        let dtls_srtp = dtls_srtp_params_for(media.local_dtls);
         let engine = rt.block_on(MediaEngine::start(MediaEngineOptions {
             local_rtp_port: media.local_rtp,
             remote_rtp: media.remote_rtp,
@@ -97,6 +119,7 @@ impl DeelipApp {
             call_id: &call_id,
             second_leg: None,
             zrtp,
+            dtls_srtp,
         }));
         match engine {
             Ok(e) => {
@@ -273,9 +296,10 @@ impl DeelipApp {
             },
             call_id: &call_id0,
             second_leg: Some(leg2),
-            // ZRTP isn't supported for conference calls -- see
-            // `MediaEngineOptions::zrtp`'s doc comment.
+            // Neither ZRTP nor DTLS-SRTP is supported for conference calls
+            // -- see `MediaEngineOptions::zrtp`/`::dtls_srtp`'s doc comments.
             zrtp: None,
+            dtls_srtp: None,
         }));
         match engine {
             Ok(e) => {

@@ -26,10 +26,12 @@ impl SipStack {
             Some(r) => (r.relayed_addr.ip().to_string(), r.relayed_addr.port()),
             None => (advertised_ip.clone(), media.local_rtp),
         };
+        let dtls_fp = media.local_dtls.as_ref().map(|d| &d.local_fingerprint);
+        let dtls_setup = media.local_dtls.as_ref().and_then(|d| d.role);
         let mut local_sdp = if hold {
-            build_hold_offer(&rtp_ip, rtp_port, media.codec, media.local_srtp.as_ref())
+            build_hold_offer(&rtp_ip, rtp_port, media.codec, media.local_srtp.as_ref(), dtls_fp, dtls_setup)
         } else {
-            build_resume_offer(&rtp_ip, rtp_port, media.codec, media.local_srtp.as_ref())
+            build_resume_offer(&rtp_ip, rtp_port, media.codec, media.local_srtp.as_ref(), dtls_fp, dtls_setup)
         };
         // Hold/resume re-INVITEs are audio-only-shaped above; if this call
         // also negotiated video, append its own `m=video` section (no ICE
@@ -47,6 +49,8 @@ impl SipStack {
                 video.codec,
                 video.local_srtp.as_ref(),
                 None,
+                dtls_fp,
+                dtls_setup,
             ));
         }
         let local_sdp = local_sdp.as_str();

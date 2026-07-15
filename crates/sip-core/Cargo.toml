@@ -18,6 +18,8 @@ base64 = { workspace = true }
 deelip-nat = { workspace = true }
 webrtc-util = { workspace = true }
 ring = { workspace = true }
+rcgen = { workspace = true }
+sha2 = { workspace = true }
 aes = { workspace = true }
 cfb-mode = { workspace = true }
 crc = { workspace = true }

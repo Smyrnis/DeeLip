@@ -11,7 +11,44 @@ use webrtc_util::Conn;
 
 use crate::call::dialog::{CallMedia, VideoMedia};
 use crate::events::{CallMediaReady, VideoMediaReady};
-use crate::wire::sdp::{ALL_CODECS, AudioCodec, IceAttrs, ParsedSdp, SrtpParams, SrtpSession, VideoCodec};
+use crate::wire::sdp::{
+    ALL_CODECS, AudioCodec, DtlsFingerprint, IceAttrs, ParsedSdp, Setup, SrtpParams, SrtpSession, VideoCodec,
+    generate_dtls_cert,
+};
+
+/// Everything one call's DTLS-SRTP session (RFC 5763/5764) needs -- decided
+/// once and reused for both the audio and (if negotiated) video `m=`
+/// sections, since this codebase negotiates DTLS-SRTP at the call level,
+/// never per media section (see `MediaEncryption::DtlsSrtp`'s doc comment).
+/// Rides alongside `local_srtp`/`remote_srtp` through `CallMedia`/
+/// `CallMediaReady` without interacting with `resolve_srtp_and_relay`'s
+/// SDES/TURN/ICE resolution at all.
+#[derive(Debug, Clone)]
+pub struct DtlsCallParams {
+    pub cert_der: Vec<u8>,
+    pub private_key_der: Vec<u8>,
+    pub local_fingerprint: DtlsFingerprint,
+    /// Resolved once the offer/answer exchange completes -- `Active` (we
+    /// send the DTLS ClientHello) or `Passive` (we wait for the peer's).
+    /// `None` only transiently for the offerer, between generating our own
+    /// cert/fingerprint (sent as `a=setup:actpass`) and the answer arriving;
+    /// the answerer resolves this immediately upon seeing the offer.
+    pub role: Option<Setup>,
+    /// The remote's advertised fingerprint -- compared against the DTLS
+    /// handshake's actual peer certificate once it completes
+    /// (`deelip_media::dtls_srtp_session`). This is the real
+    /// MITM-prevention check; must never be skipped.
+    pub remote_fingerprint: Option<DtlsFingerprint>,
+}
+
+impl DtlsCallParams {
+    /// Generates a fresh cert/fingerprint for a new call, with `role`/
+    /// `remote_fingerprint` still unresolved (see their doc comments).
+    pub fn generate() -> anyhow::Result<Self> {
+        let (cert_der, private_key_der, local_fingerprint) = generate_dtls_cert()?;
+        Ok(Self { cert_der, private_key_der, local_fingerprint, role: None, remote_fingerprint: None })
+    }
+}
 
 /// Network settings a `SipStack` needs for call setup -- separate from
 /// `SipAccount` since STUN/TURN server config is process-wide (Settings'
@@ -261,11 +298,21 @@ fn resolve_srtp_and_relay(
 pub fn resolve_call_media(
     local_rtp: u16, local_srtp: Option<SrtpParams>, relay: Option<TurnRelay>, ice: Option<IceConnection>,
     codec: AudioCodec, dtmf_type: Option<u8>, cn_type: Option<u8>, remote_rtp: SocketAddr,
-    remote_srtp: Option<SrtpParams>, wants_srtp: bool,
+    remote_srtp: Option<SrtpParams>, wants_srtp: bool, local_dtls: Option<DtlsCallParams>,
 ) -> (CallMedia, CallMediaReady) {
     let (srtp_session, relay_conn) = resolve_srtp_and_relay(&local_srtp, &remote_srtp, &relay, &ice, wants_srtp);
 
-    let media = CallMedia { local_rtp, local_srtp, relay, ice, codec, dtmf_type, cn_type, video: None };
+    let media = CallMedia {
+        local_rtp,
+        local_srtp,
+        relay,
+        ice,
+        codec,
+        dtmf_type,
+        cn_type,
+        video: None,
+        local_dtls: local_dtls.clone(),
+    };
     let ready = CallMediaReady {
         codec,
         dtmf_type,
@@ -275,6 +322,7 @@ pub fn resolve_call_media(
         srtp: srtp_session,
         relay: relay_conn,
         video: None,
+        local_dtls,
     };
     (media, ready)
 }

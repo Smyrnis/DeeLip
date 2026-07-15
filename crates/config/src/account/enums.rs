@@ -63,6 +63,17 @@ pub enum MediaEncryption {
     /// on purpose). Full picture, including verification scope/caveats:
     /// `docs/crates/sip-core.md`.
     Zrtp,
+    /// RFC 5763/5764 DTLS-SRTP: keys are derived from a DTLS 1.2 handshake
+    /// run over the RTP socket, using `a=fingerprint`/`a=setup` SDP
+    /// attributes to bootstrap it -- unlike `Zrtp`, this DOES have SDP
+    /// footprint, but `wants_srtp` still returns `false` since the actual
+    /// key material is never SDES-carried. SECURITY: unlike ZRTP, DTLS-SRTP
+    /// has no independent human-verifiable SAS -- its only MITM protection
+    /// is the fingerprint's integrity in transit over SIP signaling.
+    /// Selecting this on an account whose resolved transport isn't TLS
+    /// means the fingerprint travels in the clear, giving no real MITM
+    /// protection (same exposure as SDES without secure signaling).
+    DtlsSrtp,
 }
 
 pub(super) fn media_encryption_to_str(m: MediaEncryption) -> &'static str {
@@ -71,6 +82,7 @@ pub(super) fn media_encryption_to_str(m: MediaEncryption) -> &'static str {
         MediaEncryption::Disabled => "disabled",
         MediaEncryption::Enabled => "enabled",
         MediaEncryption::Zrtp => "zrtp",
+        MediaEncryption::DtlsSrtp => "dtls_srtp",
     }
 }
 pub(super) fn media_encryption_from_str(s: &str) -> MediaEncryption {
@@ -78,6 +90,7 @@ pub(super) fn media_encryption_from_str(s: &str) -> MediaEncryption {
         "disabled" => MediaEncryption::Disabled,
         "enabled" => MediaEncryption::Enabled,
         "zrtp" => MediaEncryption::Zrtp,
+        "dtls_srtp" => MediaEncryption::DtlsSrtp,
         _ => MediaEncryption::MatchTransport,
     }
 }

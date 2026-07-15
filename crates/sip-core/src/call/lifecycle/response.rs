@@ -13,11 +13,24 @@ use crate::{
     events::SipEvent,
     wire::auth::build_challenge_response,
     wire::message::{SipMessage, SipMethod},
-    wire::sdp::{parse_sdp, parse_video_section, split_media_sections},
+    wire::sdp::{Setup, parse_sdp, parse_video_section, split_media_sections},
     wire::util::new_branch,
 };
 
 use super::VIDEO_CODECS;
+
+/// RFC 4145 §4.1: as the offerer, our final role is simply the complement
+/// of whatever the answer committed to. `None` if the answer didn't
+/// actually negotiate DTLS-SRTP at all (no fingerprint/setup, or an
+/// answer nonsensically echoing `actpass` instead of resolving it) --
+/// callers treat that the same as the remote not supporting DTLS-SRTP.
+fn resolve_offerer_dtls_role(answered_setup: Option<Setup>) -> Option<Setup> {
+    match answered_setup {
+        Some(Setup::Active) => Some(Setup::Passive),
+        Some(Setup::Passive) => Some(Setup::Active),
+        Some(Setup::ActPass) | None => None,
+    }
+}
 
 impl SipStack {
     // ── Response handler ──────────────────────────────────────────────────────
@@ -71,6 +84,13 @@ impl SipStack {
             return;
         }
 
+        // `Connected`'s `pending_offer: Option<PendingOfferMedia>` now carries
+        // `DtlsCallParams` (cert/key DER bytes), making it noticeably larger
+        // than `Act`'s other variants -- deliberately not boxed, matching
+        // `EventSender::send`'s own established precedent for `SipEvent`
+        // (see its doc comment) of accepting this cost rather than adding
+        // indirection to every construction/match site.
+        #[allow(clippy::large_enum_variant)]
         enum Act {
             Nothing,
             Ringing,
@@ -449,10 +469,26 @@ impl SipStack {
             });
             return;
         };
-        let Some(PendingOfferMedia { local_rtp, local_srtp, relay }) = pending_offer else {
+        let Some(PendingOfferMedia { local_rtp, local_srtp, relay, local_dtls }) = pending_offer else {
             debug!(call_id, "Connected with no pending offer media -- dropping");
             return;
         };
+
+        // Resolve our final DTLS-SRTP role now that the answer's
+        // `a=setup` is known -- `None` (dropping `local_dtls` entirely)
+        // if the answer didn't actually negotiate it, same fallback
+        // shape `resolve_srtp_and_relay` already uses for SDES.
+        let local_dtls = local_dtls.and_then(|mut params| match resolve_offerer_dtls_role(parsed.setup) {
+            Some(role) if parsed.fingerprint.is_some() => {
+                params.role = Some(role);
+                params.remote_fingerprint = parsed.fingerprint.clone();
+                Some(params)
+            }
+            _ => {
+                tracing::warn!("DTLS-SRTP requested but answer didn't negotiate it -- falling back to plaintext RTP");
+                None
+            }
+        });
 
         // Video (negotiation only): if we offered a video leg,
         // parse the answer's own video section (a separate,
@@ -513,6 +549,7 @@ impl SipStack {
                 cn_type,
                 remote_rtp,
                 remote_srtp,
+                local_dtls,
                 video,
             });
         });
@@ -652,6 +689,7 @@ impl SipStack {
             cn_type,
             remote_rtp,
             remote_srtp,
+            local_dtls,
             video,
         } = ev
         else {
@@ -673,6 +711,7 @@ impl SipStack {
             remote_rtp,
             remote_srtp,
             wants_srtp,
+            local_dtls,
         );
         debug!(call_id, video_negotiated = video.is_some(), "Outgoing call connected");
         if let Some(v) = video {

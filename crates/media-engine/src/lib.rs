@@ -3,6 +3,8 @@ pub mod agc;
 pub mod audio;
 pub mod codec;
 mod codec_dispatch;
+mod dtls_demux;
+pub mod dtls_srtp_session;
 pub mod dtmf;
 pub mod engine;
 pub mod recording;
@@ -15,6 +17,7 @@ pub mod video_engine;
 pub mod video_rtp;
 pub mod zrtp_session;
 
+pub use dtls_srtp_session::DtlsSrtpParams;
 pub use engine::{ConferenceLeg, MediaEngine, MediaEngineOptions};
 pub use recording::RecordingOptions;
 pub use stats::{CallStatsSnapshot, LegStats};

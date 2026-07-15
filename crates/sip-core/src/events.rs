@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use webrtc_util::Conn;
 
+use crate::call::media_setup::DtlsCallParams;
 use crate::subscription::mwi::MwiState;
 use crate::subscription::presence::PresenceState;
 use crate::wire::sdp::{AudioCodec, SrtpSession, VideoCodec};
@@ -32,6 +33,10 @@ pub struct CallMediaReady {
     /// both offered/accepted one -- `None` for an audio-only call. See
     /// `VideoMediaReady` and docs/crates/sip-core.md's "Video negotiation" section.
     pub video: Option<VideoMediaReady>,
+    /// RFC 5763/5764 DTLS-SRTP session state to hand to
+    /// `MediaEngineOptions.dtls_srtp` -- call-scoped, shared by `video` too
+    /// (not duplicated into `VideoMediaReady`). See `DtlsCallParams`.
+    pub local_dtls: Option<DtlsCallParams>,
 }
 
 /// Video counterpart of `CallMediaReady` -- no `dtmf_type`/`cn_type` (neither
@@ -46,6 +51,12 @@ pub struct VideoMediaReady {
 }
 
 /// Events emitted by the SIP stack to the application.
+// `CallConnected`'s `media: CallMediaReady` now carries `DtlsCallParams`
+// (cert/key DER bytes), making it noticeably larger than this enum's other
+// variants -- deliberately not boxed, matching `EventSender::send`'s own
+// established precedent (see its doc comment) of accepting this cost
+// rather than adding indirection to every construction/match site.
+#[allow(clippy::large_enum_variant)]
 pub enum SipEvent {
     Registered {
         expires: u32,

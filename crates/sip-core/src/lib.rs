@@ -11,6 +11,7 @@ pub mod zrtp;
 
 pub use call::dialog;
 pub use call::media_setup;
+pub use call::media_setup::DtlsCallParams;
 pub use client::SipStack;
 pub use events::{CallMediaReady, SipCommand, SipEvent, VideoMediaReady};
 pub use handle::SipHandle;
@@ -24,8 +25,8 @@ pub use wire::message;
 pub use wire::message::{SipMessage, SipMethod, SipStartLine};
 pub use wire::sdp;
 pub use wire::sdp::{
-    AudioCodec, IceAttrs, ParsedSdp, SrtpParams, SrtpSession, build_answer, build_hold_offer, build_offer,
-    build_resume_offer, parse_sdp,
+    AudioCodec, DtlsFingerprint, IceAttrs, ParsedSdp, Setup, SrtpParams, SrtpSession, build_answer, build_hold_offer,
+    build_offer, build_resume_offer, generate_dtls_cert, parse_sdp,
 };
 pub use wire::util;
 

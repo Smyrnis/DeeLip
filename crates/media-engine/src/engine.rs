@@ -21,6 +21,8 @@ use crate::aec::EchoCanceller;
 use crate::agc::AutomaticGainControl;
 use crate::audio::{AudioStreams, FRAME_SAMPLES, PlaybackTx, open_streams};
 use crate::codec_dispatch::{AudioDecoder, AudioEncoder, clock_hz_for, ts_increment_for};
+use crate::dtls_demux::{DemuxConn, is_dtls_packet};
+use crate::dtls_srtp_session::{DtlsSrtpOutcome, DtlsSrtpParams, run_dtls_handshake};
 use crate::dtmf::{DTMF_PAYLOAD_TYPE, INBAND_FRAME_COUNT, build_dtmf_burst, char_to_event, dtmf_tone_frame};
 use crate::recording::{RecordingOptions, RecordingWriter};
 use crate::rtp::{RtpPacket, RtpSender};
@@ -148,6 +150,76 @@ struct ZrtpRecvState {
     sas: Arc<Mutex<Option<String>>>,
 }
 
+/// Bundles the leg-1-only DTLS-SRTP state a `recv_loop` needs -- `None` for
+/// leg 2, same restriction/reasoning as `ZrtpRecvState`. Unlike ZRTP (an
+/// ongoing in-band exchange `recv_loop` itself drives via
+/// `handle_incoming`/`tick`), the handshake runs on its own background task
+/// (`run_dtls_handshake`, spawned by `MediaEngine::start`) and reports back
+/// exactly once via `outcome_rx` -- see `recv_dtls_outcome`.
+struct DtlsRecvState {
+    /// Forwards demuxed DTLS-record bytes to `dtls_demux::DemuxConn`, whose
+    /// receiving end `run_dtls_handshake`'s background task owns.
+    inbound_tx: mpsc::UnboundedSender<Vec<u8>>,
+    outcome_rx: mpsc::UnboundedReceiver<DtlsSrtpOutcome>,
+    encrypt_tx: mpsc::UnboundedSender<([u8; 16], [u8; 14])>,
+    /// Used only to actively tear down this call's media on
+    /// `DtlsSrtpOutcome::FingerprintMismatch` -- see `handle_dtls_outcome`.
+    stop_tx: watch::Sender<bool>,
+}
+
+/// Waits on `dtls`'s outcome channel if present, or never resolves if not --
+/// lets `recv_loop`'s `tokio::select!` treat "no DTLS-SRTP for this call" and
+/// "haven't gotten the (one-shot) outcome yet" uniformly, the same trick
+/// `zrtp_retransmit_tick`'s `if zrtp.is_some()` guard uses for ZRTP.
+async fn recv_dtls_outcome(dtls: &mut Option<DtlsRecvState>) -> Option<DtlsSrtpOutcome> {
+    match dtls {
+        Some(state) => state.outcome_rx.recv().await,
+        None => std::future::pending().await,
+    }
+}
+
+/// Acts on `run_dtls_handshake`'s one-shot outcome. `FingerprintMismatch` is
+/// deliberately handled differently from ZRTP's `Failed` precedent (which
+/// just logs and continues unencrypted): a mismatch means the peer's actual
+/// certificate didn't match what SDP advertised -- an active-attack
+/// indicator, not an ordinary negotiation failure -- so this actively tears
+/// down the whole call's media via `stop_tx` rather than ever letting
+/// plaintext RTP flow. An ordinary `Failed` (e.g. a network hiccup during
+/// the handshake) falls back to unencrypted media exactly like ZRTP does.
+async fn handle_dtls_outcome(
+    outcome: DtlsSrtpOutcome, decrypt_ctx: &mut Option<SrtpContext>,
+    encrypt_tx: &mpsc::UnboundedSender<([u8; 16], [u8; 14])>, stop_tx: &watch::Sender<bool>,
+) {
+    match outcome {
+        DtlsSrtpOutcome::Secure { local_key, local_salt, remote_key, remote_salt } => {
+            match SrtpContext::new(
+                &remote_key,
+                &remote_salt,
+                ProtectionProfile::Aes128CmHmacSha1_80,
+                Some(srtp_replay_protection(64)),
+                None,
+            ) {
+                Ok(ctx) => {
+                    debug!("DTLS-SRTP: switching to SRTP-encrypted recv");
+                    *decrypt_ctx = Some(ctx);
+                }
+                Err(e) => error!("DTLS-SRTP: failed to build SRTP decrypt context: {e}"),
+            }
+            let _ = encrypt_tx.send((local_key, local_salt));
+        }
+        DtlsSrtpOutcome::FingerprintMismatch => {
+            error!(
+                "DTLS-SRTP: peer certificate did not match the SDP-advertised fingerprint -- possible \
+                 man-in-the-middle, stopping this call's media entirely rather than falling back to plaintext"
+            );
+            let _ = stop_tx.send(true);
+        }
+        DtlsSrtpOutcome::Failed(reason) => {
+            warn!("DTLS-SRTP handshake failed, continuing without encryption: {reason}");
+        }
+    }
+}
+
 /// Shared receive-loop body for both legs' RTP recv tasks: recv -> (ZRTP
 /// packet? hand to `zrtp`, if any, and loop) -> SRTP-decrypt (if
 /// `decrypt_ctx` is `Some`) -> parse -> drop DTMF payloads -> stats/jitter
@@ -159,7 +231,8 @@ struct ZrtpRecvState {
 async fn recv_loop(
     sock: Arc<RtpSocket>, mut decrypt_ctx: Option<SrtpContext>, mut decoder: AudioDecoder, dtmf_pt: u8,
     cn_pt: Option<u8>, clock_hz: f64, playback: PlaybackTx, stats: SharedStats, leg: Leg,
-    mut zrtp: Option<ZrtpRecvState>, remote_rtp: SocketAddr, mut stop_rx: watch::Receiver<bool>, what: &'static str,
+    mut zrtp: Option<ZrtpRecvState>, mut dtls: Option<DtlsRecvState>, remote_rtp: SocketAddr,
+    mut stop_rx: watch::Receiver<bool>, what: &'static str,
 ) {
     let mut jitter = JitterTracker::default();
     let mut cn_state = ComfortNoiseState::new();
@@ -176,6 +249,12 @@ async fn recv_loop(
                     if let Some(z) = zrtp.as_mut() {
                         let outcomes = z.runtime.handle_incoming(&buf[..len]);
                         handle_zrtp_outcomes(outcomes, &sock, remote_rtp, &mut decrypt_ctx, &z.encrypt_tx, &z.sas).await;
+                    }
+                    continue;
+                }
+                if is_dtls_packet(&buf[..len]) {
+                    if let Some(d) = dtls.as_ref() {
+                        let _ = d.inbound_tx.send(buf[..len].to_vec());
                     }
                     continue;
                 }
@@ -225,6 +304,16 @@ async fn recv_loop(
                     let outcomes = z.runtime.tick(Instant::now());
                     handle_zrtp_outcomes(outcomes, &sock, remote_rtp, &mut decrypt_ctx, &z.encrypt_tx, &z.sas).await;
                 }
+            }
+            Some(outcome) = recv_dtls_outcome(&mut dtls) => {
+                if let Some(d) = dtls.as_ref() {
+                    handle_dtls_outcome(outcome, &mut decrypt_ctx, &d.encrypt_tx, &d.stop_tx).await;
+                }
+                // One-shot: `run_dtls_handshake` only ever sends a single
+                // outcome, so this branch must never be selected again --
+                // `recv_dtls_outcome` treats `None` as "nothing to wait for"
+                // (see its own doc comment), same as no DTLS-SRTP at all.
+                dtls = None;
             }
             Ok(()) = stop_rx.changed() => {
                 if *stop_rx.borrow() { break; }
@@ -359,6 +448,12 @@ pub struct MediaEngineOptions<'a> {
     /// (today's behavior). Not supported alongside `second_leg` (conference
     /// legs stay SDES/plain-only).
     pub zrtp: Option<ZrtpParams>,
+    /// Attempt RFC 5763/5764 DTLS-SRTP key agreement on leg 1's RTP socket
+    /// -- `None` for a plain, SDES-SRTP, or ZRTP call (today's behavior for
+    /// those). Mutually exclusive with `zrtp` in practice (an account's
+    /// `MediaEncryption` selects at most one), and not supported alongside
+    /// `second_leg`, same restriction/reasoning as `zrtp`.
+    pub dtls_srtp: Option<DtlsSrtpParams>,
 }
 
 impl MediaEngine {
@@ -381,6 +476,7 @@ impl MediaEngine {
             call_id,
             second_leg,
             zrtp,
+            dtls_srtp,
         } = opts;
 
         let (audio_streams, mut cap_rx, hw_playback_tx, echo_ref, output_gain) =
@@ -463,6 +559,32 @@ impl MediaEngine {
             }
         }
 
+        // Created here (rather than alongside the send/recv tasks further
+        // down, where `stop_tx`/`stop_rx` used to be created) since the
+        // DTLS-SRTP block below needs a `stop_tx` clone to actively tear
+        // down media on `DtlsSrtpOutcome::FingerprintMismatch` -- see
+        // `handle_dtls_outcome`. No other dependency issue with moving this
+        // earlier; nothing between here and its old location touches it.
+        let (stop_tx, stop_rx) = watch::channel(false);
+
+        // ── DTLS-SRTP (leg 1 only -- see `start`'s doc comment) ──────────────────
+        // Unlike ZRTP's initial Hello above (sent synchronously before the
+        // recv task exists), the DTLS handshake must run *concurrently* with
+        // `recv_loop`, since `recv_loop` is what feeds `DemuxConn` its
+        // inbound bytes in the first place -- so this is a spawned
+        // background task, not inline work done before `recv_task` starts.
+        // `dtls_encrypt_tx`/`rx` are always constructed (mirrors
+        // `zrtp_encrypt_tx`/`rx` above) so the send task's `tokio::select!`
+        // arm below type-checks unconditionally; it simply never fires when
+        // `dtls_srtp` was `None`.
+        let (dtls_encrypt_tx, mut dtls_encrypt_rx) = mpsc::unbounded_channel::<([u8; 16], [u8; 14])>();
+        let dtls_recv_state = dtls_srtp.map(|params| {
+            let (demux, inbound_tx) = DemuxConn::new(socket.clone(), remote_rtp);
+            let (outcome_tx, outcome_rx) = mpsc::unbounded_channel();
+            tokio::spawn(run_dtls_handshake(params, demux, outcome_tx));
+            DtlsRecvState { inbound_tx, outcome_rx, encrypt_tx: dtls_encrypt_tx, stop_tx: stop_tx.clone() }
+        });
+
         // ── Leg 2 (conference), if present ────────────────────────────────────
         let mut leg2_socket: Option<Arc<RtpSocket>> = None;
         let mut leg2_remote: Option<SocketAddr> = None;
@@ -516,7 +638,6 @@ impl MediaEngine {
         let leg1_buf: PlaybackTx = Arc::new(Mutex::new(VecDeque::new()));
         let leg2_buf: Option<PlaybackTx> = second_leg.as_ref().map(|_| Arc::new(Mutex::new(VecDeque::new())));
 
-        let (stop_tx, stop_rx) = watch::channel(false);
         let mut stop_send = stop_rx.clone();
         let stop_recv = stop_rx;
 
@@ -717,6 +838,15 @@ impl MediaEngine {
                             Err(e) => error!("ZRTP: failed to build SRTP encrypt context: {e}"),
                         }
                     }
+                    Some((key, salt)) = dtls_encrypt_rx.recv() => {
+                        match SrtpContext::new(&key, &salt, ProtectionProfile::Aes128CmHmacSha1_80, None, None) {
+                            Ok(ctx) => {
+                                debug!("DTLS-SRTP: switching to SRTP-encrypted send");
+                                encrypt_ctx = Some(ctx);
+                            }
+                            Err(e) => error!("DTLS-SRTP: failed to build SRTP encrypt context: {e}"),
+                        }
+                    }
                     Ok(()) = stop_send.changed() => {
                         if *stop_send.borrow() { break; }
                     }
@@ -745,6 +875,7 @@ impl MediaEngine {
             stats.clone(),
             Leg::One,
             zrtp_recv_state,
+            dtls_recv_state,
             remote_rtp,
             stop_recv,
             "leg1",
@@ -769,6 +900,7 @@ impl MediaEngine {
                 stats.clone(),
                 Leg::Two,
                 None, // leg 2 is never ZRTP -- unchanged from before this refactor
+                None, // leg 2 is never DTLS-SRTP either -- same restriction/reasoning
                 leg.remote_rtp,
                 stop_tx.subscribe(),
                 "leg2",

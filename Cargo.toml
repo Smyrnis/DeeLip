@@ -78,6 +78,11 @@ semver = "1"
 flate2 = "1"
 regex = "1"
 ring = "0.17"
+# Matches the version webrtc-dtls 0.12 itself pins internally (see
+# media-engine/Cargo.toml's DTLS-SRTP comment) -- generated here in sip-core
+# so the DER round-trips directly into webrtc_dtls::crypto::Certificate
+# without sip-core needing a webrtc-dtls dependency of its own.
+rcgen = "0.13"
 aes = "0.8"
 cfb-mode = "0.8"
 crc = "3"

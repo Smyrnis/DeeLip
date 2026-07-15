@@ -1,5 +1,6 @@
 use deelip_nat::{IceConnection, IceGathered, TurnRelay};
 
+use crate::call::media_setup::DtlsCallParams;
 use crate::wire::sdp::{AudioCodec, SrtpParams, VideoCodec};
 
 /// State of a SIP call dialog (simplified early/confirmed dialog).
@@ -35,6 +36,10 @@ pub struct CallMedia {
     /// both offered/accepted one -- `None` for an audio-only call. See
     /// docs/crates/sip-core.md's "Video negotiation" section.
     pub video: Option<VideoMedia>,
+    /// RFC 5763/5764 DTLS-SRTP session state, call-scoped (shared by
+    /// `video` too, not duplicated into `VideoMedia`) -- see
+    /// `DtlsCallParams`'s doc comment.
+    pub local_dtls: Option<DtlsCallParams>,
 }
 
 /// Video counterpart of `CallMedia` -- no `dtmf_type`/`cn_type` (neither
@@ -58,6 +63,10 @@ pub struct PendingOfferMedia {
     pub local_rtp: u16,
     pub local_srtp: Option<SrtpParams>,
     pub relay: Option<TurnRelay>,
+    /// See `DtlsCallParams`'s doc comment -- `role`/`remote_fingerprint`
+    /// are still unresolved at this point, filled in once the answer
+    /// arrives (`handle_connected`).
+    pub local_dtls: Option<DtlsCallParams>,
 }
 
 /// Offerer-side video-leg state resolved before the INVITE was sent,

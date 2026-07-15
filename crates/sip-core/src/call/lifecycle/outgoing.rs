@@ -10,10 +10,10 @@ use deelip_config::TransportProtocol;
 
 use crate::{
     call::dialog::{Dialog, PendingOfferMedia, PendingVideoOffer},
-    call::media_setup::{self, NetworkConfig},
+    call::media_setup::{self, DtlsCallParams, NetworkConfig},
     client::{SipStack, StackEvent},
     events::SipEvent,
-    wire::sdp::{IceAttrs, SrtpParams, VideoCodec, build_offer, build_video_media_section},
+    wire::sdp::{IceAttrs, Setup, SrtpParams, VideoCodec, build_offer, build_video_media_section},
     wire::util::{new_branch, new_call_id, new_tag, uri_host_port},
 };
 
@@ -90,9 +90,30 @@ impl SipStack {
 
             let wants_srtp = account.wants_srtp(resolved_transport);
             let srtp = if wants_srtp { Some(SrtpParams::generate()) } else { None };
+            // RFC 5763 §5: the offerer always proposes `actpass`, letting
+            // the answerer pick which side initiates the DTLS handshake.
+            let local_dtls = if account.wants_dtls_srtp() {
+                match DtlsCallParams::generate() {
+                    Ok(params) => Some(params),
+                    Err(e) => {
+                        error!("Failed to generate DTLS-SRTP certificate: {e:#}");
+                        None
+                    }
+                }
+            } else {
+                None
+            };
             let codecs = media_setup::account_codecs(&account);
-            let mut local_sdp =
-                build_offer(&rtp_ip, rtp_port, srtp.as_ref(), &codecs, ice_attrs.as_ref(), account.vad_enabled);
+            let mut local_sdp = build_offer(
+                &rtp_ip,
+                rtp_port,
+                srtp.as_ref(),
+                &codecs,
+                ice_attrs.as_ref(),
+                account.vad_enabled,
+                local_dtls.as_ref().map(|d| &d.local_fingerprint),
+                local_dtls.as_ref().map(|_| Setup::ActPass),
+            );
 
             // Video (negotiation only -- see this account field's own doc
             // comment): appended onto the audio offer's own SDP text, never
@@ -100,7 +121,15 @@ impl SipStack {
             // (port allocation, ICE gather) just leaves `video` as `None`
             // and the call proceeds audio-only, exactly as it always has.
             let video = if account.video_enabled {
-                Self::prepare_video_offer(&network, &advertised_ip, attempt_ice, wants_srtp, &mut local_sdp).await
+                Self::prepare_video_offer(
+                    &network,
+                    &advertised_ip,
+                    attempt_ice,
+                    wants_srtp,
+                    local_dtls.as_ref(),
+                    &mut local_sdp,
+                )
+                .await
             } else {
                 None
             };
@@ -111,7 +140,7 @@ impl SipStack {
                 branch,
                 to,
                 local_sdp,
-                pending_offer: PendingOfferMedia { local_rtp, local_srtp: srtp, relay },
+                pending_offer: PendingOfferMedia { local_rtp, local_srtp: srtp, relay, local_dtls },
                 ice_gathered,
                 video,
             });
@@ -128,7 +157,8 @@ impl SipStack {
     /// unmodified) if the video RTP port can't be allocated -- video is
     /// always additive, never a reason to fail the whole call.
     async fn prepare_video_offer(
-        network: &NetworkConfig, advertised_ip: &str, attempt_ice: bool, wants_srtp: bool, local_sdp: &mut String,
+        network: &NetworkConfig, advertised_ip: &str, attempt_ice: bool, wants_srtp: bool,
+        local_dtls: Option<&DtlsCallParams>, local_sdp: &mut String,
     ) -> Option<PendingVideoOffer> {
         let local_rtp = match deelip_nat::alloc_rtp_port(network.rtp_port_range) {
             Ok(p) => p,
@@ -153,6 +183,8 @@ impl SipStack {
             VideoCodec::H264,
             local_srtp.as_ref(),
             ice_attrs.as_ref(),
+            local_dtls.map(|d| &d.local_fingerprint),
+            local_dtls.map(|_| Setup::ActPass),
         ));
 
         Some(PendingVideoOffer { local_rtp, local_srtp, relay, ice_gathered })
