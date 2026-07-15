@@ -88,7 +88,7 @@ impl DeelipApp {
                 ui.horizontal(|ui| {
                     text_edit_scope(ui, palette, |ui| {
                         ui.add(
-                            egui::TextEdit::singleline(&mut self.blocklist_input)
+                            egui::TextEdit::singleline(&mut self.settings_ui.blocklist_input)
                                 .hint_text(
                                     RichText::new(t("settings.advanced.blocklist_hint")).color(palette.ink_muted),
                                 )
@@ -96,12 +96,12 @@ impl DeelipApp {
                         )
                     });
                     if ui.button(t("history.block_button")).clicked() {
-                        let entry = self.blocklist_input.trim().to_string();
+                        let entry = self.settings_ui.blocklist_input.trim().to_string();
                         if !entry.is_empty() && !self.config.blocklist.iter().any(|e| e.eq_ignore_ascii_case(&entry)) {
                             self.config.blocklist.push(entry);
                             self.save_config_quietly();
                         }
-                        self.blocklist_input.clear();
+                        self.settings_ui.blocklist_input.clear();
                     }
                 });
                 if self.config.blocklist.is_empty() {

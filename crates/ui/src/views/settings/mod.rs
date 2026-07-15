@@ -51,8 +51,8 @@ impl DeelipApp {
             [950.0, 740.0],
             [580.0, 520.0],
             true,
-            |app| app.settings_open,
-            |app| app.settings_open = false,
+            |app| app.settings_ui.settings_open,
+            |app| app.settings_ui.settings_open = false,
             |_app| t("settings.window_title"),
             |app, ui| {
                 ui.separator();
@@ -71,7 +71,7 @@ impl DeelipApp {
         if self.config.accounts.is_empty() {
             self.config.accounts.push(deelip_config::SipAccount::default());
         }
-        self.edit_account_idx = self.edit_account_idx.min(self.config.accounts.len() - 1);
+        self.settings_ui.edit_account_idx = self.settings_ui.edit_account_idx.min(self.config.accounts.len() - 1);
         let palette = self.palette;
 
         // A tab strip -- one section visible at a time, sized to fit
@@ -79,14 +79,18 @@ impl DeelipApp {
         // `ScrollArea` stacking all 12 sections in one column.
         ui.add_space(6.0);
         ui.horizontal_wrapped(|ui| {
-            ui.selectable_value(&mut self.settings_tab, SettingsTab::General, t("settings.tab_general"));
-            ui.selectable_value(&mut self.settings_tab, SettingsTab::Account, t("settings.tab_account"));
-            ui.selectable_value(&mut self.settings_tab, SettingsTab::Audio, t("settings.tab_audio"));
-            ui.selectable_value(&mut self.settings_tab, SettingsTab::Video, t("settings.tab_video"));
-            ui.selectable_value(&mut self.settings_tab, SettingsTab::Network, t("settings.tab_network"));
-            ui.selectable_value(&mut self.settings_tab, SettingsTab::Directory, t("settings.tab_directory"));
-            ui.selectable_value(&mut self.settings_tab, SettingsTab::Hotkeys, t("settings.tab_hotkeys"));
-            ui.selectable_value(&mut self.settings_tab, SettingsTab::Advanced, t("settings.tab_advanced"));
+            ui.selectable_value(&mut self.settings_ui.settings_tab, SettingsTab::General, t("settings.tab_general"));
+            ui.selectable_value(&mut self.settings_ui.settings_tab, SettingsTab::Account, t("settings.tab_account"));
+            ui.selectable_value(&mut self.settings_ui.settings_tab, SettingsTab::Audio, t("settings.tab_audio"));
+            ui.selectable_value(&mut self.settings_ui.settings_tab, SettingsTab::Video, t("settings.tab_video"));
+            ui.selectable_value(&mut self.settings_ui.settings_tab, SettingsTab::Network, t("settings.tab_network"));
+            ui.selectable_value(
+                &mut self.settings_ui.settings_tab,
+                SettingsTab::Directory,
+                t("settings.tab_directory"),
+            );
+            ui.selectable_value(&mut self.settings_ui.settings_tab, SettingsTab::Hotkeys, t("settings.tab_hotkeys"));
+            ui.selectable_value(&mut self.settings_ui.settings_tab, SettingsTab::Advanced, t("settings.tab_advanced"));
         });
         ui.separator();
         ui.add_space(6.0);
@@ -97,20 +101,20 @@ impl DeelipApp {
             ui.add_space(8.0);
             if ui.button(t("common.save_button")).clicked() {
                 match self.config.save(&self.db) {
-                    Ok(()) => self.settings_saved_notice = true,
+                    Ok(()) => self.settings_ui.settings_saved_notice = true,
                     Err(err) => {
-                        self.settings_saved_notice = false;
+                        self.settings_ui.settings_saved_notice = false;
                         tracing::error!("Failed to save config: {err}");
                     }
                 }
             }
-            if self.settings_saved_notice {
+            if self.settings_ui.settings_saved_notice {
                 ui.label(RichText::new(t("settings.saved_restart_notice")).color(palette.signal));
             }
             ui.add_space(4.0);
         });
 
-        let edited = match self.settings_tab {
+        let edited = match self.settings_ui.settings_tab {
             SettingsTab::General => {
                 self.show_notifications_section(ui, &palette);
                 ui.add_space(14.0);
@@ -149,7 +153,7 @@ impl DeelipApp {
         };
 
         if edited {
-            self.settings_saved_notice = false;
+            self.settings_ui.settings_saved_notice = false;
         }
     }
 }

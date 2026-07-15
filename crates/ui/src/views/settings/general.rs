@@ -107,11 +107,11 @@ impl DeelipApp {
             });
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                if ui.checkbox(&mut self.autostart_enabled, t("settings.start_on_login_checkbox")).changed()
-                    && let Err(e) = deelip_config::set_autostart(self.autostart_enabled)
+                if ui.checkbox(&mut self.settings_ui.autostart_enabled, t("settings.start_on_login_checkbox")).changed()
+                    && let Err(e) = deelip_config::set_autostart(self.settings_ui.autostart_enabled)
                 {
                     tracing::error!("Failed to update autostart: {e}");
-                    self.autostart_enabled = deelip_config::is_autostart_enabled();
+                    self.settings_ui.autostart_enabled = deelip_config::is_autostart_enabled();
                 }
                 info_hint(ui, palette, &t("settings.applies_immediately_hint"));
             });

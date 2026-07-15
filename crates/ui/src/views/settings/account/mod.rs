@@ -31,13 +31,14 @@ impl DeelipApp {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let can_remove = self.config.accounts.len() > 1;
                 if ui.add_enabled(can_remove, egui::Button::new(t("common.remove_button"))).clicked() {
-                    self.config.accounts.remove(self.edit_account_idx);
-                    self.edit_account_idx = self.edit_account_idx.min(self.config.accounts.len() - 1);
+                    self.config.accounts.remove(self.settings_ui.edit_account_idx);
+                    self.settings_ui.edit_account_idx =
+                        self.settings_ui.edit_account_idx.min(self.config.accounts.len() - 1);
                     edited = true;
                 }
                 if ui.button(format!("+ {}", t("settings.account.add_account_button"))).clicked() {
                     self.config.accounts.push(SipAccount::default());
-                    self.edit_account_idx = self.config.accounts.len() - 1;
+                    self.settings_ui.edit_account_idx = self.config.accounts.len() - 1;
                     edited = true;
                 }
             });
@@ -52,15 +53,19 @@ impl DeelipApp {
         let selected_text = account_status_label(
             ui,
             palette,
-            is_registered(&self.config.accounts[self.edit_account_idx]),
-            &format!("{}. {}", self.edit_account_idx + 1, account_label(&self.config.accounts[self.edit_account_idx])),
+            is_registered(&self.config.accounts[self.settings_ui.edit_account_idx]),
+            &format!(
+                "{}. {}",
+                self.settings_ui.edit_account_idx + 1,
+                account_label(&self.config.accounts[self.settings_ui.edit_account_idx])
+            ),
         );
         egui::ComboBox::from_id_salt("settings_account_picker").selected_text(selected_text).show_ui(ui, |ui| {
             for i in 0..self.config.accounts.len() {
                 let label_text = format!("{}. {}", i + 1, account_label(&self.config.accounts[i]));
                 let label = account_status_label(ui, palette, is_registered(&self.config.accounts[i]), &label_text);
-                if ui.add(egui::Button::selectable(self.edit_account_idx == i, label)).clicked() {
-                    self.edit_account_idx = i;
+                if ui.add(egui::Button::selectable(self.settings_ui.edit_account_idx == i, label)).clicked() {
+                    self.settings_ui.edit_account_idx = i;
                 }
             }
         });
@@ -70,9 +75,9 @@ impl DeelipApp {
             // Read before `account` borrows `self.config.accounts` below --
             // see `network.rs`'s doc comment.
             let global_ice_enabled = self.config.ice_enabled;
-            let account = &mut self.config.accounts[self.edit_account_idx];
+            let account = &mut self.config.accounts[self.settings_ui.edit_account_idx];
 
-            identity::show(ui, palette, account, &mut edited, &mut self.show_account_password);
+            identity::show(ui, palette, account, &mut edited, &mut self.settings_ui.show_account_password);
             codecs::show(ui, palette, account, &mut edited);
             call_handling::show(ui, palette, account, &mut edited);
             dial_plan::show(
@@ -80,8 +85,8 @@ impl DeelipApp {
                 palette,
                 account,
                 &mut edited,
-                &mut self.dialplan_pattern_input,
-                &mut self.dialplan_replacement_input,
+                &mut self.settings_ui.dialplan_pattern_input,
+                &mut self.settings_ui.dialplan_replacement_input,
             );
             network::show(ui, palette, account, &mut edited, global_ice_enabled);
         });

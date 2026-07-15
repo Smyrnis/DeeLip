@@ -30,7 +30,7 @@ impl DeelipApp {
                 ctx.request_repaint_of(egui::ViewportId::from_hash_of(SETTINGS_VIEWPORT_NAME));
             }
         });
-        self.camera_device_rx = Some(rx);
+        self.settings_ui.camera_device_rx = Some(rx);
     }
 
     /// Restart required -- returns whether anything changed.
@@ -38,22 +38,22 @@ impl DeelipApp {
         let mut edited = false;
         ui.label(RichText::new(t("settings.tab_video")).font(theme::font_heading(13.5)));
         theme::full_width_card(ui, *palette, |ui| {
-            if let Some(rx) = &self.camera_device_rx
+            if let Some(rx) = &self.settings_ui.camera_device_rx
                 && let Ok(result) = rx.try_recv()
             {
-                self.camera_device_cache = Some(result);
-                self.camera_device_rx = None;
+                self.settings_ui.camera_device_cache = Some(result);
+                self.settings_ui.camera_device_rx = None;
             }
-            if self.camera_device_cache.is_none() && self.camera_device_rx.is_none() {
+            if self.settings_ui.camera_device_cache.is_none() && self.settings_ui.camera_device_rx.is_none() {
                 self.spawn_camera_device_scan();
             }
-            let cameras = self.camera_device_cache.clone().unwrap_or_default();
+            let cameras = self.settings_ui.camera_device_cache.clone().unwrap_or_default();
 
             ui.horizontal(|ui| {
                 if ui.button(t("settings.video.refresh_cameras_button")).clicked() {
                     self.spawn_camera_device_scan();
                 }
-                if self.camera_device_rx.is_some() {
+                if self.settings_ui.camera_device_rx.is_some() {
                     ui.label(RichText::new(t("settings.audio.scanning")).color(palette.ink_muted).small());
                 }
             });

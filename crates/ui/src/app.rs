@@ -56,14 +56,6 @@ pub struct DeelipApp {
     pub(crate) rt: Handle,
 
     pub(crate) tab: Tab,
-    /// Whether the Settings dialog is open -- a separate modal window
-    /// rather than a tab, since a settings screen the size of this one
-    /// competing for tab-bar space with Dialer/History/etc. would read as
-    /// "just another view" rather than the distinct, out-of-the-way
-    /// configuration surface it's meant to be.
-    pub(crate) settings_open: bool,
-    /// Which Settings tab is currently shown -- see `SettingsTab`.
-    pub(crate) settings_tab: SettingsTab,
 
     // Dialer
     pub(crate) call_target: String,
@@ -141,6 +133,55 @@ pub struct DeelipApp {
     /// Handle to `~/.config/deelip/deelip.db` -- the single SQLite database
     /// backing `config`/`contacts`/`history` alike (see `deelip_config::db`).
     pub(crate) db: Db,
+    pub(crate) settings_ui: SettingsUiState,
+    /// One-shot flag consumed on the very first `update()` call, to send a
+    /// `Visible(false)` viewport command if `config.start_minimized` -- see
+    /// the comment in `main.rs` on why this can't be done via `NativeOptions`.
+    pub(crate) first_frame: bool,
+    /// Set once in `new()` -- Darcula is the app's only theme now (see
+    /// `theme.rs`'s v3-revision doc comment), so this no longer changes per
+    /// frame. Kept as a field (not a free fn call at each use site) so
+    /// tab-rendering methods can reach `self.palette` without threading an
+    /// extra parameter through every fn signature.
+    pub(crate) palette: Palette,
+
+    /// Shared handles for the tray's independent event-handling threads (see
+    /// `tray` module docs) — `None` degrades to normal close-quits-the-app
+    /// behavior if the tray icon failed to start.
+    pub(crate) tray: Option<(CtxSlot, QuitState, tray::BadgeSender)>,
+    /// Slot every background producer uses to call `request_repaint()` the
+    /// instant it has something, instead of the idle tick polling for it --
+    /// see `docs/crates/ui.md`'s "Repaint plumbing" section.
+    pub(crate) ctx_slot: CtxSlot,
+    pub(crate) tray_state: TrayState,
+
+    /// System-wide Answer/Hangup/Mute hotkeys (see `hotkeys` module docs) --
+    /// `None` if disabled in config, or if registration failed (logged, not
+    /// fatal — the app works fine without global hotkeys).
+    pub(crate) hotkeys: Option<Hotkeys>,
+
+    pub(crate) history_state: HistoryState,
+
+    pub(crate) messages_state: MessagesState,
+
+    pub(crate) contacts_state: ContactsState,
+
+    pub(crate) update_check: UpdateCheckState,
+
+    // Directory (LDAP) -- see `views::directory`.
+    pub(crate) directory_ui: DirectoryUiState,
+}
+
+/// Settings dialog UI state -- see `views::settings`.
+pub(crate) struct SettingsUiState {
+    /// Whether the Settings dialog is open -- a separate modal window
+    /// rather than a tab, since a settings screen the size of this one
+    /// competing for tab-bar space with Dialer/History/etc. would read as
+    /// "just another view" rather than the distinct, out-of-the-way
+    /// configuration surface it's meant to be.
+    pub(crate) settings_open: bool,
+    /// Which Settings tab is currently shown -- see `SettingsTab`.
+    pub(crate) settings_tab: SettingsTab,
     /// Set after a successful Settings save; cleared on the next edit.
     pub(crate) settings_saved_notice: bool,
     /// Index into `config.accounts` currently shown in the Settings tab's
@@ -174,50 +215,12 @@ pub struct DeelipApp {
     /// its own bit of UI-bound state (checked once at startup, then kept in
     /// sync by the Settings checkbox itself).
     pub(crate) autostart_enabled: bool,
-    /// One-shot flag consumed on the very first `update()` call, to send a
-    /// `Visible(false)` viewport command if `config.start_minimized` -- see
-    /// the comment in `main.rs` on why this can't be done via `NativeOptions`.
-    pub(crate) first_frame: bool,
-    /// Set once in `new()` -- Darcula is the app's only theme now (see
-    /// `theme.rs`'s v3-revision doc comment), so this no longer changes per
-    /// frame. Kept as a field (not a free fn call at each use site) so
-    /// tab-rendering methods can reach `self.palette` without threading an
-    /// extra parameter through every fn signature.
-    pub(crate) palette: Palette,
-
-    /// Shared handles for the tray's independent event-handling threads (see
-    /// `tray` module docs) — `None` degrades to normal close-quits-the-app
-    /// behavior if the tray icon failed to start.
-    pub(crate) tray: Option<(CtxSlot, QuitState, tray::BadgeSender)>,
-    /// Slot every background producer uses to call `request_repaint()` the
-    /// instant it has something, instead of the idle tick polling for it --
-    /// see `docs/crates/ui.md`'s "Repaint plumbing" section.
-    pub(crate) ctx_slot: CtxSlot,
-    pub(crate) tray_state: TrayState,
-
-    /// System-wide Answer/Hangup/Mute hotkeys (see `hotkeys` module docs) --
-    /// `None` if disabled in config, or if registration failed (logged, not
-    /// fatal — the app works fine without global hotkeys).
-    pub(crate) hotkeys: Option<Hotkeys>,
-
-    pub(crate) history_state: HistoryState,
-
-    pub(crate) messages_state: MessagesState,
-
     // Blocklist
     pub(crate) blocklist_input: String,
-
     // Dial Plan rule editor (Settings' account editor) -- new-rule input
     // fields, mirroring `blocklist_input`'s shape.
     pub(crate) dialplan_pattern_input: String,
     pub(crate) dialplan_replacement_input: String,
-
-    pub(crate) contacts_state: ContactsState,
-
-    pub(crate) update_check: UpdateCheckState,
-
-    // Directory (LDAP) -- see `views::directory`.
-    pub(crate) directory_ui: DirectoryUiState,
 }
 
 /// Contacts tab + shared create/edit-contact dialog + presence state -- see
@@ -506,8 +509,6 @@ impl DeelipApp {
             account_spawn_rx: Some(account_spawn_rx),
             rt,
             tab: Tab::Dialer,
-            settings_open: false,
-            settings_tab: SettingsTab::default(),
             call_target: String::new(),
             selected_account: 0,
             last_dialed: None,
@@ -537,14 +538,21 @@ impl DeelipApp {
             },
             config,
             db,
-            settings_saved_notice: false,
-            edit_account_idx: 0,
-            show_account_password: false,
-            audio_device_cache: None,
-            audio_device_rx: None,
-            camera_device_cache: None,
-            camera_device_rx: None,
-            autostart_enabled: deelip_config::is_autostart_enabled(),
+            settings_ui: SettingsUiState {
+                settings_open: false,
+                settings_tab: SettingsTab::default(),
+                settings_saved_notice: false,
+                edit_account_idx: 0,
+                show_account_password: false,
+                audio_device_cache: None,
+                audio_device_rx: None,
+                camera_device_cache: None,
+                camera_device_rx: None,
+                autostart_enabled: deelip_config::is_autostart_enabled(),
+                blocklist_input: String::new(),
+                dialplan_pattern_input: String::new(),
+                dialplan_replacement_input: String::new(),
+            },
             first_frame: true,
             palette: Palette::light(),
             tray,
@@ -568,9 +576,6 @@ impl DeelipApp {
                 messages_window_peer: None,
                 message_body: String::new(),
             },
-            blocklist_input: String::new(),
-            dialplan_pattern_input: String::new(),
-            dialplan_replacement_input: String::new(),
             contacts_state: ContactsState {
                 contacts,
                 contact_search: String::new(),

@@ -391,7 +391,7 @@ impl DeelipApp {
                 // comment.
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button(egui_phosphor::regular::GEAR).on_hover_text(t("settings.window_title")).clicked() {
-                        self.settings_open = true;
+                        self.settings_ui.settings_open = true;
                     }
                 });
             });
