@@ -193,18 +193,7 @@ pub struct DeelipApp {
     /// instant it has something, instead of the idle tick polling for it --
     /// see `docs/crates/ui.md`'s "Repaint plumbing" section.
     pub(crate) ctx_slot: CtxSlot,
-    /// Missed calls not yet acknowledged by opening the History tab —
-    /// mirrored to the tray icon's badge (see `sync_tray_badge`) whenever
-    /// it changes; reset to 0 on switching to the History tab.
-    pub(crate) unseen_missed_calls: u32,
-    /// `(account, call_id)` for every entry in `calls`/`pending_call` as
-    /// last mirrored into the tray's `QuitState` -- lets
-    /// `process_tray_events` skip re-cloning Senders/call-ids and re-locking
-    /// the shared state on every frame when nothing has actually changed
-    /// since the last one. Mirrors `audio_device_cache`'s cache-and-compare
-    /// idiom.
-    pub(crate) tray_calls_key: Vec<(usize, String)>,
-    pub(crate) tray_pending_key: Option<(usize, String)>,
+    pub(crate) tray_state: TrayState,
 
     /// System-wide Answer/Hangup/Mute hotkeys (see `hotkeys` module docs) --
     /// `None` if disabled in config, or if registration failed (logged, not
@@ -285,6 +274,23 @@ pub struct DeelipApp {
 
     // Directory (LDAP) -- see `views::directory`.
     pub(crate) directory_ui: DirectoryUiState,
+}
+
+/// Tray-icon badge/menu mirroring -- see `frame.rs::sync_tray_badge`/
+/// `process_tray_events`.
+pub(crate) struct TrayState {
+    /// Missed calls not yet acknowledged by opening the History tab —
+    /// mirrored to the tray icon's badge (see `sync_tray_badge`) whenever
+    /// it changes; reset to 0 on switching to the History tab.
+    pub(crate) unseen_missed_calls: u32,
+    /// `(account, call_id)` for every entry in `calls`/`pending_call` as
+    /// last mirrored into the tray's `QuitState` -- lets
+    /// `process_tray_events` skip re-cloning Senders/call-ids and re-locking
+    /// the shared state on every frame when nothing has actually changed
+    /// since the last one. Mirrors `audio_device_cache`'s cache-and-compare
+    /// idiom.
+    pub(crate) tray_calls_key: Vec<(usize, String)>,
+    pub(crate) tray_pending_key: Option<(usize, String)>,
 }
 
 /// Ringing/dialing sound + incoming-call notification/window-raise
@@ -530,9 +536,7 @@ impl DeelipApp {
             palette: Palette::light(),
             tray,
             ctx_slot,
-            unseen_missed_calls: 0,
-            tray_calls_key: Vec::new(),
-            tray_pending_key: None,
+            tray_state: TrayState { unseen_missed_calls: 0, tray_calls_key: Vec::new(), tray_pending_key: None },
             hotkeys,
             history,
             history_search: String::new(),

@@ -135,25 +135,31 @@ impl DeelipApp {
         // Only rebuild when the set of live/pending calls actually changed
         // since last frame -- a borrow-only comparison, so the common
         // (unchanged) case costs just a cheap scan, not a full rebuild.
-        let calls_changed = self.calls.len() != self.tray_calls_key.len()
-            || self.calls.iter().zip(&self.tray_calls_key).any(|(c, (acc, id))| c.account != *acc || c.call_id != *id);
+        let calls_changed = self.calls.len() != self.tray_state.tray_calls_key.len()
+            || self
+                .calls
+                .iter()
+                .zip(&self.tray_state.tray_calls_key)
+                .any(|(c, (acc, id))| c.account != *acc || c.call_id != *id);
         if calls_changed {
-            self.tray_calls_key = self.calls.iter().map(|c| (c.account, c.call_id.clone())).collect();
+            self.tray_state.tray_calls_key = self.calls.iter().map(|c| (c.account, c.call_id.clone())).collect();
             *quit_state.calls.lock().unwrap() = self
+                .tray_state
                 .tray_calls_key
                 .iter()
                 .map(|(account, call_id)| (self.accounts[*account].handle.cmd_tx.clone(), call_id.clone()))
                 .collect();
         }
 
-        let pending_changed = match (&self.pending_call, &self.tray_pending_key) {
+        let pending_changed = match (&self.pending_call, &self.tray_state.tray_pending_key) {
             (Some(p), Some((acc, id))) => p.account != *acc || p.call_id != *id,
             (None, None) => false,
             _ => true,
         };
         if pending_changed {
-            self.tray_pending_key = self.pending_call.as_ref().map(|p| (p.account, p.call_id.clone()));
+            self.tray_state.tray_pending_key = self.pending_call.as_ref().map(|p| (p.account, p.call_id.clone()));
             *quit_state.pending.lock().unwrap() = self
+                .tray_state
                 .tray_pending_key
                 .as_ref()
                 .map(|(account, call_id)| (self.accounts[*account].handle.cmd_tx.clone(), call_id.clone()));
@@ -339,14 +345,17 @@ impl DeelipApp {
         // History's label is recomputed only when its unseen count actually
         // changed (see `docs/crates/ui.md`'s list-view caching note), not rebuilt
         // every frame at this loop's ~20fps.
-        if self.history_tab_label_cache.0 != self.unseen_missed_calls {
+        if self.history_tab_label_cache.0 != self.tray_state.unseen_missed_calls {
             self.history_tab_label_cache = (
-                self.unseen_missed_calls,
-                if self.unseen_missed_calls > 0 {
+                self.tray_state.unseen_missed_calls,
+                if self.tray_state.unseen_missed_calls > 0 {
                     format!(
                         "{}  {}",
                         egui_phosphor::regular::CLOCK_COUNTER_CLOCKWISE,
-                        tf("nav.history_tab_with_count", &[("count", &self.unseen_missed_calls.to_string())])
+                        tf(
+                            "nav.history_tab_with_count",
+                            &[("count", &self.tray_state.unseen_missed_calls.to_string())]
+                        )
                     )
                 } else {
                     format!("{}  {}", egui_phosphor::regular::CLOCK_COUNTER_CLOCKWISE, t("nav.history_tab"))
@@ -384,8 +393,8 @@ impl DeelipApp {
             });
         });
 
-        if self.tab == crate::app::Tab::History && self.unseen_missed_calls > 0 {
-            self.unseen_missed_calls = 0;
+        if self.tab == crate::app::Tab::History && self.tray_state.unseen_missed_calls > 0 {
+            self.tray_state.unseen_missed_calls = 0;
             self.sync_tray_badge();
         }
 

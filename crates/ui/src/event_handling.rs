@@ -516,7 +516,7 @@ impl DeelipApp {
         self.history.push(record);
         let _ = self.history.save(&self.db);
         if is_missed {
-            self.unseen_missed_calls += 1;
+            self.tray_state.unseen_missed_calls += 1;
             self.sync_tray_badge();
         }
     }
@@ -525,7 +525,7 @@ impl DeelipApp {
     /// No-op if the tray failed to start.
     pub(crate) fn sync_tray_badge(&self) {
         if let Some((_, _, badge_tx)) = &self.tray {
-            let _ = badge_tx.send(self.unseen_missed_calls);
+            let _ = badge_tx.send(self.tray_state.unseen_missed_calls);
         }
     }
 }
