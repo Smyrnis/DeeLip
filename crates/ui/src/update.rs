@@ -105,7 +105,10 @@ impl DeelipApp {
     /// the button that calls this is disabled in that case (see
     /// `show_update_popup`) so this is a last-resort guard, not the primary one.
     fn do_restart_to_update(&mut self) {
-        if !self.calls.is_empty() || self.pending_call.is_some() || self.pending_outbound.is_some() {
+        if !self.calls_state.calls.is_empty()
+            || self.calls_state.pending_call.is_some()
+            || self.calls_state.pending_outbound.is_some()
+        {
             return;
         }
         let Ok(exe) = std::env::current_exe() else {
@@ -119,7 +122,9 @@ impl DeelipApp {
     /// Small popup shown on top of whatever tab is active -- called once
     /// per frame from `update()`. No-op while `update_state` is `Idle`/`Checking`.
     pub(crate) fn show_update_popup(&mut self, ctx: &egui::Context) {
-        let call_active = !self.calls.is_empty() || self.pending_call.is_some() || self.pending_outbound.is_some();
+        let call_active = !self.calls_state.calls.is_empty()
+            || self.calls_state.pending_call.is_some()
+            || self.calls_state.pending_outbound.is_some();
 
         match &self.update_check.update_state {
             UpdateState::Idle | UpdateState::Checking => {}

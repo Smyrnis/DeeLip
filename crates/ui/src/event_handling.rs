@@ -90,17 +90,17 @@ impl DeelipApp {
                 // match on; `pending_outbound` doesn't (there's at most one
                 // in flight, and its `call_id` isn't known until the far end
                 // answers) so it's the fallback once accept is ruled out.
-                if self.pending_accept.as_ref().is_some_and(|p| p.call_id == call_id) {
-                    let pending = self.pending_accept.take().unwrap();
+                if self.calls_state.pending_accept.as_ref().is_some_and(|p| p.call_id == call_id) {
+                    let pending = self.calls_state.pending_accept.take().unwrap();
                     // Free the audio device for the new call if another one
                     // is focused -- deferred until here (accept actually
                     // succeeded) rather than done eagerly in `do_accept`, so
                     // a decline never needlessly disturbs an already-active
                     // call's media.
-                    if let Some(cur) = self.focused_call {
+                    if let Some(cur) = self.calls_state.focused_call {
                         self.send_hold(cur);
                         self.stop_focused_media();
-                        self.focused_call = None;
+                        self.calls_state.focused_call = None;
                     }
                     let slot = CallSlot {
                         account,
@@ -112,11 +112,11 @@ impl DeelipApp {
                         recording_enabled: self.config.recording_enabled,
                         media,
                     };
-                    self.calls.push(slot);
-                    let idx = self.calls.len() - 1;
+                    self.calls_state.calls.push(slot);
+                    let idx = self.calls_state.calls.len() - 1;
                     self.accounts_state.status_line = tf("status.in_call", &[("uri", &short_uri(&pending.remote_uri))]);
                     self.start_media(idx);
-                } else if let Some(out) = self.pending_outbound.take() {
+                } else if let Some(out) = self.calls_state.pending_outbound.take() {
                     let slot = CallSlot {
                         account,
                         call_id,
@@ -127,8 +127,8 @@ impl DeelipApp {
                         recording_enabled: self.config.recording_enabled,
                         media,
                     };
-                    self.calls.push(slot);
-                    let idx = self.calls.len() - 1;
+                    self.calls_state.calls.push(slot);
+                    let idx = self.calls_state.calls.len() - 1;
                     self.accounts_state.status_line = tf("status.in_call", &[("uri", &short_uri(&out.remote_uri))]);
                     self.start_media(idx);
                 } else {
@@ -174,7 +174,7 @@ impl DeelipApp {
                     self.record_history(from, Direction::Inbound, unix_now(), CallStatus::Missed);
                     return;
                 }
-                let waiting = !self.calls.is_empty();
+                let waiting = !self.calls_state.calls.is_empty();
                 if waiting {
                     if let Some(target) = forward_on_busy {
                         let target = normalize_target(&target, &server);
@@ -197,8 +197,8 @@ impl DeelipApp {
                 // being a single slot (not a list), a 2nd accept before then
                 // would silently overwrite its tracking, orphaning the first
                 // call once its own event lands.
-                let occupied = self.calls.len() + usize::from(self.pending_accept.is_some());
-                if occupied >= 2 || self.pending_call.is_some() {
+                let occupied = self.calls_state.calls.len() + usize::from(self.calls_state.pending_accept.is_some());
+                if occupied >= 2 || self.calls_state.pending_call.is_some() {
                     // Already at capacity (2 concurrent + at most 1 ringing) — decline immediately.
                     self.accounts_state.accounts[account].handle.reject_call(&call_id);
                     return;
@@ -218,7 +218,7 @@ impl DeelipApp {
                 } else {
                     acc.auto_answer_enabled.then(|| unix_now() + acc.auto_answer_secs as u64)
                 };
-                self.pending_call =
+                self.calls_state.pending_call =
                     Some(PendingCall { account, call_id, from, start_time: unix_now(), forward, auto_answer_at });
             }
             SipEvent::CallEnded { call_id } => {
@@ -229,13 +229,13 @@ impl DeelipApp {
                 self.on_call_terminated(&call_id, Some((code, reason)));
             }
             SipEvent::CallHeld { call_id } => {
-                if let Some(slot) = self.calls.iter_mut().find(|c| c.call_id == call_id) {
+                if let Some(slot) = self.calls_state.calls.iter_mut().find(|c| c.call_id == call_id) {
                     slot.is_held = true;
                 }
                 self.refresh_call_status();
             }
             SipEvent::CallResumed { call_id } => {
-                if let Some(slot) = self.calls.iter_mut().find(|c| c.call_id == call_id) {
+                if let Some(slot) = self.calls_state.calls.iter_mut().find(|c| c.call_id == call_id) {
                     slot.is_held = false;
                 }
                 self.refresh_call_status();
@@ -253,8 +253,8 @@ impl DeelipApp {
                 // both legs are done once the transferee re-INVITEs the
                 // target directly via Replaces, so hang up both ourselves
                 // rather than blind transfer's passive wait-for-BYE.
-                if let Some(original_idx) = self.attended_transfer_original.take()
-                    && self.calls.len() == 2
+                if let Some(original_idx) = self.calls_state.attended_transfer_original.take()
+                    && self.calls_state.calls.len() == 2
                 {
                     let consult_idx = 1 - original_idx;
                     let (first, second) = if original_idx > consult_idx {
@@ -269,7 +269,7 @@ impl DeelipApp {
             SipEvent::TransferFailed { call_id, reason } => {
                 tracing::warn!(call_id, reason, "Transfer failed");
                 self.accounts_state.status_line = tf("status.transfer_failed", &[("reason", &reason)]);
-                self.attended_transfer_original = None;
+                self.calls_state.attended_transfer_original = None;
             }
             SipEvent::PresenceSubscribed { uri, expires } => {
                 tracing::debug!(uri, expires, "Presence subscribed");
@@ -384,18 +384,18 @@ impl DeelipApp {
     /// which of `pending_call` / `pending_accept` / `calls` / `pending_outbound`
     /// `call_id` refers to, tear it down, and record it in history.
     pub(crate) fn on_call_terminated(&mut self, call_id: &str, failure: Option<(u16, String)>) {
-        if let Some(pending) = self.pending_call.take() {
+        if let Some(pending) = self.calls_state.pending_call.take() {
             if pending.call_id == call_id {
                 self.record_history(pending.from, Direction::Inbound, pending.start_time, CallStatus::Missed);
                 self.refresh_call_status();
                 return;
             }
-            self.pending_call = Some(pending);
+            self.calls_state.pending_call = Some(pending);
         }
         // We told `SipStack` to accept this call but it declined on our
         // behalf (no compatible codec, RTP port allocation failure, etc. --
         // see `accept_call`'s doc comment) before `CallConnected` ever arrived.
-        if let Some(pending) = self.pending_accept.take() {
+        if let Some(pending) = self.calls_state.pending_accept.take() {
             if pending.call_id == call_id {
                 if let Some((code, reason)) = &failure {
                     self.accounts_state.status_line =
@@ -405,9 +405,9 @@ impl DeelipApp {
                 self.refresh_call_status();
                 return;
             }
-            self.pending_accept = Some(pending);
+            self.calls_state.pending_accept = Some(pending);
         }
-        if let Some(idx) = self.calls.iter().position(|c| c.call_id == call_id) {
+        if let Some(idx) = self.calls_state.calls.iter().position(|c| c.call_id == call_id) {
             let status = if let Some((code, reason)) = &failure {
                 self.accounts_state.status_line =
                     tf("status.call_failed", &[("code", &code.to_string()), ("reason", reason)]);
@@ -426,7 +426,7 @@ impl DeelipApp {
             }
             return;
         }
-        if let Some(out) = self.pending_outbound.take() {
+        if let Some(out) = self.calls_state.pending_outbound.take() {
             if let Some((code, reason)) = &failure {
                 self.accounts_state.status_line =
                     tf("status.call_failed", &[("code", &code.to_string()), ("reason", reason)]);
@@ -445,24 +445,24 @@ impl DeelipApp {
     /// `on_call_terminated` go through. Returns the removed slot so the
     /// caller can record history from it.
     pub(crate) fn remove_call(&mut self, idx: usize) -> CallSlot {
-        let was_conference = self.in_conference;
-        if was_conference || self.focused_call == Some(idx) {
+        let was_conference = self.calls_state.in_conference;
+        if was_conference || self.calls_state.focused_call == Some(idx) {
             self.stop_focused_media();
         }
         if was_conference {
-            self.focused_call = None;
-            self.in_conference = false;
+            self.calls_state.focused_call = None;
+            self.calls_state.in_conference = false;
         }
-        let slot = self.calls.remove(idx);
-        self.focused_call = match self.focused_call {
+        let slot = self.calls_state.calls.remove(idx);
+        self.calls_state.focused_call = match self.calls_state.focused_call {
             Some(f) if f == idx => None,
             Some(f) if f > idx => Some(f - 1),
             other => other,
         };
         // Either call ending invalidates a pending attended transfer --
         // both legs must still exist for Complete Transfer to make sense.
-        self.attended_transfer_original = None;
-        if was_conference && !self.calls.is_empty() {
+        self.calls_state.attended_transfer_original = None;
+        if was_conference && !self.calls_state.calls.is_empty() {
             self.start_media(0);
         }
         slot
@@ -472,11 +472,12 @@ impl DeelipApp {
     /// for the focused call, a "held" hint if calls remain but none is
     /// focused, or the idle registration summary once everything's cleared.
     pub(crate) fn refresh_call_status(&mut self) {
-        if let Some(idx) = self.focused_call {
-            self.accounts_state.status_line = tf("status.in_call", &[("uri", &short_uri(&self.calls[idx].remote_uri))]);
-        } else if !self.calls.is_empty() {
+        if let Some(idx) = self.calls_state.focused_call {
+            self.accounts_state.status_line =
+                tf("status.in_call", &[("uri", &short_uri(&self.calls_state.calls[idx].remote_uri))]);
+        } else if !self.calls_state.calls.is_empty() {
             self.accounts_state.status_line = t("status.on_hold");
-        } else if self.pending_call.is_none() {
+        } else if self.calls_state.pending_call.is_none() {
             self.refresh_idle_status();
         }
     }
@@ -487,7 +488,7 @@ impl DeelipApp {
     /// during that time. Call after any registration change or whenever
     /// `selected_account` changes (e.g. the dialer's account picker).
     pub(crate) fn refresh_idle_status(&mut self) {
-        if !self.calls.is_empty() || self.pending_call.is_some() {
+        if !self.calls_state.calls.is_empty() || self.calls_state.pending_call.is_some() {
             return;
         }
         match self.accounts_state.accounts.get(self.accounts_state.selected_account) {

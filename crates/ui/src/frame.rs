@@ -41,9 +41,9 @@ impl DeelipApp {
     pub(crate) fn sync_ringtone(&mut self) {
         let desired = if !self.config.ringtone_enabled {
             None
-        } else if self.pending_call.is_some() {
+        } else if self.calls_state.pending_call.is_some() {
             Some(RingKind::Incoming)
-        } else if self.pending_outbound.is_some() {
+        } else if self.calls_state.pending_outbound.is_some() {
             Some(RingKind::Outgoing)
         } else {
             None
@@ -71,7 +71,7 @@ impl DeelipApp {
     /// not gated on `notifications_enabled`, so this tracks its own rising
     /// edge rather than reusing `sync_notifications`'s. Called once per frame.
     pub(crate) fn sync_window_raise(&mut self, ctx: &egui::Context) {
-        match &self.pending_call {
+        match &self.calls_state.pending_call {
             Some(p) if self.notify.last_raised_call.as_deref() != Some(p.call_id.as_str()) => {
                 self.notify.last_raised_call = Some(p.call_id.clone());
                 if self.config.random_popup_position
@@ -94,7 +94,7 @@ impl DeelipApp {
             self.notify.last_notified_call = None;
             return;
         }
-        match &self.pending_call {
+        match &self.calls_state.pending_call {
             Some(p) if self.notify.last_notified_call.as_deref() != Some(p.call_id.as_str()) => {
                 self.notify.last_notified_call = Some(p.call_id.clone());
                 notify::notify_incoming_call(&p.call_id, &p.from, self.ctx_slot.clone());
@@ -135,14 +135,16 @@ impl DeelipApp {
         // Only rebuild when the set of live/pending calls actually changed
         // since last frame -- a borrow-only comparison, so the common
         // (unchanged) case costs just a cheap scan, not a full rebuild.
-        let calls_changed = self.calls.len() != self.tray_state.tray_calls_key.len()
+        let calls_changed = self.calls_state.calls.len() != self.tray_state.tray_calls_key.len()
             || self
+                .calls_state
                 .calls
                 .iter()
                 .zip(&self.tray_state.tray_calls_key)
                 .any(|(c, (acc, id))| c.account != *acc || c.call_id != *id);
         if calls_changed {
-            self.tray_state.tray_calls_key = self.calls.iter().map(|c| (c.account, c.call_id.clone())).collect();
+            self.tray_state.tray_calls_key =
+                self.calls_state.calls.iter().map(|c| (c.account, c.call_id.clone())).collect();
             *quit_state.calls.lock().unwrap() = self
                 .tray_state
                 .tray_calls_key
@@ -153,13 +155,14 @@ impl DeelipApp {
                 .collect();
         }
 
-        let pending_changed = match (&self.pending_call, &self.tray_state.tray_pending_key) {
+        let pending_changed = match (&self.calls_state.pending_call, &self.tray_state.tray_pending_key) {
             (Some(p), Some((acc, id))) => p.account != *acc || p.call_id != *id,
             (None, None) => false,
             _ => true,
         };
         if pending_changed {
-            self.tray_state.tray_pending_key = self.pending_call.as_ref().map(|p| (p.account, p.call_id.clone()));
+            self.tray_state.tray_pending_key =
+                self.calls_state.pending_call.as_ref().map(|p| (p.account, p.call_id.clone()));
             *quit_state.pending.lock().unwrap() =
                 self.tray_state.tray_pending_key.as_ref().map(|(account, call_id)| {
                     (self.accounts_state.accounts[*account].handle.cmd_tx.clone(), call_id.clone())
@@ -235,30 +238,30 @@ impl DeelipApp {
         for action in hotkeys.poll() {
             match action {
                 HotkeyAction::Answer => {
-                    if self.pending_call.is_some() {
+                    if self.calls_state.pending_call.is_some() {
                         self.do_accept();
                     }
                 }
                 HotkeyAction::Hangup => {
-                    if let Some(idx) = self.focused_call {
+                    if let Some(idx) = self.calls_state.focused_call {
                         self.do_hangup(idx);
-                    } else if self.pending_call.is_some() {
+                    } else if self.calls_state.pending_call.is_some() {
                         self.do_reject();
-                    } else if !self.calls.is_empty() {
+                    } else if !self.calls_state.calls.is_empty() {
                         self.do_hangup(0);
                     }
                 }
                 HotkeyAction::Mute => {
-                    if self.media.is_some() {
+                    if self.calls_state.media.is_some() {
                         self.do_mute_toggle();
                     }
                 }
                 HotkeyAction::MediaHook => {
-                    if self.pending_call.is_some() {
+                    if self.calls_state.pending_call.is_some() {
                         self.do_accept();
-                    } else if let Some(idx) = self.focused_call {
+                    } else if let Some(idx) = self.calls_state.focused_call {
                         self.do_hangup(idx);
-                    } else if !self.calls.is_empty() {
+                    } else if !self.calls_state.calls.is_empty() {
                         self.do_hangup(0);
                     }
                 }
@@ -275,7 +278,7 @@ impl DeelipApp {
     /// silently ignored rather than accepting/rejecting the wrong thing.
     pub(crate) fn process_notification_actions(&mut self) {
         for (call_id, action) in notify::poll_actions() {
-            let Some(pending) = &self.pending_call else {
+            let Some(pending) = &self.calls_state.pending_call else {
                 continue;
             };
             if pending.call_id != call_id {
@@ -408,7 +411,7 @@ impl DeelipApp {
         // DND toggle, and the selected account's label on the right, in that
         // left-to-right order (added right-to-left so the account label lands
         // pinned to the far right edge, e.g. "● Online ... extension").
-        let on_hold = self.focused_call.is_none() && !self.calls.is_empty();
+        let on_hold = self.calls_state.focused_call.is_none() && !self.calls_state.calls.is_empty();
         let new_voicemail: u32 = self
             .accounts_state
             .accounts
@@ -481,7 +484,9 @@ impl DeelipApp {
         // "Repaint plumbing" section for why the idle branch below is now
         // just a rare safety net, not the primary way anything gets noticed,
         // and why it must stay long (2s) rather than short.
-        let has_live_call = self.pending_call.is_some() || self.pending_outbound.is_some() || !self.calls.is_empty();
+        let has_live_call = self.calls_state.pending_call.is_some()
+            || self.calls_state.pending_outbound.is_some()
+            || !self.calls_state.calls.is_empty();
         let repaint_interval = if has_live_call { Duration::from_millis(50) } else { Duration::from_secs(2) };
         ctx.request_repaint_after(repaint_interval);
     }
@@ -494,11 +499,11 @@ impl DeelipApp {
     /// runtime is torn down.
     fn hangup_before_exit(&mut self) {
         let mut sent = false;
-        for call in &self.calls {
+        for call in &self.calls_state.calls {
             self.accounts_state.accounts[call.account].handle.hang_up(&call.call_id);
             sent = true;
         }
-        if let Some(pending) = self.pending_call.take() {
+        if let Some(pending) = self.calls_state.pending_call.take() {
             self.accounts_state.accounts[pending.account].handle.reject_call(&pending.call_id);
             sent = true;
         }

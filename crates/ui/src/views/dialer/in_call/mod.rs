@@ -40,16 +40,16 @@ impl DeelipApp {
         // A fresh incoming call takes over the whole screen; a *second*
         // incoming call while one is already active is shown as a compact
         // banner above the existing in-call content instead.
-        if let Some(from) = self.pending_call.as_ref().map(|p| p.from.clone()) {
-            if self.calls.is_empty() {
+        if let Some(from) = self.calls_state.pending_call.as_ref().map(|p| p.from.clone()) {
+            if self.calls_state.calls.is_empty() {
                 self.show_incoming_call_screen(ui, &from);
                 return;
             }
             self.show_call_waiting_banner(ui, &from);
         }
 
-        if self.calls.is_empty() {
-            if let Some(target) = self.pending_outbound.as_ref().map(|o| o.remote_uri.clone()) {
+        if self.calls_state.calls.is_empty() {
+            if let Some(target) = self.calls_state.pending_outbound.as_ref().map(|o| o.remote_uri.clone()) {
                 self.show_dialing_screen(ui, &target);
             }
             return;
@@ -100,10 +100,10 @@ impl DeelipApp {
                 &self.palette,
                 egui_phosphor::regular::EXPORT,
                 &t("dialer.redirect_caption"),
-                self.showing_redirect,
+                self.calls_state.showing_redirect,
                 false,
             ) {
-                self.showing_redirect = !self.showing_redirect;
+                self.calls_state.showing_redirect = !self.calls_state.showing_redirect;
             }
         });
     }
@@ -128,7 +128,7 @@ impl DeelipApp {
                 }
                 let redirect = format!("{}  {}", egui_phosphor::regular::EXPORT, t("dialer.redirect_caption"));
                 if ui.button(redirect).clicked() {
-                    self.showing_redirect = !self.showing_redirect;
+                    self.calls_state.showing_redirect = !self.calls_state.showing_redirect;
                 }
             });
         });
@@ -164,16 +164,16 @@ impl DeelipApp {
         // If an attended-transfer consultation call is currently ringing,
         // its `pending_outbound` coexists with the held original call --
         // surface it as a small line rather than silently showing nothing.
-        if let Some(out) = &self.pending_outbound {
+        if let Some(out) = &self.calls_state.pending_outbound {
             let (name, _) = self.caller_display(&out.remote_uri);
             ui.label(RichText::new(tf("dialer.calling_name", &[("name", &name)])).color(self.palette.ink_muted));
             ui.add_space(6.0);
         }
 
-        for idx in 0..self.calls.len() {
-            let focused = self.focused_call == Some(idx);
+        for idx in 0..self.calls_state.calls.len() {
+            let focused = self.calls_state.focused_call == Some(idx);
             let (dir_icon, uri, start_time) = {
-                let call = &self.calls[idx];
+                let call = &self.calls_state.calls[idx];
                 let dir_icon = match call.direction {
                     Direction::Inbound => egui_phosphor::regular::PHONE_INCOMING,
                     Direction::Outbound => egui_phosphor::regular::PHONE_OUTGOING,
@@ -189,7 +189,7 @@ impl DeelipApp {
                     ui.add_space(8.0);
                     caller_name_label(ui, &self.palette, &name, is_name);
                     ui.add_space(4.0);
-                    let state = if self.in_conference {
+                    let state = if self.calls_state.in_conference {
                         t("dialer.status_in_conference")
                     } else {
                         t("dialer.status_connected")
@@ -202,7 +202,7 @@ impl DeelipApp {
                             .font(theme::font_mono_medium(24.0))
                             .color(self.palette.ink),
                     );
-                    if self.calls[idx].media.video.is_some() {
+                    if self.calls_state.calls[idx].media.video.is_some() {
                         ui.add_space(8.0);
                         self.show_video_panel(ui);
                     }
@@ -214,7 +214,7 @@ impl DeelipApp {
                                 .small(),
                         );
                     }
-                    if let Some(sas) = self.media.as_ref().and_then(|m| m.zrtp_sas()) {
+                    if let Some(sas) = self.calls_state.media.as_ref().and_then(|m| m.zrtp_sas()) {
                         ui.add_space(4.0);
                         ui.label(
                             RichText::new(format!("🔒 {}", tf("dialer.zrtp_sas", &[("sas", &sas)])))
@@ -226,7 +226,7 @@ impl DeelipApp {
                     ui.add_space(16.0);
                     // `vertical_centered` only centers a single fixed-size
                     // child -- see docs/crates/ui.md's "centering nested rows" note.
-                    let row_width = if self.in_conference {
+                    let row_width = if self.calls_state.in_conference {
                         CIRCULAR_ACTION_COL_WIDTH
                     } else {
                         CIRCULAR_ACTION_COL_WIDTH + 10.0 + 56.0
@@ -241,7 +241,7 @@ impl DeelipApp {
                         ) {
                             hangup_idx = Some(idx);
                         }
-                        if !self.in_conference {
+                        if !self.calls_state.in_conference {
                             ui.add_space(10.0);
                             let b = egui::Button::new(
                                 RichText::new(egui_phosphor::regular::PHONE_PAUSE)
@@ -272,7 +272,7 @@ impl DeelipApp {
                                 hangup_idx = Some(idx);
                             }
                             ui.add_space(4.0);
-                            if !self.in_conference {
+                            if !self.calls_state.in_conference {
                                 let resume = format!("{}  {}", egui_phosphor::regular::PLAY, t("dialer.resume_button"));
                                 if ui.button(resume).clicked() {
                                     swap_idx = Some(idx);
@@ -301,7 +301,7 @@ impl DeelipApp {
             self.do_swap_to(idx);
         }
 
-        if self.calls.len() == 2 && !self.in_conference {
+        if self.calls_state.calls.len() == 2 && !self.calls_state.in_conference {
             let merge = format!("{}  {}", egui_phosphor::regular::PHONE, t("dialer.merge_conference_button"));
             if ui.button(merge).clicked() {
                 self.start_conference();
@@ -309,7 +309,7 @@ impl DeelipApp {
             ui.add_space(6.0);
         }
 
-        if self.focused_call.is_some() {
+        if self.calls_state.focused_call.is_some() {
             self.show_focused_call_controls(ui);
         }
     }
@@ -318,15 +318,16 @@ impl DeelipApp {
     /// video leg -- see docs/crates/ui.md's "Video panel" note for the
     /// borrow-splitting shape this needs.
     fn show_video_panel(&mut self, ui: &mut Ui) {
-        if self.video.is_none() {
+        if self.calls_state.video.is_none() {
             return;
         }
-        let remote_frame = self.video.as_ref().and_then(|v| v.engine.latest_decoded_frame());
-        let remote2_frame = self.video.as_ref().and_then(|v| v.engine.latest_decoded_frame_leg2());
-        let local_frame = self.video.as_ref().and_then(|v| v.camera.as_ref()).and_then(|c| c.latest_frame());
+        let remote_frame = self.calls_state.video.as_ref().and_then(|v| v.engine.latest_decoded_frame());
+        let remote2_frame = self.calls_state.video.as_ref().and_then(|v| v.engine.latest_decoded_frame_leg2());
+        let local_frame =
+            self.calls_state.video.as_ref().and_then(|v| v.camera.as_ref()).and_then(|c| c.latest_frame());
 
         let ctx = ui.ctx().clone();
-        if let Some(v) = self.video.as_mut() {
+        if let Some(v) = self.calls_state.video.as_mut() {
             update_video_view(&ctx, &mut v.remote, remote_frame, "deelip_remote_video");
             update_video_view(&ctx, &mut v.remote2, remote2_frame, "deelip_remote2_video");
             update_video_view(&ctx, &mut v.local, local_frame, "deelip_local_video");
@@ -337,8 +338,8 @@ impl DeelipApp {
         // panel (`remote2` only ever has a texture once that leg exists --
         // see `media.rs::start_conference`) -- everyone else just sees the
         // ordinary 2-box remote/self layout.
-        let has_second_leg = self.video.as_ref().is_some_and(|v| v.remote2.texture.is_some());
-        if let Some(v) = self.video.as_ref() {
+        let has_second_leg = self.calls_state.video.as_ref().is_some_and(|v| v.remote2.texture.is_some());
+        if let Some(v) = self.calls_state.video.as_ref() {
             ui.horizontal(|ui| {
                 let remote_label =
                     if has_second_leg { t("dialer.video_remote1_label") } else { t("dialer.video_remote_label") };
@@ -357,7 +358,7 @@ impl DeelipApp {
     fn show_focused_call_controls(&mut self, ui: &mut Ui) {
         theme::full_width_card(ui, self.palette, |ui| {
             let palette = self.palette;
-            let has_video = self.video.is_some();
+            let has_video = self.calls_state.video.is_some();
             let button_count = if has_video { 5.0 } else { 4.0 };
             let row_width =
                 button_count * widgets::ICON_TOGGLE_COL_WIDTH + (button_count - 1.0) * ui.spacing().item_spacing.x;
@@ -406,7 +407,7 @@ impl DeelipApp {
                 ) {
                     self.do_record_toggle();
                 }
-                let transfer_open = self.showing_transfer || self.showing_attended;
+                let transfer_open = self.calls_state.showing_transfer || self.calls_state.showing_attended;
                 // Short caption -- "Transfer" (the untruncated translation
                 // of `dialer.xfer_caption`) wraps to 2 lines in the 48px-wide
                 // slot; see `dialer.xfer_caption`'s own locale-key comment.
@@ -422,8 +423,8 @@ impl DeelipApp {
                     transfer_open,
                     false,
                 ) {
-                    self.showing_transfer = !transfer_open;
-                    self.showing_attended = false;
+                    self.calls_state.showing_transfer = !transfer_open;
+                    self.calls_state.showing_attended = false;
                 }
                 let keypad_caption = t("dialer.keypad_window_title");
                 if icon_toggle_button(
@@ -431,10 +432,10 @@ impl DeelipApp {
                     &palette,
                     egui_phosphor::regular::NUMPAD,
                     &keypad_caption,
-                    self.showing_dtmf,
+                    self.calls_state.showing_dtmf,
                     false,
                 ) {
-                    self.showing_dtmf = !self.showing_dtmf;
+                    self.calls_state.showing_dtmf = !self.calls_state.showing_dtmf;
                 }
             });
             ui.add_space(10.0);
@@ -460,7 +461,7 @@ impl DeelipApp {
                     self.set_input_gain(in_gain);
                 }
             });
-            if self.attended_transfer_original.is_some() && self.calls.len() == 2 {
+            if self.calls_state.attended_transfer_original.is_some() && self.calls_state.calls.len() == 2 {
                 ui.add_space(8.0);
                 let complete =
                     format!("{}  {}", egui_phosphor::regular::CHECK_CIRCLE, t("dialer.complete_transfer_button"),);
@@ -472,16 +473,16 @@ impl DeelipApp {
             }
         });
 
-        if let Some(engine) = self.media.as_ref() {
+        if let Some(engine) = self.calls_state.media.as_ref() {
             ui.add_space(8.0);
             let stats = engine.stats();
             let muted_color = self.palette.ink_muted;
             egui::CollapsingHeader::new(t("dialer.call_statistics_header")).show(ui, |ui| {
-                if self.in_conference && self.calls.len() == 2 {
+                if self.calls_state.in_conference && self.calls_state.calls.len() == 2 {
                     show_leg_stats(
                         ui,
-                        &short_uri(&self.calls[0].remote_uri),
-                        self.calls[0].media.codec,
+                        &short_uri(&self.calls_state.calls[0].remote_uri),
+                        self.calls_state.calls[0].media.codec,
                         &stats.leg1,
                         muted_color,
                     );
@@ -489,17 +490,17 @@ impl DeelipApp {
                         ui.add_space(4.0);
                         show_leg_stats(
                             ui,
-                            &short_uri(&self.calls[1].remote_uri),
-                            self.calls[1].media.codec,
+                            &short_uri(&self.calls_state.calls[1].remote_uri),
+                            self.calls_state.calls[1].media.codec,
                             leg2,
                             muted_color,
                         );
                     }
-                } else if let Some(idx) = self.focused_call {
+                } else if let Some(idx) = self.calls_state.focused_call {
                     show_leg_stats(
                         ui,
                         &t("dialer.this_call_label"),
-                        self.calls[idx].media.codec,
+                        self.calls_state.calls[idx].media.codec,
                         &stats.leg1,
                         muted_color,
                     );

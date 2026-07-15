@@ -18,10 +18,10 @@ impl DeelipApp {
             [320.0, 540.0],
             [280.0, 420.0],
             false,
-            |app| app.showing_transfer || app.showing_attended,
+            |app| app.calls_state.showing_transfer || app.calls_state.showing_attended,
             |app| {
-                app.showing_transfer = false;
-                app.showing_attended = false;
+                app.calls_state.showing_transfer = false;
+                app.calls_state.showing_attended = false;
             },
             |_app| t("dialer.transfer_window_title"),
             |app, ui| app.show_transfer_window_content(ui),
@@ -40,26 +40,26 @@ impl DeelipApp {
         let palette = self.palette;
         ui.add_space(4.0);
         ui.horizontal(|ui| {
-            if ui.selectable_label(!self.showing_attended, t("dialer.blind_transfer")).clicked() {
-                self.showing_transfer = true;
-                self.showing_attended = false;
+            if ui.selectable_label(!self.calls_state.showing_attended, t("dialer.blind_transfer")).clicked() {
+                self.calls_state.showing_transfer = true;
+                self.calls_state.showing_attended = false;
             }
             if ui
                 .add_enabled(
-                    self.calls.len() == 1,
-                    egui::Button::selectable(self.showing_attended, t("dialer.attended_transfer")),
+                    self.calls_state.calls.len() == 1,
+                    egui::Button::selectable(self.calls_state.showing_attended, t("dialer.attended_transfer")),
                 )
                 .clicked()
             {
-                self.showing_transfer = false;
-                self.showing_attended = true;
+                self.calls_state.showing_transfer = false;
+                self.calls_state.showing_attended = true;
             }
         });
         ui.add_space(8.0);
         ui.separator();
         ui.add_space(8.0);
-        if self.showing_attended {
-            transfer_target_editor(ui, palette, &mut self.attended_target);
+        if self.calls_state.showing_attended {
+            transfer_target_editor(ui, palette, &mut self.calls_state.attended_target);
             ui.add_space(8.0);
             ui.vertical_centered(|ui| {
                 if ui.button(format!("{}  {}", egui_phosphor::regular::PHONE, t("common.call_button"))).clicked() {
@@ -67,7 +67,7 @@ impl DeelipApp {
                 }
             });
         } else {
-            transfer_target_editor(ui, palette, &mut self.transfer_target);
+            transfer_target_editor(ui, palette, &mut self.calls_state.transfer_target);
             ui.add_space(8.0);
             ui.vertical_centered(|ui| {
                 if ui.button(format!("{}  {}", egui_phosphor::regular::EXPORT, t("common.send_button"))).clicked() {

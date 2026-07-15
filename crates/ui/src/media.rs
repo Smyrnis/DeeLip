@@ -39,7 +39,7 @@ impl DeelipApp {
     /// accept-with-another-call-focused) -- previously copy-pasted at each
     /// of those call sites.
     pub(crate) fn stop_media_engine(&mut self) {
-        if let Some(engine) = self.media.take() {
+        if let Some(engine) = self.calls_state.media.take() {
             self.rt.block_on(engine.stop());
         }
     }
@@ -47,10 +47,10 @@ impl DeelipApp {
     /// Stops and discards the focused call's live `VideoEngine`, if any --
     /// same shape/reuse rationale as `stop_media_engine`. The conference-
     /// merge path just below (`start_conference`) needs to retain the
-    /// camera handle instead of discarding it, so it stops `self.video`
+    /// camera handle instead of discarding it, so it stops `self.calls_state.video`
     /// inline rather than through this helper.
     pub(crate) fn stop_video_engine(&mut self) {
-        if let Some(v) = self.video.take() {
+        if let Some(v) = self.calls_state.video.take() {
             self.rt.block_on(v.engine.stop());
         }
     }
@@ -70,7 +70,7 @@ impl DeelipApp {
     /// `deelip_sip::zrtp::engine`'s module doc. Lazily generates and
     /// persists this installation's ZID on first use.
     fn zrtp_params_for(&mut self, idx: usize) -> Option<ZrtpParams> {
-        let call = &self.calls[idx];
+        let call = &self.calls_state.calls[idx];
         if !self.accounts_state.accounts[call.account].account.wants_zrtp() {
             return None;
         }
@@ -92,8 +92,8 @@ impl DeelipApp {
     /// ICE/TURN before the call ever connected, so there's no SDP to parse
     /// or endpoint to (re-)resolve here. Marks it `focused_call` on success.
     pub(crate) fn start_media(&mut self, idx: usize) {
-        let call_id = self.calls[idx].call_id.clone();
-        let media = self.calls[idx].media.clone();
+        let call_id = self.calls_state.calls[idx].call_id.clone();
+        let media = self.calls_state.calls[idx].media.clone();
         let rt = self.rt.clone();
         let input_device = self.config.audio.input_device.clone();
         let output_device = self.config.audio.output_device.clone();
@@ -112,7 +112,7 @@ impl DeelipApp {
             input_device: input_device.as_deref(),
             output_device: output_device.as_deref(),
             recording: RecordingOptions {
-                enabled: self.calls[idx].recording_enabled,
+                enabled: self.calls_state.calls[idx].recording_enabled,
                 format: self.config.recording_format,
                 dir_override: self.config.recordings_dir_override.clone(),
             },
@@ -123,8 +123,8 @@ impl DeelipApp {
         }));
         match engine {
             Ok(e) => {
-                self.media = Some(e);
-                self.focused_call = Some(idx);
+                self.calls_state.media = Some(e);
+                self.calls_state.focused_call = Some(idx);
                 if let Some(video) = media.video {
                     self.start_video(video);
                 }
@@ -199,7 +199,7 @@ impl DeelipApp {
         ));
         match engine {
             Ok(engine) => {
-                self.video = Some(VideoCallState {
+                self.calls_state.video = Some(VideoCallState {
                     engine,
                     camera,
                     remote: Default::default(),
@@ -218,7 +218,7 @@ impl DeelipApp {
     /// stay in an ordinary 2-party call with DeeLip; only local audio
     /// mixing changes.
     pub(crate) fn start_conference(&mut self) {
-        if self.calls.len() != 2 {
+        if self.calls_state.calls.len() != 2 {
             return;
         }
 
@@ -230,11 +230,11 @@ impl DeelipApp {
         // as part of the attended-transfer consultation flow, and equally
         // for an ordinary call-waiting pair where one side is on hold).
         let mut resumed = false;
-        if self.calls[0].is_held {
+        if self.calls_state.calls[0].is_held {
             self.send_resume(0);
             resumed = true;
         }
-        if self.calls[1].is_held {
+        if self.calls_state.calls[1].is_held {
             self.send_resume(1);
             resumed = true;
         }
@@ -256,14 +256,14 @@ impl DeelipApp {
         // still only captures from one physical camera, fanned out to both
         // legs, so there's no reason to close and reopen it if it's already
         // running (see `start_video_internal`'s `existing_camera` param).
-        let existing_camera = self.video.take().and_then(|v| {
+        let existing_camera = self.calls_state.video.take().and_then(|v| {
             self.rt.block_on(v.engine.stop());
             v.camera
         });
 
-        let call_id0 = self.calls[0].call_id.clone();
-        let media0 = self.calls[0].media.clone();
-        let media1 = self.calls[1].media.clone();
+        let call_id0 = self.calls_state.calls[0].call_id.clone();
+        let media0 = self.calls_state.calls[0].media.clone();
+        let media1 = self.calls_state.calls[1].media.clone();
         let video0 = media0.video.clone();
         let video1 = media1.video.clone();
         let rt = self.rt.clone();
@@ -292,7 +292,7 @@ impl DeelipApp {
             input_device: input_device.as_deref(),
             output_device: output_device.as_deref(),
             recording: RecordingOptions {
-                enabled: self.calls[0].recording_enabled,
+                enabled: self.calls_state.calls[0].recording_enabled,
                 format: self.config.recording_format,
                 dir_override: self.config.recordings_dir_override.clone(),
             },
@@ -305,12 +305,12 @@ impl DeelipApp {
         }));
         match engine {
             Ok(e) => {
-                self.media = Some(e);
-                self.focused_call = Some(0);
-                self.calls[0].is_held = false;
-                self.calls[1].is_held = false;
-                self.in_conference = true;
-                self.attended_transfer_original = None;
+                self.calls_state.media = Some(e);
+                self.calls_state.focused_call = Some(0);
+                self.calls_state.calls[0].is_held = false;
+                self.calls_state.calls[1].is_held = false;
+                self.calls_state.in_conference = true;
+                self.calls_state.attended_transfer_original = None;
                 self.accounts_state.status_line = t("status.in_conference_line");
 
                 // Both legs negotiated video -> real 2-remote-party

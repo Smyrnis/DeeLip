@@ -51,7 +51,7 @@ impl DeelipApp {
                 let resp = text_edit_scope(ui, &palette, |ui| {
                     ui.add_sized(
                         [STAGE_WIDTH, 48.0],
-                        egui::TextEdit::singleline(&mut self.call_target)
+                        egui::TextEdit::singleline(&mut self.calls_state.call_target)
                             .hint_text(RichText::new(t("dialer.enter_a_number")).color(palette.ink_muted))
                             .font(egui::FontId::new(19.0, egui::FontFamily::Monospace))
                             .horizontal_align(egui::Align::Center),
@@ -63,7 +63,7 @@ impl DeelipApp {
                 ui.add_space(18.0);
 
                 let palette = self.palette;
-                phone_keypad(ui, palette, |digit| self.call_target.push(digit));
+                phone_keypad(ui, palette, |digit| self.calls_state.call_target.push(digit));
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
                     let row_width = 64.0 + ui.spacing().item_spacing.x + 60.0;
@@ -71,14 +71,17 @@ impl DeelipApp {
                     // Plain Unicode, not `egui_phosphor::regular::BACKSPACE` --
                     // see the crate-level note on the broken icon set in
                     // `theme.rs`.
-                    if ui.add_enabled(!self.call_target.is_empty(), egui::Button::new("⌫")).clicked() {
-                        self.call_target.pop();
+                    if ui.add_enabled(!self.calls_state.call_target.is_empty(), egui::Button::new("⌫")).clicked() {
+                        self.calls_state.call_target.pop();
                     }
                     if ui
-                        .add_enabled(!self.call_target.is_empty(), egui::Button::new(t("common.clear_button")))
+                        .add_enabled(
+                            !self.calls_state.call_target.is_empty(),
+                            egui::Button::new(t("common.clear_button")),
+                        )
                         .clicked()
                     {
-                        self.call_target.clear();
+                        self.calls_state.call_target.clear();
                     }
                 });
                 ui.add_space(16.0);
@@ -101,7 +104,7 @@ impl DeelipApp {
                     self.do_call(None);
                 }
 
-                let can_redial = self.accounts_state.reg_ok && self.last_dialed.is_some();
+                let can_redial = self.accounts_state.reg_ok && self.calls_state.last_dialed.is_some();
                 if can_redial {
                     ui.add_space(8.0);
                     ui.vertical_centered(|ui| {

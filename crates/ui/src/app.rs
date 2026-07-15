@@ -46,6 +46,54 @@ pub struct DeelipApp {
 
     pub(crate) tab: Tab,
 
+    pub(crate) calls_state: CallsState,
+
+    pub(crate) notify: NotifyState,
+
+    /// Live-edited settings draft, shown/edited in the Settings tab and
+    /// saved to `db` on demand — takes effect on next restart.
+    pub(crate) config: AppConfig,
+    /// Handle to `~/.config/deelip/deelip.db` -- the single SQLite database
+    /// backing `config`/`contacts`/`history` alike (see `deelip_config::db`).
+    pub(crate) db: Db,
+    pub(crate) settings_ui: SettingsUiState,
+    /// One-shot flag consumed on the very first `update()` call, to send a
+    /// `Visible(false)` viewport command if `config.start_minimized` -- see
+    /// the comment in `main.rs` on why this can't be done via `NativeOptions`.
+    pub(crate) first_frame: bool,
+    /// Set once in `new()` -- Darcula is the app's only theme now (see
+    /// `theme.rs`'s v3-revision doc comment), so this no longer changes per
+    /// frame. Kept as a field (not a free fn call at each use site) so
+    /// tab-rendering methods can reach `self.palette` without threading an
+    /// extra parameter through every fn signature.
+    pub(crate) palette: Palette,
+
+    /// Shared handles for the tray's independent event-handling threads (see
+    /// `tray` module docs) — `None` degrades to normal close-quits-the-app
+    /// behavior if the tray icon failed to start.
+    pub(crate) tray: Option<(CtxSlot, QuitState, tray::BadgeSender)>,
+    /// Slot every background producer uses to call `request_repaint()` the
+    /// instant it has something, instead of the idle tick polling for it --
+    /// see `docs/crates/ui.md`'s "Repaint plumbing" section.
+    pub(crate) ctx_slot: CtxSlot,
+    pub(crate) tray_state: TrayState,
+
+    pub(crate) history_state: HistoryState,
+
+    pub(crate) messages_state: MessagesState,
+
+    pub(crate) contacts_state: ContactsState,
+
+    pub(crate) update_check: UpdateCheckState,
+
+    // Directory (LDAP) -- see `views::directory`.
+    pub(crate) directory_ui: DirectoryUiState,
+}
+
+/// Live call state: the dialer's target field, confirmed/pending calls,
+/// active media, and the transfer/redirect/DTMF popover boxes tied to
+/// whichever call is focused -- see `views::dialer`/`call_actions.rs`.
+pub(crate) struct CallsState {
     // Dialer
     pub(crate) call_target: String,
     /// Last successfully-dialed target (already normalized), for Redial.
@@ -106,47 +154,6 @@ pub struct DeelipApp {
     /// (always `Some(0)`) rather than meaning "only this one is active" --
     /// both slots are simultaneously un-held.
     pub(crate) in_conference: bool,
-
-    pub(crate) notify: NotifyState,
-
-    /// Live-edited settings draft, shown/edited in the Settings tab and
-    /// saved to `db` on demand — takes effect on next restart.
-    pub(crate) config: AppConfig,
-    /// Handle to `~/.config/deelip/deelip.db` -- the single SQLite database
-    /// backing `config`/`contacts`/`history` alike (see `deelip_config::db`).
-    pub(crate) db: Db,
-    pub(crate) settings_ui: SettingsUiState,
-    /// One-shot flag consumed on the very first `update()` call, to send a
-    /// `Visible(false)` viewport command if `config.start_minimized` -- see
-    /// the comment in `main.rs` on why this can't be done via `NativeOptions`.
-    pub(crate) first_frame: bool,
-    /// Set once in `new()` -- Darcula is the app's only theme now (see
-    /// `theme.rs`'s v3-revision doc comment), so this no longer changes per
-    /// frame. Kept as a field (not a free fn call at each use site) so
-    /// tab-rendering methods can reach `self.palette` without threading an
-    /// extra parameter through every fn signature.
-    pub(crate) palette: Palette,
-
-    /// Shared handles for the tray's independent event-handling threads (see
-    /// `tray` module docs) — `None` degrades to normal close-quits-the-app
-    /// behavior if the tray icon failed to start.
-    pub(crate) tray: Option<(CtxSlot, QuitState, tray::BadgeSender)>,
-    /// Slot every background producer uses to call `request_repaint()` the
-    /// instant it has something, instead of the idle tick polling for it --
-    /// see `docs/crates/ui.md`'s "Repaint plumbing" section.
-    pub(crate) ctx_slot: CtxSlot,
-    pub(crate) tray_state: TrayState,
-
-    pub(crate) history_state: HistoryState,
-
-    pub(crate) messages_state: MessagesState,
-
-    pub(crate) contacts_state: ContactsState,
-
-    pub(crate) update_check: UpdateCheckState,
-
-    // Directory (LDAP) -- see `views::directory`.
-    pub(crate) directory_ui: DirectoryUiState,
 }
 
 /// One registered SIP identity per enabled account, plus the top-level
@@ -518,24 +525,26 @@ impl DeelipApp {
             },
             rt,
             tab: Tab::Dialer,
-            call_target: String::new(),
-            last_dialed: None,
-            calls: Vec::new(),
-            focused_call: None,
-            media: None,
-            video: None,
-            pending_outbound: None,
-            pending_call: None,
-            pending_accept: None,
-            transfer_target: String::new(),
-            showing_transfer: false,
-            attended_target: String::new(),
-            showing_attended: false,
-            redirect_target: String::new(),
-            showing_redirect: false,
-            showing_dtmf: false,
-            attended_transfer_original: None,
-            in_conference: false,
+            calls_state: CallsState {
+                call_target: String::new(),
+                last_dialed: None,
+                calls: Vec::new(),
+                focused_call: None,
+                media: None,
+                video: None,
+                pending_outbound: None,
+                pending_call: None,
+                pending_accept: None,
+                transfer_target: String::new(),
+                showing_transfer: false,
+                attended_target: String::new(),
+                showing_attended: false,
+                redirect_target: String::new(),
+                showing_redirect: false,
+                showing_dtmf: false,
+                attended_transfer_original: None,
+                in_conference: false,
+            },
             notify: NotifyState {
                 ringtone: None,
                 was_ringing: false,

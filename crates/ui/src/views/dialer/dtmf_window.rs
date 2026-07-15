@@ -18,8 +18,8 @@ impl DeelipApp {
             [260.0, 360.0],
             [240.0, 340.0],
             false,
-            |app| app.showing_dtmf,
-            |app| app.showing_dtmf = false,
+            |app| app.calls_state.showing_dtmf,
+            |app| app.calls_state.showing_dtmf = false,
             |_app| t("dialer.keypad_window_title"),
             |app, ui| {
                 let palette = app.palette;
