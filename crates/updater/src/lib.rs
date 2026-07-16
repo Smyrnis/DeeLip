@@ -137,11 +137,8 @@ fn dir_is_writable(dir: &Path) -> bool {
 
 /// Downloads `release`'s `.tar.gz` asset, verifies its checksum, extracts
 /// the `deelip` binary, and atomically swaps it in for the currently
-/// running executable -- safe to do while running, full picture:
-/// `docs/crates/updater.md`. Only meaningful (and only ever called) when
-/// `can_self_replace()` is true. Callers are expected to prompt the user to
-/// restart rather than doing it automatically (an in-progress call would
-/// otherwise be dropped).
+/// running executable. Only meaningful (and only ever called) when
+/// `can_self_replace()` is true. Full picture: `docs/crates/updater.md`.
 pub fn download_and_replace(release: &ReleaseInfo) -> anyhow::Result<()> {
     let url =
         release.tar_gz_url.as_deref().ok_or_else(|| anyhow::anyhow!("Release {} has no .tar.gz asset", release.tag))?;
