@@ -27,6 +27,39 @@ fn zero_ts_increment_sender_shares_timestamp_within_a_frame() {
     assert_eq!(p4.timestamp, before.wrapping_add(3000));
 }
 
+/// Directly exercises `flush_frame`'s reorder-tolerant reassembly: a real
+/// H.264 frame is encoded and fragmented, then fed into the same
+/// `BTreeMap<u16, Vec<u8>>` shape `recv_loop` uses -- but inserted in
+/// reverse (worst-case out-of-order) sequence, not arrival order. If
+/// reassembly were still arrival-order-dependent (the bug this fix
+/// addresses), decoding would fail or produce garbage; keying by sequence
+/// number means insertion order can't matter.
+#[test]
+fn flush_frame_reassembles_correctly_despite_reversed_insertion_order() {
+    let frame = Yuv420Frame::solid_color(64, 64, 100, 128, 128);
+    let mut encoder = VideoEncoder::new(VideoCodec::H264, 300_000).unwrap();
+    let bitstream = encoder.encode(&frame).unwrap();
+    // A deliberately tiny MTU forces multiple fragments regardless of how
+    // small the encoded keyframe happens to be, so this test doesn't
+    // depend on the encoder's actual output size.
+    let payloads = fragment_video_frame(VideoCodec::H264, &bitstream, 50);
+    assert!(payloads.len() >= 3, "test needs several fragments to be meaningful");
+
+    let mut fragments: BTreeMap<u16, Vec<u8>> = BTreeMap::new();
+    for (seq, payload) in payloads.iter().enumerate().rev() {
+        fragments.insert(seq as u16, payload.clone());
+    }
+
+    let mut decoder = VideoDecoder::new(VideoCodec::H264).unwrap();
+    let latest: Arc<Mutex<Option<Yuv420Frame>>> = Arc::new(Mutex::new(None));
+    flush_frame(VideoCodec::H264, &mut fragments, &mut decoder, &latest);
+
+    let decoded = latest.lock().unwrap().clone().expect("frame should decode despite reversed fragment order");
+    assert_eq!(decoded.width, 64);
+    assert_eq!(decoded.height, 64);
+    assert!(fragments.is_empty(), "flush_frame should clear the buffer");
+}
+
 async fn run_pair(
     alice_port: u16, bob_port: u16, alice_srtp: Option<SrtpSession>, bob_srtp: Option<SrtpSession>,
 ) -> (Arc<Mutex<Option<Yuv420Frame>>>, VideoEngine, VideoEngine) {

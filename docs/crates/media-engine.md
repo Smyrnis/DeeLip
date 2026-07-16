@@ -231,6 +231,46 @@ for a hypothetical VP8 arm beyond routing to it: VP8's own RTP framing (RFC 7741
 has no NAL-unit/start-code concept at all, so there's no common logic to factor
 out of `fragment_nal_units`/`reassemble_nal_units` themselves.
 
+**Video recv-side jitter buffering** (`video_engine.rs::recv_loop`/`flush_frame`):
+fixed a real bug found via live testing (see below) — the original implementation
+accumulated fragments in plain *arrival* order and flushed only on the marker bit,
+with no per-timestamp separation at all. Two distinct problems followed from that:
+out-of-order fragment delivery within a frame corrupted reassembly (wrong byte
+order), and a *lost* marker packet silently merged an entire subsequent frame's
+fragments into the same growing buffer (since nothing ever demarcated a frame
+boundary except the marker itself). Fixed by keying pending fragments in a
+`BTreeMap<u16, Vec<u8>>` by RTP sequence number (so arrival order stops mattering —
+safe to sort by plain numeric sequence within one frame's fragment count, since a
+u16 wraparound *within* a single video frame's packets would require tens of
+thousands of packets for one compressed frame, never realistic at this app's MTU/
+framerate) rather than a `Vec` in push order, and flushing on a real frame-boundary
+signal — the arrival of a packet for a *different* RTP timestamp — rather than
+trusting the marker bit alone. This also fixes the lost-marker case for free: a new
+timestamp always ends the previous frame's collection, marker or not. A
+`STALL_FLUSH` (250ms, reset on every packet received — see its own doc comment)
+periodic check is the backstop for the case where the stream stalls entirely and no
+further frame ever starts, so the last pending frame doesn't sit undisplayed
+forever. Net effect: reassembly is now correct under real-world reordering, at the
+cost of up to one inter-frame interval of added display latency (a frame's decode
+now waits for the next frame's first packet, or the stall timeout, rather than
+firing instantly on its own marker bit) — an accepted tradeoff, since jitter
+buffers universally trade a little latency for correctness this way. Found via the
+same live 2-process test noted below: the callee side decoded exactly one frame
+successfully, then failed to decode every subsequent frame from the caller for the
+rest of the call, while the reverse direction had zero failures — consistent with
+real reordering/loss corrupting the callee's reassembly in a way the caller's
+didn't hit. Verified via a new unit test
+(`flush_frame_reassembles_correctly_despite_reversed_insertion_order`) that
+encodes a real H.264 frame, fragments it, and feeds the fragments into
+`flush_frame` in reversed (worst-case out-of-order) sequence, confirming correct
+decode regardless of insertion order; the existing real-UDP round-trip tests
+(`plaintext_video_round_trips_over_real_udp` and friends) continuing to pass
+confirms the new per-timestamp frame separation doesn't regress normal,
+in-order streaming across many sequential frames. The lost-marker/frame-merge
+half of the bug is fixed by construction (a new timestamp always flushes the
+previous frame, marker or not) but isn't separately unit-tested — no test
+deliberately drops a marker packet yet.
+
 **Codec dispatch generalized** (`video_codec_dispatch.rs`): `VideoEncoder`/
 `VideoDecoder` enum-dispatch, mirroring `codec_dispatch.rs`'s `AudioEncoder`/
 `AudioDecoder` pattern one-for-one. Only `VideoCodec::H264` exists as a real variant
@@ -320,17 +360,6 @@ verification/provenance status).
   SRTP → decode → texture round trip through the real call-setup path, not
   just the isolated `video_engine.rs` unit tests. Real camera hardware still
   needs testing on a machine that has one.
-- **No RTP reordering/jitter-buffering on the video recv side** — fragments are
-  reassembled in arrival order only; real out-of-order delivery would corrupt a
-  frame until the next keyframe. The same live 2-process test above surfaced a
-  concrete, real instance of this: the callee side decoded exactly one frame
-  successfully, then failed to decode every subsequent frame from the caller
-  for the rest of the call, while the reverse direction (caller decoding the
-  callee's stream) had zero failures — consistent with real packet reordering/
-  loss corrupting the callee's reassembly in a way the caller's didn't hit,
-  though the asymmetry wasn't root-caused further. Previously only a
-  theoretical concern; now observed in practice. Worth revisiting before this
-  is real-world-facing — not yet a scoped item in `ROADMAP.md`.
 - **Conferencing now carries video** — merging two calls fans the local camera's
   single encoded stream out to both remote legs (one `H264Encoder`, two RTP sends,
   each leg decoded independently — mirrors `MediaEngine`'s "encode once, decode per

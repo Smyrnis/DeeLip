@@ -3,6 +3,7 @@
 //! independent construct, deliberately *not* part of `MediaEngine`. Full
 //! picture: `docs/crates/media-engine.md`.
 
+use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -36,6 +37,13 @@ const RTP_MTU: usize = 1200;
 /// second video codec is added, so it stays a plain constant rather than a
 /// `VideoCodec`-keyed function.
 const VIDEO_CLOCK_HZ: u32 = 90_000;
+/// How long `recv_loop` waits with no new packet before flushing whatever
+/// fragments it's holding for the in-progress frame, rather than waiting
+/// forever for a stream that's actually stalled. Comfortably larger than
+/// the gap between frames at any of this app's real framerates (66ms at
+/// 15fps), so it never fires during normal reception -- see
+/// docs/crates/media-engine.md's video jitter-buffering section.
+const STALL_FLUSH: Duration = Duration::from_millis(250);
 
 /// A second RTP leg for the local 3-way conference -- bundles what a video
 /// leg needs beyond `VideoEngine::start`'s existing leg-1 params. Mirrors
@@ -322,11 +330,15 @@ impl VideoEngine {
         latest_decoded_frame: Arc<Mutex<Option<Yuv420Frame>>>, stats: Arc<Mutex<LegStats>>,
         mut stop_rx: watch::Receiver<bool>,
     ) {
-        // Accumulates one frame's worth of fragments in arrival order --
-        // see this module's doc comment on the no-reordering simplification.
-        let mut frame_fragments: Vec<Vec<u8>> = Vec::new();
+        // Fragments for the RTP timestamp currently being assembled, keyed
+        // by sequence number so out-of-order arrivals slot into the right
+        // position instead of corrupting reassembly order -- see
+        // docs/crates/media-engine.md's video jitter-buffering section.
+        let mut current_ts: Option<u32> = None;
+        let mut fragments: BTreeMap<u16, Vec<u8>> = BTreeMap::new();
         let mut jitter = JitterTracker::default();
         let mut buf = vec![0u8; 65_535];
+        let mut stall_check = tokio::time::interval(STALL_FLUSH);
 
         loop {
             tokio::select! {
@@ -355,16 +367,23 @@ impl VideoEngine {
                         s.packets_received += 1;
                         s.bytes_received += plain.len() as u64;
                     }
-                    let marker = pkt.marker;
-                    frame_fragments.push(pkt.payload);
-                    if marker {
-                        let annex_b = reassemble_video_frame(codec, &frame_fragments);
-                        frame_fragments.clear();
-                        match decoder.decode(&annex_b) {
-                            Ok(Some(frame)) => *latest_decoded_frame.lock().unwrap() = Some(frame),
-                            Ok(None) => {}
-                            Err(e) => warn!("Video decode failed: {e:#}"),
-                        }
+                    if current_ts != Some(pkt.timestamp) {
+                        // A packet for a different frame arrived -- whatever
+                        // we'd accumulated for the previous timestamp is
+                        // everything we're ever going to get, marker or not.
+                        flush_frame(codec, &mut fragments, &mut decoder, &latest_decoded_frame);
+                        current_ts = Some(pkt.timestamp);
+                    }
+                    fragments.insert(pkt.sequence, pkt.payload);
+                    stall_check.reset();
+                }
+                _ = stall_check.tick() => {
+                    // Safety net: nothing arrived for a while (stream
+                    // stalled, or the call is ending) -- flush whatever's
+                    // pending instead of holding the last frame forever.
+                    if current_ts.is_some() {
+                        flush_frame(codec, &mut fragments, &mut decoder, &latest_decoded_frame);
+                        current_ts = None;
                     }
                 }
                 Ok(()) = stop_rx.changed() => {
@@ -412,6 +431,26 @@ impl VideoEngine {
             recv_task2.abort();
             let _ = recv_task2.await;
         }
+    }
+}
+
+/// Reassemble and decode whatever fragments are pending for the
+/// in-progress frame (sorted by sequence number, ascending -- see
+/// `recv_loop`'s doc comment on why plain numeric order is safe here), then
+/// clear the buffer. A no-op if nothing is pending.
+fn flush_frame(
+    codec: VideoCodec, fragments: &mut BTreeMap<u16, Vec<u8>>, decoder: &mut VideoDecoder,
+    latest_decoded_frame: &Mutex<Option<Yuv420Frame>>,
+) {
+    if fragments.is_empty() {
+        return;
+    }
+    let ordered: Vec<Vec<u8>> = std::mem::take(fragments).into_values().collect();
+    let annex_b = reassemble_video_frame(codec, &ordered);
+    match decoder.decode(&annex_b) {
+        Ok(Some(frame)) => *latest_decoded_frame.lock().unwrap() = Some(frame),
+        Ok(None) => {}
+        Err(e) => warn!("Video decode failed: {e:#}"),
     }
 }
 
