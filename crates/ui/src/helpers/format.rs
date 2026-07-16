@@ -129,6 +129,7 @@ pub(crate) fn codec_label(s: &str) -> &'static str {
         "gsm" => "GSM 06.10",
         "ilbc" => "iLBC",
         "g729" => "G.729",
+        "l16" => "Linear PCM",
         _ => "Unknown",
     }
 }
@@ -145,6 +146,7 @@ pub(crate) fn audio_codec_label(codec: AudioCodec) -> &'static str {
         AudioCodec::Gsm => "gsm",
         AudioCodec::Ilbc => "ilbc",
         AudioCodec::G729 => "g729",
+        AudioCodec::L16 => "l16",
     })
 }
 

@@ -1,7 +1,7 @@
 # media-engine (`crates/media-engine`)
 
 Owns everything downstream of SIP signaling for one call's actual media: capturing
-and playing audio via `cpal`, encoding/decoding across seven audio codecs, RTP/SRTP
+and playing audio via `cpal`, encoding/decoding across eight audio codecs, RTP/SRTP
 framing, jitter buffering, echo cancellation/AGC/VAD, call recording, and — as an
 independent pipeline — H.264 video capture/encode/RTP/decode. `sip-core` negotiates
 *what* codec, keys, and ports a call will use (see `docs/crates/sip-core.md`); this crate is
@@ -89,6 +89,21 @@ actually negotiated.
   framing directly. `oxideav-ilbc` exposes a generic streaming encoder/decoder trait
   pair built for a broader multi-codec framework; `IlbcEncoder`/`Decoder` just hide
   that machinery behind the same simple per-frame shape every other codec here uses.
+- **L16** (uncompressed linear PCM, RFC 3551 §4.5.11) has no encoder/decoder *state*
+  at all — `encode_l16`/`decode_l16` (`codec.rs`) are free functions, not structs, so
+  `AudioEncoder::L16`/`AudioDecoder::L16` are unit variants (same shape as
+  `Pcma`/`Pcmu`). Exactly `pcm.len() * 2` bytes out, big-endian (network byte order,
+  same convention every RTP audio payload uses), decode is the exact inverse —
+  the only codec here where the round trip is bit-for-bit lossless rather than
+  lossy-but-close. Doubles the wire bitrate of G.711 for no quality benefit at this
+  pipeline's fixed 8kHz sample rate, so it's not a sensible default codec (not in
+  `default_codec_order`) — added for RFC-3551-compliant lab/loopback testing and
+  interop with gear that specifically wants uncompressed audio, per `ROADMAP.md`'s
+  own framing of it as the "trivial to add" item on the missing-codec list. See
+  `docs/crates/sip-core.md`'s wire-layer bullet for the dynamic-PT reasoning
+  (`L16_PAYLOAD_TYPE`) — RFC 3551's own static L16 assignment is 44100 Hz
+  stereo/mono, not this pipeline's fixed 8kHz mono, so it needs an explicit
+  `a=rtpmap` the same way iLBC's dynamic PT does.
 - **RTP clock/timestamp increment** (`ts_increment_for`/`clock_hz_for`): Opus's RTP
   clock is always signaled as 48000 Hz per RFC 7587 regardless of the audio's actual
   8kHz sample rate here; everything else runs at a matching 8000 Hz RTP clock.

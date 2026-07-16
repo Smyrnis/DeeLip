@@ -111,6 +111,8 @@ pub fn codec_from_str(s: &str) -> Option<AudioCodec> {
         "pcma" => Some(AudioCodec::Pcma),
         "gsm" => Some(AudioCodec::Gsm),
         "ilbc" => Some(AudioCodec::Ilbc),
+        "g729" => Some(AudioCodec::G729),
+        "l16" => Some(AudioCodec::L16),
         _ => None,
     }
 }

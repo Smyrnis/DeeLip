@@ -106,6 +106,25 @@ pub fn decode_pcma(raw: &[u8]) -> Vec<i16> {
     raw.iter().map(|&b| alaw_to_pcm(b)).collect()
 }
 
+// ── L16 (uncompressed linear PCM, RFC 3551 §4.5.11) ───────────────────────────
+
+/// Network byte order (big-endian), same convention every other RTP audio
+/// payload on the wire uses -- not a DeeLip-specific choice.
+pub fn encode_l16(pcm: &[i16]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(pcm.len() * 2);
+    for &s in pcm {
+        out.extend_from_slice(&s.to_be_bytes());
+    }
+    out
+}
+
+/// Inverse of `encode_l16`. A trailing odd byte (a malformed/truncated
+/// packet) is dropped rather than panicking -- `chunks_exact` already
+/// discards it.
+pub fn decode_l16(raw: &[u8]) -> Vec<i16> {
+    raw.chunks_exact(2).map(|b| i16::from_be_bytes([b[0], b[1]])).collect()
+}
+
 // ── Opus (narrowband, matching the 8kHz pipeline -- see docs/crates/media-engine.md) ────
 
 use audiopus::coder::{Decoder as RawOpusDecoder, Encoder as RawOpusEncoder};

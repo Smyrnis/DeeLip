@@ -25,7 +25,7 @@ pub(super) fn show(ui: &mut Ui, palette: &Palette, account: &mut SipAccount, edi
                 // `right_to_left` layout claim the rest of the panel.
                 ui.set_width(150.0);
                 ui.set_min_height(120.0);
-                for name in ["opus", "g722", "pcmu", "pcma", "gsm", "ilbc", "g729"] {
+                for name in ["opus", "g722", "pcmu", "pcma", "gsm", "ilbc", "g729", "l16"] {
                     if account.codec_order.iter().any(|c| c == name) {
                         continue;
                     }

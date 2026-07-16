@@ -139,6 +139,8 @@ pub fn parse_sdp_forcing(sdp: &str, allowed: &[AudioCodec], force: Option<AudioC
                 Some(AudioCodec::Ilbc)
             } else if name.starts_with("g729") {
                 Some(AudioCodec::G729)
+            } else if name.starts_with("l16") {
+                Some(AudioCodec::L16)
             } else {
                 None
             }

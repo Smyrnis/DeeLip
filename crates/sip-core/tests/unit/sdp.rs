@@ -13,7 +13,7 @@ fn offer_prefers_opus() {
 
 #[test]
 fn answer_honors_selected_codec() {
-    for codec in [AudioCodec::Pcmu, AudioCodec::Pcma, AudioCodec::Opus, AudioCodec::G722] {
+    for codec in [AudioCodec::Pcmu, AudioCodec::Pcma, AudioCodec::Opus, AudioCodec::G722, AudioCodec::L16] {
         let sdp = build_answer("192.0.2.2", 40002, codec, None, None, false, None, None);
         let parsed = parse_sdp(&sdp, &ALL_CODECS).unwrap();
         assert_eq!(parsed.codec, codec);
@@ -340,4 +340,15 @@ fn video_payload_type_does_not_collide_with_existing_pts() {
     }
     assert_ne!(H264_PAYLOAD_TYPE, CN_PAYLOAD_TYPE);
     assert_ne!(H264_PAYLOAD_TYPE, 101, "must not collide with the DTMF telephone-event PT");
+}
+
+#[test]
+fn audio_payload_types_are_all_unique() {
+    for (i, a) in ALL_CODECS.iter().enumerate() {
+        for b in &ALL_CODECS[i + 1..] {
+            assert_ne!(a.payload_type(), b.payload_type(), "{a:?} and {b:?} share a payload type");
+        }
+        assert_ne!(a.payload_type(), CN_PAYLOAD_TYPE);
+        assert_ne!(a.payload_type(), 101, "must not collide with the DTMF telephone-event PT");
+    }
 }
