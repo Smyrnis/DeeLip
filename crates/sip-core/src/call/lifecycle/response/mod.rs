@@ -74,12 +74,7 @@ impl SipStack {
             return;
         }
 
-        // `Connected`'s `pending_offer: Option<PendingOfferMedia>` now carries
-        // `DtlsCallParams` (cert/key DER bytes), making it noticeably larger
-        // than `Act`'s other variants -- deliberately not boxed, matching
-        // `EventSender::send`'s own established precedent for `SipEvent`
-        // (see its doc comment) of accepting this cost rather than adding
-        // indirection to every construction/match site.
+        // See docs/crates/sip-core.md's "SipEvent/Act left un-boxed" note.
         #[allow(clippy::large_enum_variant)]
         enum Act {
             Nothing,
@@ -178,17 +173,10 @@ impl SipStack {
                                     dialog.state = DialogState::Confirmed;
                                     dialog.remote_tag = crate::wire::util::parse_tag(msg.header("To").unwrap_or(""));
                                     dialog.remote_sdp = Some(String::from_utf8_lossy(&msg.body).into_owned());
-                                    // The callee side already captures this (`incoming.rs`'s
-                                    // `on_invite`, seeded from the INVITE's own UDP source
-                                    // address) -- the caller side never did, so every
-                                    // mid-dialog request from the caller (`hang_up`'s BYE,
-                                    // hold/resume re-INVITEs, transfer) fell back to
-                                    // `identity.server_addr` instead of the far end's real
-                                    // `Contact:` (see `DialogRequestContext::new`). Harmless
-                                    // for a real registrar+proxy account (the proxy still
-                                    // routes it), but a dead end for `local_account`/proxy-less
-                                    // calls -- confirmed live: a caller's BYE never reached the
-                                    // callee in exactly that setup.
+                                    // Must populate `remote_contact` here too, not just on the
+                                    // callee side -- see docs/crates/sip-core.md's
+                                    // "Dialog::remote_contact must be populated on the caller
+                                    // side too" note (a real bug, confirmed live).
                                     dialog.remote_contact = msg
                                         .header("Contact")
                                         .and_then(crate::wire::util::parse_uri)
@@ -208,12 +196,9 @@ impl SipStack {
                                     }
                                 }
                                 DialogState::Confirmed if dialog.session_refresh_pending => {
-                                    // Session-refresh re-INVITE response --
-                                    // must not fall into the hold/resume
-                                    // path below (`hold_pending` was never
-                                    // set for this one, so it would default
-                                    // to `true` and wrongly report the call
-                                    // as held).
+                                    // Must check this before the hold/resume path below --
+                                    // see "Session-refresh vs. hold/resume disambiguation"
+                                    // in docs/crates/sip-core.md.
                                     dialog.session_refresh_pending = false;
                                     Act::SessionRefreshAck {
                                         call_id: dialog.call_id.clone(),

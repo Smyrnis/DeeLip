@@ -1,11 +1,8 @@
 //! Call dialog lifecycle: outgoing/incoming call setup, hold/resume,
 //! session timers, and the response dispatcher -- split by concern across
-//! `outgoing.rs`/`reinvite.rs`/`response.rs`/`incoming.rs`/`teardown.rs`.
-//! These are all still just `impl SipStack` blocks; the split is purely
-//! organizational (see `call/transfer.rs` for another file already
-//! following this same multi-file-single-impl pattern -- cross-file
-//! inherent-method calls like `self.build_invite(...)` work regardless of
-//! which file defines the method).
+//! `outgoing.rs`/`reinvite.rs`/`response/`/`incoming.rs`/`teardown.rs`. See
+//! docs/crates/sip-core.md's "Call lifecycle" section for the per-file
+//! breakdown and why it's split this way.
 
 mod incoming;
 mod outgoing;

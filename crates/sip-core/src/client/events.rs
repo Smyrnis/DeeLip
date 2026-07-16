@@ -110,12 +110,8 @@ impl EventSender {
         Self { inner, waker }
     }
 
-    // Deliberately mirrors `UnboundedSender::send`'s exact signature (see
-    // this struct's doc comment) rather than boxing the error, so none of
-    // the ~30 call sites need to change -- the `SendError<SipEvent>` payload
-    // was already this size when callers held the raw `UnboundedSender`
-    // directly; wrapping it here doesn't make anything larger, it just puts
-    // a name on a function clippy now has a definition to measure.
+    // Deliberately mirrors `UnboundedSender::send`'s exact signature -- see
+    // this struct's doc comment / docs/crates/sip-core.md's "EventSender" section.
     #[allow(clippy::result_large_err)]
     pub fn send(&self, event: SipEvent) -> Result<(), mpsc::error::SendError<SipEvent>> {
         let result = self.inner.send(event);

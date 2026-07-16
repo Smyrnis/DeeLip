@@ -51,11 +51,7 @@ pub struct VideoMediaReady {
 }
 
 /// Events emitted by the SIP stack to the application.
-// `CallConnected`'s `media: CallMediaReady` now carries `DtlsCallParams`
-// (cert/key DER bytes), making it noticeably larger than this enum's other
-// variants -- deliberately not boxed, matching `EventSender::send`'s own
-// established precedent (see its doc comment) of accepting this cost
-// rather than adding indirection to every construction/match site.
+// See docs/crates/sip-core.md's "SipEvent/Act left un-boxed" note.
 #[allow(clippy::large_enum_variant)]
 pub enum SipEvent {
     Registered {

@@ -349,12 +349,8 @@ impl SipStack {
         let contact_transport = ctx.contact_transport;
         let body_len = local_sdp.len();
 
-        // RFC 4028 Session Timers: our own 2xx response's `refresher=` takes
-        // highest precedence per the RFC's own resolution rules, so we
-        // decide unilaterally here rather than just echoing the caller's
-        // request -- honor an explicit "uas" ask (they want us to refresh),
-        // otherwise default to "uac" (them), same default-favors-caller rule
-        // the outgoing-call side uses in `on_response`.
+        // See docs/crates/sip-core.md's "RFC 4028 Session Timers" note on why
+        // our own `refresher=` decision here takes precedence over the caller's.
         let session_timer_info = if self.account.session_timers_enabled {
             dialog.incoming_session_expires.take().map(|(interval, their_refresher)| {
                 let we_are_refresher = their_refresher.as_deref() == Some("uas");

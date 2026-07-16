@@ -77,14 +77,9 @@ impl SipStack {
                 pwd: g.local_pwd.clone(),
                 candidates: g.candidates.clone(),
             });
-            // Same reasoning as the pre-move code this replaced: the plain
-            // c=/m= fallback address is deliberately never the ICE agent's
-            // own gathered candidate socket -- that only becomes usable once
-            // the answer confirms the far end also speaks ICE
-            // (`on_outgoing_connected`), and if it doesn't, the ICE agent
-            // (and that socket) is simply dropped. Advertising it here and
-            // binding an unrelated `local_rtp` on connect would leave the far
-            // end sending RTP to a socket nothing is listening on.
+            // The fallback address here is never the ICE agent's own candidate
+            // socket -- see docs/crates/sip-core.md's "Design decisions" note
+            // on the c=/m= fallback address for why.
             let (rtp_ip, rtp_port) =
                 media_setup::resolve_rtp_endpoint(&network, &advertised_ip, local_rtp, &mut relay).await;
 

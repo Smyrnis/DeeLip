@@ -60,13 +60,9 @@ impl SipStack {
 
         let codecs = media_setup::account_codecs(&self.account);
         let Some(parsed) = parse_sdp(&remote_sdp, &codecs) else {
-            // We've already ACKed the 2xx -- both sides consider this
-            // dialog Confirmed, so just dropping our own map entry
-            // would leave the far end's side dangling forever with no
-            // teardown signal. Send a real BYE, unlike the pre-ACK
-            // failure paths elsewhere in this function (401/407 with
-            // a bad challenge, etc.), which only ever reach a Calling
-            // dialog the far end doesn't yet consider established.
+            // Must send a real BYE here, not just drop the dialog -- the 2xx
+            // is already ACKed. See docs/crates/sip-core.md's
+            // "handle_connected's post-ACK codec-mismatch teardown" note.
             self.hang_up(&call_id).await;
             self.dialogs.remove(&call_id);
             let _ = self.event_tx.send(SipEvent::CallFailed {

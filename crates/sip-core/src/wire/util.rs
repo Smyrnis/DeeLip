@@ -124,13 +124,9 @@ pub fn parse_uri(header: &str) -> Option<String> {
         return Some(header[start + 1..end].to_string());
     }
     let candidate = header.split(';').next()?.trim();
-    // Some UAs send a malformed bare-form header with a display-name-like
-    // token glued directly onto the URI with no quotes/brackets (e.g.
-    // `600:sip:600@host`) -- RFC 3261's bare "addr-spec" form has no display
-    // name at all, but skipping forward to the scheme rather than storing
-    // the leading token protects against corrupting `remote_uri`/`peer_uri`
-    // if one ever arrives that way. No-op when the scheme already starts
-    // the string, which is the normal, well-formed case.
+    // Skip to the scheme rather than storing a leading token, so a
+    // malformed bare-form header can't corrupt remote_uri/peer_uri -- see
+    // docs/crates/sip-core.md's "parse_uri's bare-form fallback" note.
     for scheme in ["sip:", "sips:", "tel:"] {
         if let Some(idx) = candidate.find(scheme) {
             return Some(candidate[idx..].to_string());

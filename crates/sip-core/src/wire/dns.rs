@@ -88,13 +88,8 @@ async fn resolve_host(host: &str, port: u16, custom_nameserver: Option<&str>) ->
         return Ok(SocketAddr::new(ip, port));
     }
     let Some(server) = custom_nameserver.and_then(parse_nameserver).or_else(system_resolver) else {
-        // No custom nameserver configured and no usable /etc/resolv.conf --
-        // fall back to the OS resolver exactly like before this module existed.
-        // Bounded the same as the hand-rolled query() path below: an
-        // unreachable/misbehaving OS resolver (e.g. no response, common on
-        // Windows without a /etc/resolv.conf-style escape hatch) must not be
-        // able to hang the caller forever -- this sits on main()'s startup
-        // path before the app window exists.
+        // Must stay timeout-bounded -- this sits on main()'s startup path
+        // before the app window exists. See this module's doc comment.
         return timeout(DNS_TIMEOUT, tokio::net::lookup_host((host, port)))
             .await
             .context("DNS lookup timed out")??

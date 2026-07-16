@@ -1,11 +1,6 @@
-//! Outgoing presence PUBLISH (RFC 3903) -- the mirror image of
-//! `presence.rs`'s SUBSCRIBE/NOTIFY: instead of watching *someone else's*
-//! status, this publishes *our own* to the server, gated behind
-//! `SipAccount::publish_presence`. A standalone request/response
-//! transaction refreshed on its own timer, same shape as
-//! `PresenceSubscription`/`MwiSubscription`, but with an `etag` instead of
-//! a remote dialog tag (RFC 3903's `SIP-ETag`/`SIP-If-Match` identify which
-//! published event state a request refers to).
+//! Outgoing presence PUBLISH (RFC 3903), gated behind
+//! `SipAccount::publish_presence`. See docs/crates/sip-core.md's
+//! "Subscriptions" section for how this relates to `presence.rs`.
 
 use tokio::time::{Duration, Instant};
 use tracing::{debug, error};

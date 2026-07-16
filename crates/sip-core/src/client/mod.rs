@@ -1,12 +1,6 @@
-//! Split from a single `client.rs` purely for file size (same precedent as
-//! `views/settings/`, `views/dialer/`, `sip-core/src/call/lifecycle/`), not
-//! a behavior/API change -- `SipStack` keeps every method it had, just
-//! spread across `connect.rs` (transport setup + reconnect loop),
-//! `run_loop.rs` (the main event loop + dispatchers), and `builders.rs`
-//! (wire-format response/ACK builders), the same way its other methods
-//! already live in `call::dialog`/`registration`/`subscription::*`/etc.
-//! Every name re-exported below was already `pub`/`pub(crate)` at this same
-//! `client::` path in the original file.
+//! `SipStack`'s connection setup, main event loop, and wire-format builders,
+//! split across `connect.rs`/`run_loop.rs`/`builders.rs`. See
+//! docs/crates/sip-core.md's Architecture section for why.
 
 mod builders;
 mod connect;
