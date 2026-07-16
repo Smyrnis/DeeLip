@@ -11,9 +11,8 @@ use tokio::time::timeout;
 use webrtc_util::Conn;
 
 /// Bounds the TURN listener startup and Allocate request below -- matches
-/// STUN's existing 5s timeout (`stun.rs`). Without this, an unreachable or
-/// silently-dropping TURN server left a call stuck in "Calling…"/"Ringing"
-/// indefinitely with no way to cancel.
+/// STUN's existing 5s timeout (`stun.rs`). See `docs/crates/nat.md`'s
+/// design-decisions section for why this exists.
 const RELAY_ALLOC_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// A live TURN allocation. Keeps the `Client` alive for the allocation's
