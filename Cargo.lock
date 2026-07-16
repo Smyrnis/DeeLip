@@ -1409,7 +1409,7 @@ checksum = "a4ae5f15dda3c708c0ade84bfee31ccab44a3da4f88015ed22f63732abe300c8"
 
 [[package]]
 name = "deelip"
-version = "0.1.0"
+version = "0.2.6"
 dependencies = [
  "anyhow",
  "deelip-config",
@@ -1427,7 +1427,7 @@ dependencies = [
 
 [[package]]
 name = "deelip-config"
-version = "0.1.0"
+version = "0.2.6"
 dependencies = [
  "anyhow",
  "dirs 5.0.1",
@@ -1443,7 +1443,7 @@ dependencies = [
 
 [[package]]
 name = "deelip-media"
-version = "0.1.0"
+version = "0.2.6"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1476,7 +1476,7 @@ dependencies = [
 
 [[package]]
 name = "deelip-nat"
-version = "0.1.0"
+version = "0.2.6"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1490,7 +1490,7 @@ dependencies = [
 
 [[package]]
 name = "deelip-sip"
-version = "0.1.0"
+version = "0.2.6"
 dependencies = [
  "aes 0.8.4",
  "anyhow",
@@ -1515,7 +1515,7 @@ dependencies = [
 
 [[package]]
 name = "deelip-ui"
-version = "0.1.0"
+version = "0.2.6"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1544,7 +1544,7 @@ dependencies = [
 
 [[package]]
 name = "deelip-updater"
-version = "0.1.0"
+version = "0.2.6"
 dependencies = [
  "anyhow",
  "flate2",
