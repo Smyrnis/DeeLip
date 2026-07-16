@@ -44,3 +44,7 @@ impl VideoDecoder {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/video_codec_dispatch.rs"]
+mod tests;

@@ -139,3 +139,7 @@ pub(crate) fn clock_hz_for(codec: AudioCodec) -> f64 {
         | AudioCodec::L16 => 8000.0,
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/codec_dispatch.rs"]
+mod tests;

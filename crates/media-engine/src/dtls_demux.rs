@@ -89,3 +89,7 @@ impl Conn for DemuxConn {
         self
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/dtls_demux.rs"]
+mod tests;
