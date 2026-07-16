@@ -43,8 +43,11 @@ cd DeeLip
 ./scripts/install.sh
 ```
 
-Full flag reference, including `--version=TAG` to pin a specific release: see the
-[Install docs](/docs/install/install).
+Flags: `--version=TAG` pins a specific release instead of the latest; `--prefix=PATH`
+and `--system` (installs to `/usr/local` instead of `~/.local`) control the `.tar.gz`
+fallback path only — `.deb`/`.rpm` installs always go system-wide via the package
+manager. Full reference: the script's own `--help`, or
+[the source](https://github.com/Smyrnis/DeeLip/blob/main/scripts/install.sh).
 
 ## Windows
 
@@ -71,6 +74,8 @@ download the one matching your platform.
 
 ## After installing (Linux)
 
-- [`scripts/health-check.sh`](/docs/install/health-check) — verify (and `--fix`) your install
-- [`scripts/uninstall.sh`](/docs/install/uninstall) — remove DeeLip cleanly
-- Still stuck? See [Troubleshooting](/troubleshooting/) or [Contact](/contact/).
+- `scripts/health-check.sh --fix` — verify (and repair) your install; see
+  [Troubleshooting](/troubleshooting/).
+- `scripts/uninstall.sh` — remove DeeLip cleanly; add `--purge` to also delete your
+  accounts/history/recordings (kept by default).
+- Still stuck? See [Contact](/contact/).

@@ -22,8 +22,7 @@ DeeLip is developed in the open on GitHub — that's also where to reach out.
 
 ## Before you post
 
-- Installation issue? Run [`scripts/health-check.sh`](/docs/install/health-check) and include
-  its output.
+- Installation issue? Run `scripts/health-check.sh --fix` and include its output.
 - Call quality or connection issue? See [Troubleshooting](/troubleshooting/) first — it covers
   NAT, audio, video, and encryption separately.
 - Want to read the source or send a pull request? [github.com/Smyrnis/DeeLip](https://github.com/Smyrnis/DeeLip).
