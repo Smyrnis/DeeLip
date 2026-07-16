@@ -38,6 +38,14 @@ that same mistake into a loud, immediate `Err` instead. `save` does a full
 fine at this data's scale (a handful of accounts, a few hundred history/message rows
 each capped in `push`).
 
+All three route their delete-then-reinsert through `Db::replace_all_in_transaction`,
+which wraps it in one transaction committed at the end (via `unchecked_transaction`,
+not the usual `&mut self`-taking `transaction()`, since every `save` caller only ever
+holds `&Db`). Each of the three used to run its delete-then-reinsert as separate
+autocommit statements — up to ~200 individual synchronous disk writes (a full fsync
+each, by default) per save, all on the render thread — before being consolidated
+into one transaction this way.
+
 Config *enum* fields (`TransportProtocol`, `DtmfMode`, `MediaEncryption`,
 `RecordingFormat`, `Language`, `UpdateCheckFrequency`, `DefaultListAction`) all follow
 one pattern, worth matching exactly when adding a new one: a
@@ -54,23 +62,62 @@ a `bool` alongside it — `no_answer_forward`, `forward_always`, `forward_on_bus
 `mailbox`, `ldap_server`, `keepalive_secs`, `ice_enabled` (per-account override) all
 work this way: `None`/empty means "off, use the default behavior," `Some(_)` both
 enables the feature and supplies its value in one field. Prefer this over a separate
-bool when a feature's "on" state naturally needs a value anyway.
+bool when a feature's "on" state naturally needs a value anyway. `ldap_server`'s
+presence specifically is what enables the Directory tab in `ui` (`None`/empty shows a
+"configure this in Settings" prompt instead of a search box).
+
+`crash_reporting_enabled` (`AppConfig`) is on by default, unlike every other opt-in
+toggle in this struct: there's no privacy cost to weigh since the crash report it
+gates (`deelip_config::crashes_dir()`) is purely local and never uploaded or
+transmitted anywhere, and a crash report is only useful if it was already enabled
+*before* the crash happened. It's read once at startup to install the panic hook, so
+it's restart-required like every other logging-adjacent setting.
 
 ## Design decisions & invariants
 
 **`accounts` table schema migration** (`db.rs::migrate_accounts_columns`): the table
 is created once via `CREATE TABLE IF NOT EXISTS`, which does nothing on a database
 that already has the table from before a column was added. Every column added to
-`SCHEMA` after the table might already exist also gets an idempotent
-`ALTER TABLE accounts ADD COLUMN ...` in `migrate_accounts_columns`, with SQLite's
-"duplicate column name" error (its way of saying "already has it") swallowed and
-anything else propagated — SQLite has no `ADD COLUMN IF NOT EXISTS` of its own, this
-is the idiom that stands in for one. **Any future new `accounts` column needs an
-entry in both places**: `SCHEMA`'s `CREATE TABLE` (for a genuinely fresh database)
-and `COLUMNS` in `migrate_accounts_columns` (for an existing one) — forgetting the
-second one means every existing install's `SELECT`/`INSERT` in `account.rs` starts
-failing with "no such column" the moment they upgrade, even though a fresh install
-would work fine.
+`SCHEMA` after the table might already exist also gets an entry in `COLUMNS`, and
+`migrate_accounts_columns` checks `PRAGMA table_info(accounts)` once up front to see
+which of those already exist, issuing an idempotent `ALTER TABLE accounts ADD
+COLUMN ...` only for the ones actually missing — SQLite has no
+`ADD COLUMN IF NOT EXISTS` of its own, this is the idiom that stands in for one. An
+earlier version of this instead unconditionally attempted every `ALTER TABLE` and
+string-matched SQLite's "duplicate column name" error to ignore the ones that
+already existed; that meant this many round-trips on *every* startup, not just a
+fresh database, and depended on SQLite's exact error wording, which isn't a stable
+API to lean on. The `PRAGMA` check fixes both: only genuinely-missing columns get an
+`ALTER TABLE` at all, and nothing depends on error-message text. **Any future new
+`accounts` column needs an entry in both places**: `SCHEMA`'s `CREATE TABLE` (for a
+genuinely fresh database) and `COLUMNS` in `migrate_accounts_columns` (for an
+existing one) — forgetting the second one means every existing install's
+`SELECT`/`INSERT` in `account.rs` starts failing with "no such column" the moment
+they upgrade, even though a fresh install would work fine.
+
+**Config directory creation before opening the database** (`Db::open_default`):
+`rusqlite::Connection::open` creates the database *file* if it's missing, but never
+its parent directory. On a genuinely fresh profile — no prior DeeLip run, and
+nothing else has yet created `~/.config/deelip`/`%APPDATA%\deelip` — that used to
+fail outright with "unable to open database file" before any window could ever
+appear. This runs as the very first thing `main()` does, before logging is even set
+up, so the failure was silent on a console-subsystem Windows build (`main.rs` has no
+`windows_subsystem = "windows"`). `open_default` now `create_dir_all`s the parent
+directory first, unconditionally, before ever calling `Connection::open`.
+
+**Shared network-timeout constants** (`timeouts.rs`): previously each independently
+defined (and independently named/valued, in two cases) across `crates/sip-core` and
+`crates/ui`. Consolidated here since both crates already depend on `deelip-config` (a
+true leaf crate, safe to depend on from anywhere, so consolidating shared constants
+here adds no new dependency-direction risk). `crates/nat`'s own STUN/TURN timeouts
+deliberately stay local instead of moving here too: `nat` has no other `deelip-*`
+dependency today, and pulling one in just for a couple of numbers isn't worth the new
+coupling for that otherwise standalone, WebRTC-only crate.
+
+**Dial-plan rule engine** (`dialplan.rs`): `DialPlanRule` matching/replacement uses
+the `regex` crate directly rather than a hand-rolled pattern language — it's already
+present in the workspace's dependency tree transitively, and a real match/replace
+engine is exactly what `regex` already is, so there's no reason to reinvent one.
 
 **`local_account` (`SipAccount`)**: a serverless, direct-IP calling mode — place and
 receive direct SIP calls to/from a bare IP with no registrar at all. No

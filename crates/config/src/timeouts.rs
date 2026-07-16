@@ -1,13 +1,6 @@
-//! Shared network-timeout constants -- previously each independently
-//! defined (and independently named/valued in two cases) across
-//! `crates/sip-core` and `crates/ui`. Consolidated here since both crates
-//! already depend on `deelip-config` (a true leaf crate, safe to depend on
-//! from anywhere) -- see `ARCHITECTURE_GAPS.md`'s "Reuse & file structure"
-//! section for the dependency-direction reasoning. `crates/nat`'s own STUN/
-//! TURN timeouts deliberately stay local instead of moving here: `nat` has
-//! no other `deelip-*` dependency today, and pulling one in just for a
-//! couple of numbers isn't worth the new coupling for that otherwise
-//! standalone, WebRTC-only crate.
+//! Shared network-timeout constants used by `sip-core`/`ui`. See
+//! `docs/crates/config.md`'s Design decisions & invariants section for why
+//! they live here (and why `nat`'s own STUN/TURN timeouts don't).
 
 use std::time::Duration;
 

@@ -106,14 +106,9 @@ impl Db {
         let path = default_db_path()?;
         let is_fresh = !path.exists();
 
-        // `rusqlite::Connection::open` creates the *file* if missing but
-        // never its parent directory -- on a genuinely fresh profile (no
-        // prior DeeLip run, and nothing else has created `~/.config/deelip`
-        // / `%APPDATA%\deelip` yet), this fails outright with "unable to
-        // open database file" before any window can ever appear. This is
-        // the very first thing `main()` does, before logging is even set
-        // up, so that failure was otherwise silent on a console-subsystem
-        // Windows build (main.rs has no `windows_subsystem = "windows"`).
+        // `Connection::open` never creates its parent directory -- must exist
+        // first. See docs/crates/config.md's Design decisions & invariants
+        // section for the fresh-profile bug this avoids.
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).with_context(|| format!("Creating config dir {}", parent.display()))?;
         }
@@ -130,18 +125,9 @@ impl Db {
 
     /// Idempotent `ALTER TABLE ADD COLUMN` for anything `SCHEMA` expects but
     /// an existing `accounts` table predates -- adding a column here always
-    /// needs a matching entry in `SCHEMA` too. Full picture: `docs/crates/config.md`.
-    ///
-    /// Checks `PRAGMA table_info` once up front and only issues `ALTER
-    /// TABLE` for columns that are actually missing, rather than
-    /// unconditionally attempting all of them and string-matching
-    /// "duplicate column name" errors to ignore the ones that already
-    /// exist -- on every single startup (not just a fresh database), that
-    /// used to mean this many round-trips regardless. Also more robust
-    /// than the error-text match it replaces (SQLite's exact wording isn't
-    /// a stable API to depend on); a real existence check needs no
-    /// separately-maintained version number a future column addition
-    /// could forget to bump either.
+    /// needs a matching entry in `SCHEMA` too. Full picture (including why
+    /// this checks `PRAGMA table_info` up front instead of just attempting
+    /// every `ALTER TABLE`): `docs/crates/config.md`.
     fn migrate_accounts_columns(&self) -> anyhow::Result<()> {
         const COLUMNS: &[&str] = &[
             "account_name   TEXT",
@@ -245,14 +231,10 @@ impl Db {
 
     /// Shared by `CallHistory::save`/`ContactBook::save`/`MessageLog::save`:
     /// wraps `DELETE FROM <table>` + `insert_all`'s row-by-row inserts in
-    /// one transaction, committed once at the end. Each of those three used
-    /// to run its own delete-then-reinsert as separate autocommit
-    /// statements -- up to ~200 individual synchronous disk writes (a full
-    /// fsync each, by default) per save, all on the render thread. `table`
-    /// is always a hardcoded literal from one of the three call sites,
-    /// never user input, so interpolating it into the DELETE is safe here.
-    /// Uses `unchecked_transaction` (not the usual `&mut self`-taking
-    /// `transaction()`) since every `save()` caller only ever holds `&Db`.
+    /// one transaction, committed once at the end -- see `docs/crates/config.md`'s
+    /// Architecture section for why. `table` is always a hardcoded literal
+    /// from one of the three call sites, never user input, so interpolating
+    /// it into the DELETE is safe here.
     pub(crate) fn replace_all_in_transaction(
         &self, table: &str, insert_all: impl FnOnce(&rusqlite::Transaction) -> anyhow::Result<()>,
     ) -> anyhow::Result<()> {

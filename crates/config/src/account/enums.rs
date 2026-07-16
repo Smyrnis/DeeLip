@@ -67,12 +67,8 @@ pub enum MediaEncryption {
     /// run over the RTP socket, using `a=fingerprint`/`a=setup` SDP
     /// attributes to bootstrap it -- unlike `Zrtp`, this DOES have SDP
     /// footprint, but `wants_srtp` still returns `false` since the actual
-    /// key material is never SDES-carried. SECURITY: unlike ZRTP, DTLS-SRTP
-    /// has no independent human-verifiable SAS -- its only MITM protection
-    /// is the fingerprint's integrity in transit over SIP signaling.
-    /// Selecting this on an account whose resolved transport isn't TLS
-    /// means the fingerprint travels in the clear, giving no real MITM
-    /// protection (same exposure as SDES without secure signaling).
+    /// key material is never SDES-carried. Security caveats vs. `Zrtp`:
+    /// `docs/crates/sip-core.md`'s DTLS-SRTP section.
     DtlsSrtp,
 }
 
