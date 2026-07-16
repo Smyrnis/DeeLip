@@ -1,17 +1,8 @@
 //! Demultiplexes DTLS records off the shared RTP socket for
-//! `webrtc_dtls::conn::DTLSConn`, which wants to *own* a `Conn` and run its
-//! own internal read loop -- the opposite shape from ZRTP's byte-in/
-//! event-out `handle_incoming` (see `zrtp_session.rs`). Since only
-//! `engine.rs`'s `recv_loop` can own the real socket's `recv_from`, this
-//! wraps the same shared socket plus an inbound channel that `recv_loop`
-//! feeds whenever it classifies an incoming packet as a DTLS record (RFC
-//! 5764 §5.1.2's byte-range demux, alongside the existing `is_zrtp_packet`
-//! classification).
-//!
-//! Implements `webrtc-util 0.11`'s `Conn` trait, not the `0.17` one
-//! `RtpSocket::Relay`/ICE use elsewhere in this crate -- see
-//! `Cargo.toml`'s `webrtc-dtls`/`webrtc-util-dtls` comment for why DTLS-SRTP
-//! pulls a third, isolated `webrtc-util` version.
+//! `webrtc_dtls::conn::DTLSConn` (a `webrtc-util 0.11` `Conn` impl). See
+//! docs/crates/media-engine.md's "DTLS-SRTP session driving" section for the
+//! full rationale, including why this needs a third, isolated `webrtc-util`
+//! version alongside the crate's other two.
 
 use std::net::SocketAddr;
 use std::sync::Arc;

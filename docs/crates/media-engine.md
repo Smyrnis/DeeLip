@@ -18,12 +18,22 @@ Module map:
 - `dtmf.rs` — RFC 2833 telephone-event encoding and inband dual-tone synthesis.
 - `rtp.rs` — the RTP packet type and a stateful per-stream `RtpSender`.
 - `recording.rs` — WAV/MP3 call-recording writers.
-- `engine.rs` — `MediaEngine`, the orchestrator tying all of the above together
-  into live send/recv tasks for one call (optionally two, for a 3-way conference).
+- `engine.rs` — `MediaEngine`, the orchestrator wiring up one call's live send/recv
+  tasks (optionally two, for a 3-way conference); the tasks themselves live in
+  `tasks.rs` (see below).
+- `tasks.rs` — the actual `recv_loop`/`send_loop` bodies (plus their shared helpers
+  `drain_leg`/`mix_frames`/`write_recording`), split out of `engine.rs` purely for
+  file size, same precedent as `codec_dispatch.rs` below — not a behavior change.
+- `codec_dispatch.rs` / `video_codec_dispatch.rs` — per-codec `AudioEncoder`/
+  `AudioDecoder` and `VideoEncoder`/`VideoDecoder` enum-dispatch, split out of
+  `engine.rs` for the same file-size reason.
 - `video_capture.rs` / `video_codec.rs` / `video_rtp.rs` / `video_engine.rs` — an
   independent video pipeline (see its own section below).
 - `zrtp_session.rs` — drives `sip-core`'s ZRTP protocol engine against a real RTP
   socket; see the dedicated section below.
+- `dtls_demux.rs` / `dtls_srtp_session.rs` — DTLS-SRTP (RFC 5763/5764) handshake and
+  SRTP key export, driven against the same shared RTP socket; see the dedicated
+  section below.
 
 **Audio data flow**: cpal's capture callback pushes 20ms PCM frames through a
 channel into `MediaEngine`'s send task, which runs them through mute → echo
@@ -83,6 +93,24 @@ actually negotiated.
   clock is always signaled as 48000 Hz per RFC 7587 regardless of the audio's actual
   8kHz sample rate here; everything else runs at a matching 8000 Hz RTP clock.
 
+**Capture channel backpressure** (`audio.rs`'s `CaptureRx`/`CAPTURE_QUEUE_FRAMES`):
+bounded, unlike the DTMF/ZRTP channels elsewhere in this crate (those stay
+unbounded since they're fed at human/protocol-handshake rates that can never
+realistically fill one) -- this one is fed by the realtime capture callback
+every 20ms regardless of whether the consumer (the send task, which can stall
+on a congested/blocked network `send_to`) is keeping up. `CAPTURE_QUEUE_FRAMES`
+(50) matches the jitter/playback buffers' own 1s cap elsewhere in this crate.
+The realtime callback uses `try_send`, so a full queue just drops the newest
+frame (an audio glitch under sustained congestion) instead of growing without
+bound or blocking the realtime thread.
+
+**Realtime capture callback, allocation-free per frame** (`audio.rs`'s
+`build_input_i16`/`build_input_f32`): once a 160-sample frame fills, the full
+frame is moved into the channel via `mem::replace(&mut buf, Vec::with_capacity(FRAME_SAMPLES))`
+rather than `buf.clone()` + `buf.clear()` -- the replace leaves a fresh
+pre-allocated `Vec` in `buf` for the next frame with no copy, where the
+clone+clear pair did a real allocation+memcpy on this realtime audio thread.
+
 **Echo cancellation** (`aec.rs`): bridges the mismatch between DeeLip's fixed
 160-sample (20ms @ 8kHz) RTP framing and `fdaf-aec`'s power-of-two FFT size
 requirement (256, i.e. 128-sample hops) — `LCM(160, 128) = 640`, so every 4 RTP
@@ -110,6 +138,15 @@ bound its writes to that (empty) capacity, corrupting the heap. Both call sites 
 `clear()` preserves capacity) — **do not remove these reserves**, they are the fix,
 not an optimization.
 
+**Manual record toggle** (`MediaEngine::set_recording`): independent of whatever
+`RecordingOptions::enabled` the engine was started with. Turning on lazily opens
+a fresh `RecordingWriter`, so a manually-started recording only captures audio
+from that point forward, not the part of the call already missed. Turning off
+finalizes and drops the writer immediately rather than waiting for `stop()`,
+matching the "record only what was asked for" intent. A failure to open the
+file is logged and simply leaves recording off, the same handling as the
+auto-record path at `start()`.
+
 **`MediaEngine::stop`'s abort-then-await shape**: async specifically so callers can
 wait for the send/recv tasks to actually finish, not just be scheduled for
 cancellation — `abort()` alone doesn't guarantee a task (and whatever it holds,
@@ -118,14 +155,34 @@ because a caller can immediately reuse the *same* relay `Conn` in a brand new
 engine (conference-merge does exactly this): if the old task's `recv_from` is still
 alive even momentarily, it races the new engine's recv task for the same incoming
 packets and can silently steal them, starving the new one. Awaiting here closes that
-window. This is also why `recorder`'s finalize happens synchronously in `stop()`
-itself rather than inside the (aborted) send task — abort cancellation would
-otherwise race the WAV/MP3 finalize and could leave a truncated file.
+window. This is also why `recorder`'s finalize happens in `stop()` itself
+rather than inside the (aborted) send task — abort cancellation would
+otherwise race the WAV/MP3 finalize and could leave a truncated file. Taking
+the writer here (not inside the send task) makes finalization deterministic
+regardless of the abort race, but the finalize() call itself is blocking disk
+I/O, and `stop()` is commonly awaited via `rt.block_on` directly on the
+UI/render thread (hangup/hold/swap) — so the finalize is dispatched onto
+`spawn_blocking` rather than run inline, keeping this UI-thread-visible
+`stop()` fast even on a slow or antivirus-intercepted disk. Recording is
+already best-effort (see `AppConfig::recording_enabled`'s doc comment), so a
+finalize that completes a moment after `stop()` itself returns is an
+acceptable tradeoff — unlike the task-await above, which must stay
+synchronous.
 
 **Stats are local-only** (`LegStats`/`CallStatsSnapshot`): there's no RTCP in this
 codebase, so loss/jitter reflect what *we* observe receiving, not what the remote
 reports observing from us — the usual scope for a softphone's stats panel without a
 full RTCP implementation.
+
+**`tasks::encrypt_and_send`**: collapses the encrypt-log-send-count sequence
+that used to be copy-pasted 5 times across the send task into one helper.
+Borrows `ctx.encrypt_rtp`'s output (a cheap refcounted `bytes::Bytes`) rather
+than `.to_vec()`-ing it, so this is also one fewer allocation+copy per
+encrypted packet than the code it replaces. One deliberate, minor behavior
+change from sharing this one path: DTMF packets now update `stats` on a
+successful send too (previously only voice/comfort-noise packets did) — DTMF
+is real data on the wire, and counting it makes the leg stats more accurate,
+not less, so this isn't an oversight to "fix" back.
 
 ### Video pipeline
 
@@ -155,11 +212,81 @@ with a one-shot channel reporting the open/stream-start result back so
 video frame is large enough that letting a slow consumer fall behind and
 accumulate a backlog is worse for a live call than simply dropping stale frames.
 
+**`VideoEngine::start`'s encoder/decoder construction** (leg 1 and, if present,
+leg 2): built once, up front, before either send/recv task spawns, and moved
+in — mirroring `MediaEngine::start`'s own audio encoder/decoder construction.
+Unlike the code this replaced, which built its own encoder/decoder from
+inside `send_loop`/`recv_loop` on first entry and warned-and-returned on
+failure, a construction failure now fails `start()` itself synchronously via
+`?`, matching how audio already behaves — a deliberate behavior change, not
+just a construction-timing rename.
+
 **RTP fragmentation/reassembly** (`video_rtp.rs`): NAL-unit splitting relies on
 encoder-side emulation prevention (which every spec-compliant H.264 encoder,
 including `openh264`, applies) guaranteeing real NAL payload never contains a raw
 start-code byte sequence — so a plain byte scan for `00 00 01` unambiguously finds
-only real start codes, no bit-level parsing needed.
+only real start codes, no bit-level parsing needed. The codec-dispatching entry
+points (`fragment_video_frame`/`reassemble_video_frame`) have nothing to share
+for a hypothetical VP8 arm beyond routing to it: VP8's own RTP framing (RFC 7741)
+has no NAL-unit/start-code concept at all, so there's no common logic to factor
+out of `fragment_nal_units`/`reassemble_nal_units` themselves.
+
+**Codec dispatch generalized** (`video_codec_dispatch.rs`): `VideoEncoder`/
+`VideoDecoder` enum-dispatch, mirroring `codec_dispatch.rs`'s `AudioEncoder`/
+`AudioDecoder` pattern one-for-one. Only `VideoCodec::H264` exists as a real variant
+today — this is prep work so a second video codec (VP8 was the one considered; it
+and G.723.1 were explicitly attempted and deferred by the user, blocked on missing
+system libs/sudo access and no acceptable pure-Rust crate at the time) slots in the
+same low-friction way new audio codecs already do, not evidence a second codec is
+implemented.
+
+## DTLS-SRTP session driving (`dtls_demux.rs` / `dtls_srtp_session.rs`)
+
+DeeLip's third media-encryption path (alongside SDES-SRTP and ZRTP) — see
+`docs/crates/sip-core.md` for the SDP `a=fingerprint`/`a=setup` negotiation half;
+this is the half that actually runs the handshake and hands `engine.rs`/`tasks.rs`
+real SRTP keys.
+
+- **`dtls_demux.rs`**: `webrtc_dtls::conn::DTLSConn` wants to *own* a `Conn` and run
+  its own internal read loop — the opposite shape from ZRTP's byte-in/event-out
+  `handle_incoming` (see below). Since only `tasks.rs`'s `recv_loop` can own the
+  real socket's `recv_from`, `DemuxConn` wraps the same shared socket plus an inbound
+  channel that `recv_loop` feeds whenever it classifies an incoming packet as a DTLS
+  record (RFC 5764 §5.1.2's byte-range check, `is_dtls_packet`, alongside the
+  existing `is_zrtp_packet` classification). Implements `webrtc-util 0.11`'s `Conn`
+  trait — a third, isolated `webrtc-util` version alongside the `0.7` one
+  `webrtc-srtp` pulls in transitively and the `0.17` one `RtpSocket::Relay`/ICE use
+  elsewhere; Cargo allows this since nothing needs to unify them.
+- **`dtls_srtp_session.rs::run_dtls_handshake`**: reconstructs a
+  `webrtc_dtls::crypto::Certificate` from the same DER bytes `sip-core`'s
+  `generate_dtls_cert()` produced, runs the handshake over `DemuxConn`, then exports
+  SRTP keying material (`EXTRACTOR-dtls_srtp` label, RFC 5764 §4.2) once connected.
+  `client_auth: ClientAuthType::RequireAnyClientCert` is required on the config even
+  though DeeLip only ever needs one-way SDP-fingerprint verification per call leg —
+  without it the server/`is_client: false` side never requests the client's
+  certificate at all and `peer_certificates` comes back empty (confirmed by this
+  module's own two-socket test failing with exactly that symptom before the setting
+  was added). `insecure_skip_verify: true` is intentional: these are self-signed
+  certs authenticated out-of-band via SDP, not a CA chain — the real
+  MITM-prevention check is the explicit post-handshake comparison of the peer's
+  actual certificate against `DtlsSrtpParams::expected_remote_fingerprint`
+  (`DtlsSrtpOutcome::FingerprintMismatch` if they don't match).
+- **`engine.rs`/`tasks.rs`**: `MediaEngine::start` spawns `run_dtls_handshake` as a
+  background task when `dtls_srtp: Some(...)`, mirroring the ZRTP/`ZrtpRuntime`
+  shape, but unlike ZRTP's initial Hello (sent synchronously before the recv
+  task exists) the DTLS handshake has to run *concurrently* with `recv_loop`,
+  since `recv_loop` is what feeds `DemuxConn` its inbound bytes in the first
+  place — it can't run to completion before `recv_loop` starts the way ZRTP's
+  Hello can. `dtls_encrypt_tx`/`rx` are always constructed (mirroring
+  `zrtp_encrypt_tx`/`rx`) so the send task's `tokio::select!` arm type-checks
+  unconditionally; it simply never fires when `dtls_srtp` was `None`. `tasks.rs`'s
+  `recv_loop` owns a `DtlsRecvState`, reacts to `DtlsSrtpOutcome` (swap in the
+  exported SRTP keys on `Secure`; tear down this call's media entirely via
+  `stop_tx` on `FingerprintMismatch`, since a mismatch means the peer's actual
+  certificate didn't match what SDP advertised — an active-attack indicator, not
+  an ordinary negotiation failure. An ordinary `Failed`, e.g. a network hiccup
+  during the handshake, instead just logs and falls back to unencrypted media,
+  exactly like ZRTP's own `Failed` precedent).
 
 ## ZRTP session driving (`zrtp_session.rs`)
 
@@ -203,13 +330,21 @@ verification/provenance status).
   loss corrupting the callee's reassembly in a way the caller's didn't hit,
   though the asymmetry wasn't root-caused further. Previously only a
   theoretical concern; now observed in practice. Worth revisiting before this
-  is real-world-facing (tracked in the current `ARCHITECTURE_GAPS.md`'s video
-  phase).
+  is real-world-facing — not yet a scoped item in `ROADMAP.md`.
 - **Conferencing now carries video** — merging two calls fans the local camera's
   single encoded stream out to both remote legs (one `H264Encoder`, two RTP sends,
   each leg decoded independently — mirrors `MediaEngine`'s "encode once, decode per
   leg" audio shape). If only one of the two merged calls negotiated video, that
   leg's video is kept and the other simply has none, rather than dropping video
-  for both. See `video_engine.rs`'s `VideoConferenceLeg`.
+  for both. See `video_engine.rs`'s `VideoConferenceLeg`. Leg 2 gets its own
+  independent `RtpSender` — a fresh random SSRC and its own sequence/timestamp
+  counters, a distinct RTP session from the receiving party's point of view —
+  fed the same encoded fragments as leg 1 every tick, since the encode itself is
+  shared (one camera, one encoder). Both legs use leg 1's own `payload_type`/
+  `codec` for that shared bitstream, unchanged from today's actual behavior (a
+  single global payload type for both legs); a conference where the two legs
+  negotiate genuinely different video codecs isn't supported by this
+  shared-single-encoder architecture, regardless of this limitation — out of
+  scope here, not a bug.
 - **MP3 recording's buffer-reservation requirement** (see above) is a correctness
   invariant, not a style choice — regressing it reintroduces a real SIGSEGV.

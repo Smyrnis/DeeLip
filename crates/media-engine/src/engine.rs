@@ -268,24 +268,17 @@ impl MediaEngine {
             }
         }
 
-        // Created here (rather than alongside the send/recv tasks further
-        // down, where `stop_tx`/`stop_rx` used to be created) since the
-        // DTLS-SRTP block below needs a `stop_tx` clone to actively tear
-        // down media on `DtlsSrtpOutcome::FingerprintMismatch` -- see
-        // `handle_dtls_outcome`. No other dependency issue with moving this
-        // earlier; nothing between here and its old location touches it.
+        // Must be created before the DTLS-SRTP block below, which needs a
+        // `stop_tx` clone (see `handle_dtls_outcome`).
         let (stop_tx, stop_rx) = watch::channel(false);
 
         // ── DTLS-SRTP (leg 1 only -- see `start`'s doc comment) ──────────────────
-        // Unlike ZRTP's initial Hello above (sent synchronously before the
-        // recv task exists), the DTLS handshake must run *concurrently* with
-        // `recv_loop`, since `recv_loop` is what feeds `DemuxConn` its
-        // inbound bytes in the first place -- so this is a spawned
-        // background task, not inline work done before `recv_task` starts.
-        // `dtls_encrypt_tx`/`rx` are always constructed (mirrors
-        // `zrtp_encrypt_tx`/`rx` above) so the send task's `tokio::select!`
-        // arm below type-checks unconditionally; it simply never fires when
-        // `dtls_srtp` was `None`.
+        // Spawned as a background task, run concurrently with `recv_loop` --
+        // see docs/crates/media-engine.md's "DTLS-SRTP session driving"
+        // section for why this can't run synchronously first the way ZRTP's
+        // initial Hello does. `dtls_encrypt_tx`/`rx` are always constructed
+        // (mirroring `zrtp_encrypt_tx`/`rx` above) so the send task's
+        // `tokio::select!` arm below type-checks unconditionally.
         let (dtls_encrypt_tx, dtls_encrypt_rx) = mpsc::unbounded_channel::<([u8; 16], [u8; 14])>();
         let dtls_recv_state = dtls_srtp.map(|params| {
             let (demux, inbound_tx) = DemuxConn::new(socket.clone(), remote_rtp);
@@ -538,12 +531,8 @@ impl MediaEngine {
 
     /// Start/stop recording this call on demand (manual per-call Record
     /// button) -- independent of whatever `RecordingOptions::enabled` this
-    /// engine was started with. Turning on lazily opens a fresh
-    /// `RecordingWriter` (so a manually-started recording only captures
-    /// audio from this point forward, not the part of the call already
-    /// missed); turning off finalizes and drops it immediately rather than
-    /// waiting for `stop()`. A failure to open the file is logged and
-    /// leaves recording off, same as the auto-record path at `start()`.
+    /// engine was started with. See docs/crates/media-engine.md's "Manual
+    /// record toggle" for the on/off semantics.
     pub fn set_recording(&self, on: bool) {
         let mut guard = self.recorder.lock().unwrap();
         if on {
@@ -599,20 +588,10 @@ impl MediaEngine {
         if let Some(t2) = self.recv_task2 {
             let _ = t2.await;
         }
-        // Take the writer here (not inside the send task) so finalization
-        // happens deterministically regardless of the abort race above --
-        // both WAV and MP3 need an explicit finalize() (RIFF header sizes /
-        // final encoder flush); Drop alone would leave either format
-        // malformed/truncated. The actual finalize() call is blocking disk
-        // I/O, though, and `stop()` itself is commonly awaited via
-        // `rt.block_on` directly on the UI/render thread (hangup/hold/swap)
-        // -- so it's dispatched onto `spawn_blocking` rather than run
-        // inline here, keeping this UI-thread-visible `stop()` fast even on
-        // a slow or antivirus-intercepted disk. Recording is already
-        // best-effort (see `AppConfig::recording_enabled`'s doc comment),
-        // so a finalize that completes a moment after `stop()` itself
-        // returns is an acceptable tradeoff -- unlike the task-await above,
-        // which this function's own doc comment requires stay synchronous.
+        // Dispatched onto spawn_blocking (finalize() is blocking disk I/O,
+        // and stop() itself is commonly awaited via rt.block_on directly on
+        // the UI/render thread) -- see this function's own doc comment /
+        // docs/crates/media-engine.md for why.
         if let Some(writer) = self.recorder.lock().unwrap().take() {
             tokio::task::spawn_blocking(move || {
                 if let Err(e) = writer.finalize() {

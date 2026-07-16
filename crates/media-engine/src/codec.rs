@@ -251,12 +251,9 @@ impl G729Decoder {
 
 pub struct GsmEncoder(gsm_sys::Gsm);
 
-// Safety: `gsm_sys::Gsm` (`*mut GsmState`) is a raw pointer, so it isn't
-// `Send` by default -- but this struct is its exclusive owner (created in
-// `new()`, freed in `Drop`, never shared with or accessed from another
-// thread concurrently), and libgsm's per-instance state is entirely
-// self-contained (no thread-local or global state), so moving it to
-// another thread (e.g. into `tokio::spawn`'s task) is sound.
+// Safety: exclusively owned (created in `new()`, freed in `Drop`, never
+// shared across threads concurrently) with no thread-local/global state --
+// see docs/crates/media-engine.md's GSM entry for the full reasoning.
 unsafe impl Send for GsmEncoder {}
 
 impl Default for GsmEncoder {

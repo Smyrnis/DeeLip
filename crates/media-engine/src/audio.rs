@@ -10,16 +10,10 @@ use tokio::sync::mpsc;
 pub const SAMPLE_RATE: u32 = 8_000;
 pub const FRAME_SAMPLES: usize = 160; // 20ms at 8000 Hz
 
-/// Captured PCM frames from the microphone. Bounded (unlike the DTMF/ZRTP
-/// channels elsewhere in this crate, which stay unbounded since they're
-/// fed at human/protocol-handshake rates that can never realistically fill
-/// one) -- this one is fed by the realtime capture callback every 20ms
-/// regardless of whether the consumer (the send task, which can stall on a
-/// congested/blocked network `send_to`) is keeping up. `CAPTURE_QUEUE_FRAMES`
-/// matches the jitter/playback buffers' own 1s cap elsewhere in this crate.
-/// The realtime callback uses `try_send`, so a full queue just drops the
-/// newest frame (an audio glitch under sustained congestion) instead of
-/// growing without bound.
+/// Captured PCM frames from the microphone. Bounded, with `try_send` on the
+/// producer side (a full queue drops the newest frame rather than growing
+/// without bound) -- see docs/crates/media-engine.md's "Capture channel
+/// backpressure" for why.
 const CAPTURE_QUEUE_FRAMES: usize = 50; // 1s at 20ms/frame
 pub type CaptureRx = mpsc::Receiver<Vec<i16>>;
 /// PCM frames to be played back.
@@ -150,15 +144,10 @@ fn build_input_i16(
                 for &s in data {
                     buf.push(s);
                     if buf.len() >= FRAME_SAMPLES {
-                        // `mem::replace` moves the full frame into the
-                        // channel with no copy, leaving a fresh
-                        // pre-allocated Vec in `buf` for the next frame --
-                        // was `buf.clone()` + `buf.clear()`, a real
-                        // allocation+memcpy on this realtime thread.
-                        // `try_send` (non-blocking, unlike the async `send`
-                        // a bounded channel would otherwise require here)
-                        // just drops this frame if the send task has fallen
-                        // behind -- see `CaptureRx`'s doc comment.
+                        // mem::replace, not clone()+clear() -- avoids a real
+                        // allocation+memcpy on this realtime thread. See
+                        // docs/crates/media-engine.md for why, and `CaptureRx`'s
+                        // doc comment for the try_send/backpressure behavior.
                         let frame = std::mem::replace(&mut buf, Vec::with_capacity(FRAME_SAMPLES));
                         let _ = tx.try_send(frame);
                     }

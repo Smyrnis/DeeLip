@@ -127,10 +127,9 @@ impl Mp3Writer {
             self.interleave_buf.push(far_sample);
         }
         self.encode_buf.clear();
-        // `encode_to_vec` writes into the vec's *spare* capacity directly (see
-        // its own doc example) -- an unreserved `Vec` has none, and LAME will
-        // write past it regardless, corrupting the heap. Reserving here is a
-        // no-op on every call after the first, since `clear()` keeps capacity.
+        // Do not remove this reserve() -- fixes a real SIGSEGV (LAME writes
+        // past an unreserved Vec's spare capacity). See
+        // docs/crates/media-engine.md's "Call recording" section.
         self.encode_buf.reserve(max_required_buffer_size(near.len()));
         self.encoder
             .encode_to_vec(InterleavedPcm(&self.interleave_buf), &mut self.encode_buf)
@@ -139,9 +138,7 @@ impl Mp3Writer {
     }
 
     fn finalize(mut self) -> anyhow::Result<()> {
-        // Same reservation requirement as `write_frame`'s `encode_to_vec` --
-        // `max_required_buffer_size(0)` still accounts for the fixed 7200-byte
-        // frame headroom the flush needs.
+        // Same reservation requirement as `write_frame`'s `encode_to_vec` -- do not remove.
         let mut tail = Vec::with_capacity(max_required_buffer_size(0));
         self.encoder.flush_to_vec::<FlushNoGap>(&mut tail).map_err(|e| anyhow::anyhow!("MP3 flush: {e}"))?;
         self.file.write_all(&tail).context("Writing final MP3 frame")?;

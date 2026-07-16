@@ -38,21 +38,12 @@ pub(crate) enum Leg {
 }
 
 /// Encrypts `bytes` via `ctx` (if `Some` -- SRTP negotiated) and sends the
-/// result to `remote` over `sock`, updating `stats`' leg1/leg2
-/// packet/byte counters on a successful send. Returns `Err(())` if either
-/// encryption or the send itself failed (already logged via
-/// `tracing::error!`, tagged with `what`) -- callers decide what "skip this
-/// frame/packet/leg" means for their own loop; this only collapses the
-/// encrypt-log-send-count sequence that was previously copy-pasted 5 times
-/// across the send task below. `ctx.encrypt_rtp` already returns a cheap
-/// refcounted `bytes::Bytes` (not owned `Vec<u8>`) -- borrowed here via
-/// `out`, not `.to_vec()`'d, so this is also one fewer allocation+copy per
-/// encrypted packet than the code it replaces. Note for the DTMF call
-/// sites specifically: unlike the code being replaced, DTMF packets now
-/// also update `stats` on a successful send (previously only voice/comfort-
-/// noise packets did) -- a deliberate, minor side effect of sharing one
-/// path, not an oversight: DTMF is real data on the wire and counting it
-/// makes the leg stats more accurate, not less.
+/// result to `remote` over `sock`, updating `stats`' leg1/leg2 packet/byte
+/// counters on a successful send. Returns `Err(())` if either encryption or
+/// the send itself failed (already logged via `tracing::error!`, tagged with
+/// `what`) -- callers decide what "skip this frame/packet/leg" means for
+/// their own loop. See docs/crates/media-engine.md for why DTMF sends now
+/// also count toward `stats` (deliberate, not an oversight to undo).
 pub(crate) async fn encrypt_and_send(
     ctx: Option<&mut SrtpContext>, bytes: &[u8], sock: &RtpSocket, remote: SocketAddr, stats: &SharedStats, leg: Leg,
     what: &str,
@@ -150,11 +141,9 @@ pub(crate) struct ZrtpRecvState {
 }
 
 /// Bundles the leg-1-only DTLS-SRTP state a `recv_loop` needs -- `None` for
-/// leg 2, same restriction/reasoning as `ZrtpRecvState`. Unlike ZRTP (an
-/// ongoing in-band exchange `recv_loop` itself drives via
-/// `handle_incoming`/`tick`), the handshake runs on its own background task
-/// (`run_dtls_handshake`, spawned by `MediaEngine::start`) and reports back
-/// exactly once via `outcome_rx` -- see `recv_dtls_outcome`.
+/// leg 2, same restriction/reasoning as `ZrtpRecvState`. See
+/// docs/crates/media-engine.md's "DTLS-SRTP session driving" section for how
+/// this compares to ZRTP's own in-band, `recv_loop`-driven shape.
 pub(crate) struct DtlsRecvState {
     /// Forwards demuxed DTLS-record bytes to `dtls_demux::DemuxConn`, whose
     /// receiving end `run_dtls_handshake`'s background task owns.
@@ -177,14 +166,10 @@ pub(crate) async fn recv_dtls_outcome(dtls: &mut Option<DtlsRecvState>) -> Optio
     }
 }
 
-/// Acts on `run_dtls_handshake`'s one-shot outcome. `FingerprintMismatch` is
-/// deliberately handled differently from ZRTP's `Failed` precedent (which
-/// just logs and continues unencrypted): a mismatch means the peer's actual
-/// certificate didn't match what SDP advertised -- an active-attack
-/// indicator, not an ordinary negotiation failure -- so this actively tears
-/// down the whole call's media via `stop_tx` rather than ever letting
-/// plaintext RTP flow. An ordinary `Failed` (e.g. a network hiccup during
-/// the handshake) falls back to unencrypted media exactly like ZRTP does.
+/// Acts on `run_dtls_handshake`'s one-shot outcome -- see
+/// docs/crates/media-engine.md's "DTLS-SRTP session driving" section for why
+/// `FingerprintMismatch` tears down media via `stop_tx` while an ordinary
+/// `Failed` just falls back to unencrypted media like ZRTP does.
 pub(crate) async fn handle_dtls_outcome(
     outcome: DtlsSrtpOutcome, decrypt_ctx: &mut Option<SrtpContext>,
     encrypt_tx: &mpsc::UnboundedSender<([u8; 16], [u8; 14])>, stop_tx: &watch::Sender<bool>,
@@ -234,8 +219,7 @@ pub(crate) fn push_to_jitter(jitter: &PlaybackTx, pcm: &[i16]) {
 /// `decrypt_ctx` is `Some`) -> parse -> drop DTMF payloads -> stats/jitter
 /// -> decode (voice, or synthesize comfort noise if `cn_pt` matches) ->
 /// push to `playback`. Mirrors `video_engine.rs`'s own `recv_loop`, which
-/// already shares one function between both legs the same way -- this was
-/// previously two hand-duplicated ~35-75 line async blocks, one per leg.
+/// already shares one function between both legs the same way.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn recv_loop(
     sock: Arc<RtpSocket>, mut decrypt_ctx: Option<SrtpContext>, mut decoder: AudioDecoder, dtmf_pt: u8,

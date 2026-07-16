@@ -1,11 +1,8 @@
 //! RFC 5763/5764 DTLS-SRTP: runs the DTLS 1.2 handshake over the shared RTP
 //! socket (via `dtls_demux::DemuxConn`) using the `webrtc-dtls` crate, then
-//! exports SRTP keying material once the handshake completes. Structurally
-//! the media-engine-side counterpart of `zrtp_session.rs`, but shaped very
-//! differently: `webrtc_dtls::conn::DTLSConn` owns its `Conn` and runs its
-//! own internal read loop, rather than exposing a `handle_incoming`-style
-//! byte-in/event-out interface the way `ZrtpEngine` does -- see
-//! `dtls_demux::DemuxConn`'s doc comment.
+//! exports SRTP keying material once the handshake completes. See
+//! docs/crates/media-engine.md's "DTLS-SRTP session driving" section for the
+//! full picture, including how this compares structurally to `zrtp_session.rs`.
 
 use std::sync::Arc;
 
@@ -92,21 +89,14 @@ async fn run(params: DtlsSrtpParams, demux: DemuxConn) -> DtlsSrtpOutcome {
     let config = Config {
         certificates: vec![certificate],
         srtp_protection_profiles: vec![SrtpProtectionProfile::Srtp_Aes128_Cm_Hmac_Sha1_80],
-        // Self-signed certs authenticated out-of-band via the SDP
-        // `a=fingerprint`, not a CA chain -- this is the standard
-        // WebRTC-style DTLS-SRTP trust model. `insecure_skip_verify` lets
-        // the handshake itself complete regardless of cert validity; the
-        // real MITM-prevention check happens below, comparing the peer's
-        // actual certificate against what SDP advertised.
+        // Intentional -- the real MITM check is the fingerprint comparison
+        // below, not cert-chain validation. See docs/crates/media-engine.md's
+        // "DTLS-SRTP session driving" section for why.
         insecure_skip_verify: true,
-        // Both peers present a self-signed cert and both need the other's
-        // for fingerprint verification -- this is mutual auth, not the
-        // ordinary one-way "client verifies server" TLS relationship.
-        // Without this (only meaningful for the server/`is_client: false`
-        // side), the server never requests/receives the client's
-        // certificate at all, and `state.peer_certificates` comes back
-        // empty -- confirmed by this module's own two-socket test failing
-        // with exactly that symptom before this was added.
+        // Required: without this, the server/`is_client: false` side never
+        // requests the client's cert and `peer_certificates` comes back
+        // empty (this module's own two-socket test caught exactly that
+        // before the setting was added). See docs/crates/media-engine.md.
         client_auth: webrtc_dtls::config::ClientAuthType::RequireAnyClientCert,
         ..Default::default()
     };

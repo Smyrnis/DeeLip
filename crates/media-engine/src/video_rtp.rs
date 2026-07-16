@@ -8,11 +8,9 @@
 use deelip_sip::sdp::VideoCodec;
 
 /// Codec-dispatching counterpart of `fragment_nal_units` -- mirrors
-/// `codec_dispatch.rs`'s enum-dispatch pattern for video. Only `H264`
-/// exists today; a future VP8 arm would call its own RFC 7741 fragmenter
-/// here instead -- VP8's framing has no NAL/start-code concept at all, so
-/// there's no shared logic to factor out of `fragment_nal_units` itself,
-/// only a shared entry point to route through.
+/// `codec_dispatch.rs`'s enum-dispatch pattern for video. Only `H264` exists
+/// today; see docs/crates/media-engine.md for why a future VP8 arm would be
+/// just a routing entry, not shared fragmentation logic.
 pub fn fragment_video_frame(codec: VideoCodec, bitstream: &[u8], mtu: usize) -> Vec<Vec<u8>> {
     match codec {
         VideoCodec::H264 => fragment_nal_units(bitstream, mtu),
@@ -33,11 +31,9 @@ const FU_A_TYPE: u8 = 28;
 
 /// Scan an Annex-B (start-code-delimited) H.264 bitstream and return each
 /// NAL unit's raw bytes (start code stripped, header byte + payload per
-/// output slice). Relies on encoder-side emulation prevention (which every
-/// spec-compliant H.264 encoder, including `openh264`, applies) guaranteeing
-/// real NAL payload never contains a raw `00 00 01`/`00 00 00 01` byte
-/// sequence -- so a plain byte scan for that pattern unambiguously finds
-/// only real start codes.
+/// output slice). Relies on encoder-side emulation prevention guaranteeing
+/// no false-positive start codes in real NAL payload -- see
+/// docs/crates/media-engine.md's "RTP fragmentation/reassembly" for why.
 pub fn split_nal_units(annex_b: &[u8]) -> Vec<&[u8]> {
     let mut starts: Vec<usize> = Vec::new();
     let mut i = 0;

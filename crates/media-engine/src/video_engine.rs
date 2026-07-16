@@ -152,12 +152,11 @@ impl VideoEngine {
                 })
                 .transpose()
                 .context("Creating video SRTP decrypt context (leg2)")?;
-            // Constructed here (once, before either task spawns) rather than
-            // inside `recv_loop` itself -- see `send_loop`'s/`recv_loop`'s
-            // own encoder/decoder params for the same change on leg 1.
-            // Leg 2 gets its own independent decoder for its own negotiated
-            // `leg.codec`; it never gets an encoder (the encode is shared
-            // from leg 1, see `send_loop`'s doc comment on `sender2`).
+            // Constructed here, once, before either task spawns -- see
+            // docs/crates/media-engine.md for why (same as leg 1's
+            // encoder/decoder below). Leg 2 gets its own independent decoder
+            // for its own negotiated `leg.codec`; it never gets an encoder
+            // (the encode is shared from leg 1, see `send_loop`'s `sender2`).
             let decoder2 = VideoDecoder::new(leg.codec).context("Creating video decoder (leg2)")?;
             leg2_send = Some((socket2.clone(), leg.remote_rtp, leg2_encrypt_ctx));
             leg2_recv = Some((socket2, leg2_decrypt_ctx, leg.codec, decoder2));
@@ -170,13 +169,9 @@ impl VideoEngine {
         let video_muted = Arc::new(AtomicBool::new(false));
 
         // Constructed once here, before either task spawns, and moved in --
-        // mirrors `MediaEngine::start`'s audio encoder/decoder construction
-        // (`engine.rs`). Unlike the code this replaces (which built its own
-        // encoder/decoder from inside `send_loop`/`recv_loop` on first
-        // entry, warning-and-returning on failure), a construction failure
-        // now fails `start()` itself synchronously via `?`, matching how
-        // audio already behaves -- a deliberate behavior change, not just
-        // a construction-timing rename.
+        // a construction failure now fails `start()` itself synchronously
+        // via `?`. See docs/crates/media-engine.md's "Video pipeline"
+        // section for why this is a deliberate behavior change.
         let encoder = VideoEncoder::new(codec, bitrate_bps).context("Creating video encoder")?;
         let decoder = VideoDecoder::new(codec).context("Creating video decoder")?;
 
@@ -238,16 +233,9 @@ impl VideoEngine {
         // `ts_increment: 0` is deliberate -- see `docs/crates/media-engine.md`'s
         // "Video RTP timestamping" section for why.
         let mut sender = RtpSender::new(payload_type, 0);
-        // Leg 2 (conference) gets its own independent `RtpSender` -- a fresh
-        // random SSRC and its own sequence/timestamp counters, a distinct
-        // RTP session from the receiving party's point of view -- fed the
-        // same encoded fragments as leg 1 every tick, since the encode
-        // itself is shared (one camera, one encoder), and using leg 1's own
-        // `payload_type`/`codec` for that shared bitstream -- unchanged from
-        // today's actual behavior (a single global payload type for both
-        // legs). A conference where the two legs negotiate genuinely
-        // different video codecs isn't supported by this shared-single-
-        // encoder architecture regardless of this pass; out of scope here.
+        // Leg 2 (conference) gets its own independent `RtpSender` -- see
+        // docs/crates/media-engine.md's "Conferencing now carries video" for
+        // the SSRC/shared-codec-limitation details.
         let mut sender2 = leg2.is_some().then(|| RtpSender::new(payload_type, 0));
         let ticks_per_frame = VIDEO_CLOCK_HZ / fps;
         let mut interval = tokio::time::interval(Duration::from_secs_f64(1.0 / fps as f64));
