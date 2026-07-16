@@ -34,12 +34,15 @@ name: Package
 # path only compiles for unix/gnu-target builds. An earlier version of this
 # workflow installed a MinGW toolchain "just in case" for this dependency;
 # that was based on a stale/incorrect assumption (confirmed by reading the
-# actual vendored build.rs) and has been removed -- it was dead weight that
-# put a MinGW gcc.exe on PATH ahead of MSVC's cl.exe for the *entire* job,
-# an unnecessary risk of some other native dependency picking up the wrong
-# toolchain. The "Verify MSVC toolchain" and "Check for MinGW runtime DLL
-# dependencies" steps below exist specifically to keep proving this rather
-# than assuming it stays true forever.
+# actual vendored build.rs) and has been removed. The "Verify MSVC toolchain"
+# step below originally also hard-failed if gcc.exe resolved on PATH at all --
+# that assumption turned out to be wrong too: GitHub's windows-latest runner
+# image ships its own MinGW64 install on PATH (C:\mingw64\bin) regardless of
+# anything this workflow does, so gcc.exe being *reachable* is normal and not
+# itself evidence of a problem. What actually matters is whether the built
+# binary ends up linked against a MinGW toolchain by mistake -- that's what
+# the "Check for MinGW runtime DLL dependencies" step verifies directly, by
+# inspecting deelip.exe itself, and is the authoritative check here.
 on:
   push:
     tags:
@@ -212,11 +215,13 @@ jobs:
       - name: Set up MSVC dev environment
         uses: ilammy/msvc-dev-cmd@v1
 
-      # Confirms the "no gcc.exe on PATH" assumption this job now depends on
-      # (see the top-of-file comment) instead of silently trusting it --
-      # fails loudly if a stray gcc ever ends up ahead of cl.exe on PATH,
-      # which is exactly the condition that could make a native dependency's
-      # build script pick the wrong toolchain.
+      # Confirms MSVC actually resolves (see the top-of-file comment).
+      # gcc.exe being *also* reachable is expected on this runner image
+      # (its own bundled MinGW64 install) and isn't itself a failure
+      # condition -- only logged here for visibility. The real check for
+      # whether anything actually picked up MinGW instead of MSVC is the
+      # "Check for MinGW runtime DLL dependencies" step, further down,
+      # which inspects the built binary directly.
       - name: Verify MSVC toolchain resolves correctly
         shell: pwsh
         run: |
@@ -229,8 +234,7 @@ jobs:
             exit 1
           }
           if ($gcc) {
-            Write-Error "gcc.exe found on PATH ($($gcc.Source)) -- a native dependency's build script could pick this up instead of cl.exe. Investigate before proceeding."
-            exit 1
+            Write-Host "Note: gcc.exe is also on PATH ($($gcc.Source)) -- expected on this runner image, not a problem by itself. The MinGW-runtime-DLL check later in this job is what actually verifies nothing picked it up."
           }
 
       - uses: Swatinem/rust-cache@v2
