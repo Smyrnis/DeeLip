@@ -56,13 +56,7 @@ impl DeelipApp {
         });
         ui.add_space(4.0);
 
-        // Recompute the filtered index list only when the search text,
-        // status filter, or the record count itself has actually changed --
-        // this used to re-lowercase every record's URI and rebuild the list
-        // on every single frame regardless (egui repaints continuously, and
-        // much faster than that during a scroll drag), which was the actual
-        // cause of this tab dropping frames while scrolling. Mirrors the
-        // existing `audio_device_cache` idiom.
+        // Cache-and-compare idiom -- see docs/crates/ui.md's "List views" section.
         let key = (
             self.history_state.history_search.to_lowercase(),
             self.history_state.history_status_filter.clone(),
@@ -94,18 +88,8 @@ impl DeelipApp {
         if self.history_state.history_filtered.is_empty() {
             empty_state(ui, &self.palette, &t("history.no_matching_calls"));
         } else {
-            // `show_rows` only lays out the rows actually scrolled into view
-            // instead of all of them every frame -- with up to 200 records
-            // and this app's continuous ~20fps repaint, the plain `show`
-            // form was doing thousands of unnecessary widget layouts/sec.
-            // `show_rows` needs one precisely-known height per iteration --
-            // each row is deliberately kept to a *single* widget (the
-            // `ui.horizontal` group, divider painted directly onto its own
-            // rect below) rather than two siblings (group + a separate
-            // `ui.separator()`), since two widgets means two auto-inserted
-            // `item_spacing.y` gaps that a single flat height estimate can't
-            // represent -- that mismatch was the actual cause of this tab's
-            // scroll jitter, not raw row count.
+            // `show_rows` virtualization -- see docs/crates/ui.md's "List views"
+            // section for why each row must stay a single widget.
             let row_height = ui.spacing().interact_size.y.max(ui.text_style_height(&egui::TextStyle::Body))
                 + ui.spacing().item_spacing.y;
             let filtered = &self.history_state.history_filtered;

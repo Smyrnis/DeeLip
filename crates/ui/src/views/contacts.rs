@@ -33,12 +33,7 @@ impl DeelipApp {
         let mut delete_idx: Option<usize> = None;
         let mut default_action_target: Option<usize> = None;
 
-        // Contact list -- recompute the filtered index list only when the
-        // search text or the contact count itself has actually changed
-        // (see `contact_filter_key`'s doc comment); an in-place edit
-        // (same length) is handled by an explicit invalidation in
-        // `finish_contact_dialog` instead, mirroring `history_filter_key`'s
-        // own edit-invalidation case.
+        // Cache-and-compare idiom -- see docs/crates/ui.md's "List views" section.
         let key = (self.contacts_state.contact_search.to_lowercase(), self.contacts_state.contacts.contacts.len());
         if self.contacts_state.contact_filter_key.as_ref() != Some(&key) {
             self.contacts_state.contact_filtered = self
@@ -126,11 +121,9 @@ impl DeelipApp {
             }
         });
 
-        // Floating "+" FAB -- opens the shared dialog in add mode. Anchored
-        // to this tab's own content rect (`ui.max_rect()`), not `ctx`'s full
-        // screen -- `Area::anchor` is window-relative and overlapped the
-        // bottom status bar; use `fixed_pos` for anything scoped to one
-        // tab's content instead.
+        // Floating "+" FAB -- opens the shared dialog in add mode. See
+        // docs/crates/ui.md's "List views" section for why this uses
+        // `fixed_pos`, not `Area::anchor`.
         let palette = self.palette;
         let fab_size = 40.0;
         let content_rect = ui.max_rect();
@@ -201,10 +194,8 @@ impl DeelipApp {
     /// Shared create/edit contact dialog -- opened from Contacts' "+" FAB
     /// (add mode) or Contacts'/History's "Edit"/"Add to Contacts" actions
     /// (edit/prefilled mode). Rendered from `frame.rs::update()`, not from
-    /// inside `show_contacts`, since History needs to trigger it while
-    /// History -- not Contacts -- is the active tab. `on_close` and
-    /// `content` both end up calling `finish_contact_dialog`, harmlessly
-    /// even if neither button was actually clicked.
+    /// inside `show_contacts` -- see `docs/crates/ui.md`'s "Pop-out windows"
+    /// section for why.
     pub(crate) fn show_contact_dialog(&mut self, ctx: &egui::Context, self_app: SharedApp) {
         show_pop_out_window(
             self,

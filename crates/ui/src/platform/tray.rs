@@ -19,18 +19,10 @@ use crate::strings::{t, tf};
 const ICON_BYTES: &[u8] = include_bytes!("../../../../assets/Deelip-tray.png");
 
 /// Sends an updated missed-call/unread count to the tray icon's badge —
-/// `u32::MAX` is never sent; `0` clears the badge.
-///
-/// Linux: safe to call from any thread (it's a `glib::MainContext` channel,
-/// the officially-supported way to hand work to a GTK main loop running on
-/// a different thread from the sender — the same category of problem
-/// `MenuItem`/`Menu` needing to be *constructed* on the GTK thread already
-/// solved for menu setup, just for an ongoing update instead of a one-time
-/// handoff).
-///
-/// Windows/macOS: a plain channel, drained once per frame by
-/// `poll_native_tray_badge` (see its doc comment for why there's no
-/// GTK-style "attach to a running main loop" step needed there).
+/// `u32::MAX` is never sent; `0` clears the badge. Linux: a `glib::MainContext`
+/// channel, safe to call from any thread. Windows/macOS: a plain channel,
+/// drained once per frame by `poll_native_tray_badge`. See `docs/crates/ui.md`'s
+/// "Platform integration" section, "Tray construction is genuinely per-OS", for why.
 #[cfg(target_os = "linux")]
 pub type BadgeSender = gtk::glib::Sender<u32>;
 #[cfg(not(target_os = "linux"))]
@@ -126,7 +118,7 @@ fn restore_window(ctx_slot: &CtxSlot) {
 fn tooltip_for_count(count: u32) -> String {
     if count > 0 {
         // Pluralization rules are out of scope for now (see
-        // `ARCHITECTURE_GAPS.md` item 6) -- the English
+        // `docs/crates/i18n.md`) -- the English
         // singular/plural branch stays in Rust, with each
         // branch's fixed text as its own locale key.
         let key = if count == 1 { "tray.tooltip_missed_singular" } else { "tray.tooltip_missed_plural" };
@@ -211,18 +203,10 @@ pub fn spawn_tray_icon() -> anyhow::Result<(TrayMenuIds, BadgeSender)> {
 
 /// Windows/macOS: build the tray icon directly (no dedicated event-loop
 /// thread, unlike Linux's GTK approach) -- **must** be called after eframe's
-/// own winit event loop is already running on this thread, not before. Per
-/// `tray-icon`'s own docs: macOS strictly requires the tray to be created
-/// once the event loop has started (the earliest safe point is winit's
-/// `StartCause::Init`); Windows requires it be built on whichever thread's
-/// event loop will pump its hidden window's messages. Both are satisfied by
-/// calling this from `DeelipApp`'s first real frame (see
-/// `frame.rs::init_lazy_tray`) rather than from `main.rs` before
-/// `eframe::run_native`, since by the app's first frame eframe's winit loop
-/// is definitely already pumping this thread's message queue -- which is
-/// also what keeps `spawn_tray_event_handlers`'s two background threads
-/// (unchanged, pure channel-consumers) fed on these platforms, with no
-/// GTK-style dedicated main loop needed at all.
+/// own winit event loop is already running on this thread, not before (see
+/// `frame.rs::init_lazy_tray`, the only caller). See `docs/crates/ui.md`'s
+/// "Platform integration" section, "Tray construction is genuinely per-OS",
+/// for the full per-platform rationale.
 ///
 /// UNVERIFIED on real Windows/macOS hardware -- this sandbox is Linux-only.
 #[cfg(not(target_os = "linux"))]
@@ -265,15 +249,11 @@ thread_local! {
 }
 
 /// Windows/macOS: apply the latest pending badge-count update (if any) to
-/// the tray icon built by `spawn_tray_icon`. Unlike Linux, which attaches a
-/// callback directly to the GTK main loop that's already running the tray,
-/// there's no separate main loop here to attach to -- the tray was built
-/// on the same thread `DeelipApp::update`/`ui` runs on, so this just needs
-/// to be polled once per frame instead (see `frame.rs::process_tray_events`,
-/// which already runs every frame). No-op if the tray never started (see
-/// `spawn_tray_icon`'s doc comment for how construction failure is handled).
-/// A no-op on Linux, where the GTK thread's own `badge_rx.attach` callback
-/// already handles this.
+/// the tray icon built by `spawn_tray_icon`, polled once per frame from
+/// `frame.rs::process_tray_events` -- see `docs/crates/ui.md`'s "Platform
+/// integration" section for why there's no GTK-style main loop to attach to
+/// here instead. No-op if the tray never started, and a no-op on Linux,
+/// where the GTK thread's own `badge_rx.attach` callback already handles this.
 #[cfg(not(target_os = "linux"))]
 pub(crate) fn poll_native_tray_badge() {
     NATIVE_TRAY.with(|slot| {

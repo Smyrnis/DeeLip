@@ -10,13 +10,11 @@ use deelip_sip::{DtlsCallParams, Setup, VideoMediaReady};
 
 /// Maps a call's resolved `DtlsCallParams` (see that type's doc comment)
 /// into what `media-engine::dtls_srtp_session` actually needs to run the
-/// handshake -- unlike `zrtp_params_for`, there's no extra role/ZID-loading
-/// logic here, since `role`/`remote_fingerprint` are already fully resolved
-/// by the time this is called (sip-core's outgoing/incoming/response
-/// lifecycle code resolves them during offer/answer exchange, before
-/// `CallConnected`/`CallMediaReady` is ever emitted). `None` if DTLS-SRTP
-/// wasn't actually negotiated for this call (including the defensive case
-/// where `role`/`remote_fingerprint` are unexpectedly still unresolved).
+/// handshake -- `role`/`remote_fingerprint` are already fully resolved by
+/// `sip-core` before this is ever called (see this crate's Architecture
+/// notes on `media.rs`). `None` if DTLS-SRTP wasn't actually negotiated for
+/// this call (including the defensive case where `role`/`remote_fingerprint`
+/// are unexpectedly still unresolved).
 fn dtls_srtp_params_for(local_dtls: Option<DtlsCallParams>) -> Option<DtlsSrtpParams> {
     let params = local_dtls?;
     let role = params.role?;
@@ -222,13 +220,8 @@ impl DeelipApp {
             return;
         }
 
-        // Any held leg was put on hold with a=sendonly, telling the far end
-        // to stop sending us audio -- send a real resume re-INVITE
-        // (a=sendrecv) so it actually resumes before we start mixing it
-        // in, or that leg would come through silent even though we're now
-        // "listening" locally (this is exactly the case for a call held
-        // as part of the attended-transfer consultation flow, and equally
-        // for an ordinary call-waiting pair where one side is on hold).
+        // A held leg must be resumed before mixing it in, or it comes through
+        // silent -- see docs/crates/ui.md's Architecture section (media.rs) for why.
         let mut resumed = false;
         if self.calls_state.calls[0].is_held {
             self.send_resume(0);
@@ -239,14 +232,8 @@ impl DeelipApp {
             resumed = true;
         }
         if resumed {
-            // Fire-and-forget like hold/resume already is everywhere else in
-            // this codebase, but this one case is more timing-sensitive than
-            // usual: we're about to tear down and rebuild the whole engine
-            // right after, so give the far end a brief moment to actually
-            // process the re-INVITE and resume sending before we do (same
-            // precedent as `hangup_before_exit`'s post-BYE grace sleep).
-            // (See `hangup_before_exit` for why this must be an async block,
-            // not a bare `tokio::time::sleep(...)` argument.)
+            // Must be an async block, not a bare `tokio::time::sleep(...)` argument --
+            // see `frame.rs::hangup_before_exit`'s identical requirement.
             self.rt.block_on(async { tokio::time::sleep(Duration::from_millis(300)).await });
         }
 

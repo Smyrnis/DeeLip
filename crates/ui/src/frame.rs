@@ -180,26 +180,9 @@ impl DeelipApp {
     }
 
     /// Build the tray icon lazily on the app's first real frame -- only
-    /// does anything on Windows/macOS. Per `tray_icon`'s own docs, macOS
-    /// strictly requires the tray to be created once its event loop has
-    /// already started (the earliest safe point is winit's
-    /// `StartCause::Init`), and Windows needs it built on whichever
-    /// thread's event loop will pump its messages; by this app's first
-    /// frame, eframe's winit loop is definitely already running on this
-    /// thread, satisfying both. Linux instead builds the tray eagerly in
-    /// `main.rs`, before `eframe::run_native` even starts, since GTK drives
-    /// its own independent event loop on a dedicated thread -- so
-    /// `self.tray` is already `Some`/`None` there by the time this runs,
-    /// and this is a no-op.
-    ///
-    /// UNVERIFIED on real Windows/macOS hardware -- this sandbox is
-    /// Linux-only. See `tray::spawn_tray_icon`'s doc comment for the full
-    /// rationale. Because of that, `spawn_tray_icon()` is called through
-    /// `catch_unwind`: if it panics rather than returning `Err` under some
-    /// platform-specific condition we've never been able to exercise here,
-    /// a panic from inside this, the very first frame, would otherwise take
-    /// the whole process down silently (no window ever shown) instead of
-    /// just leaving the tray unavailable like the existing `Err` arm does.
+    /// does anything on Windows/macOS (a no-op on Linux, which builds the
+    /// tray eagerly in `main.rs` instead). See `docs/crates/ui.md`'s "Platform
+    /// integration" section, "Tray construction is genuinely per-OS", for why.
     #[cfg(not(target_os = "linux"))]
     fn init_lazy_tray(&mut self) {
         if self.tray.is_some() {

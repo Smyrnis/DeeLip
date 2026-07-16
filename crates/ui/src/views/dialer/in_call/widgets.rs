@@ -91,20 +91,17 @@ pub(super) fn caller_name_label(ui: &mut Ui, palette: &Palette, name: &str, is_n
     ui.label(RichText::new(name).font(font).color(palette.ink));
 }
 
-/// A large rounded-square icon button with a caption underneath, for the
-/// focused-call screen's primary actions (Accept/Reject/Hang Up) -- same
-/// rounded-square language as `phone_keypad`'s digit buttons, not a full
-/// circle. Column width wider than the 64px button itself so a longer
-/// caption has room not to wrap (same reasoning as `ICON_TOGGLE_COL_WIDTH`).
-/// Built from `ui.painter()` calls on one `allocate_exact_size` rect, not a
-/// nested `egui::Button` + layout container -- matches `icon_toggle_button`'s
-/// own choice just below, made for the same real box-position bug (see its
-/// doc comment).
 /// Column width reserved per button in the incoming-call Accept/Reject row --
 /// wider than the 64px button itself, same reasoning as `ICON_TOGGLE_COL_WIDTH`.
 /// Also used by `show_incoming_call_screen` to compute that row's centering.
 pub(super) const CIRCULAR_ACTION_COL_WIDTH: f32 = 76.0;
 
+/// A large rounded-square icon button with a caption underneath, for the
+/// focused-call screen's primary actions (Accept/Reject/Hang Up) -- same
+/// rounded-square language as `phone_keypad`'s digit buttons, not a full
+/// circle. Built from `ui.painter()` calls on one `allocate_exact_size` rect,
+/// not a nested `egui::Button` + layout container -- matches
+/// `icon_toggle_button`'s own choice just below; see its doc comment.
 pub(super) fn circular_action_button(ui: &mut Ui, icon: &str, color: egui::Color32, caption: &str) -> bool {
     const BTN: f32 = 64.0;
     let (col_rect, response) =

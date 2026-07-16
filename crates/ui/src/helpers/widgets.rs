@@ -4,11 +4,9 @@ use crate::strings::t;
 use crate::theme::{self, Palette};
 
 /// Deterministic avatar background color for a contact/peer, hashed from its
-/// name+URI across a short fixed set of Darcula-adjacent hues (the app's own
-/// signal/ringing colors plus Darcula's own class-name purple and string
-/// green) -- reusing real Darcula hues instead of an arbitrary rainbow keeps
-/// avatar variety from feeling like an unrelated bolt-on. Shared by
-/// Contacts' rows and the Messages window's conversation list.
+/// name+URI across a short fixed hue set -- see `docs/crates/ui.md`'s Theming
+/// section for why these particular hues. Shared by Contacts' rows and the
+/// Messages window's conversation list.
 pub(crate) fn avatar_color(seed: &str) -> egui::Color32 {
     const HUES: [egui::Color32; 4] = [
         egui::Color32::from_rgb(0x68, 0x97, 0xBB), // blue
@@ -62,11 +60,9 @@ pub(crate) fn status_bar(ui: &mut Ui, palette: &Palette, text: &str, ok: bool, h
 
 /// Paint a subtle divider line along a list row's bottom edge, shared by
 /// History/Contacts/Messages so all three read as one consistent list
-/// design instead of three independently-styled dividers. Row content must
-/// be a single widget (e.g. one `ui.horizontal()`) whose response `rect` is
-/// passed in here -- a second sibling widget for the divider would add an
-/// extra `item_spacing.y` gap that per-row height estimates (needed for
-/// `show_rows` virtualization) can't represent.
+/// design. Row content must be a single widget (e.g. one `ui.horizontal()`)
+/// whose response `rect` is passed in here -- see `docs/crates/ui.md`'s "List
+/// views" section for why.
 pub(crate) fn list_row_divider(ui: &Ui, palette: &Palette, row_rect: egui::Rect) {
     ui.painter().hline(row_rect.x_range(), row_rect.bottom(), egui::Stroke::new(1.0, palette.border));
 }
@@ -129,23 +125,15 @@ pub(crate) fn list_row_menu(
 
 /// A row's primary name/number label, double-click-sensing so
 /// History/Contacts can trigger `AppConfig::default_list_action` --
-/// deliberately just this one label (not the whole row): a plain
-/// `ui.label()` senses only hover by default, and upgrading a *whole row*
-/// to `Sense::click()` would compete with the row's own quick-action
-/// buttons for clicks (egui's hit-testing gives the *last*-added widget at
-/// a position priority, and the buttons are added first) -- staying
-/// scoped to a single non-overlapping label sidesteps that entirely.
-/// Returns whether it was just double-clicked.
+/// deliberately just this one label, not the whole row. See `docs/crates/ui.md`'s
+/// "List views" section for why. Returns whether it was just double-clicked.
 pub(crate) fn double_clickable_label(ui: &mut Ui, text: impl Into<egui::WidgetText>) -> bool {
     ui.add(egui::Label::new(text).sense(egui::Sense::click())).double_clicked()
 }
 
 /// A Settings field-row's own label (e.g. "Account name:", "Username:") --
-/// muted rather than plain `palette.ink`, so it visually recedes behind the
-/// actual input text next to it. Without this, both the label and a
-/// `TextEdit`'s typed content fall back to the same `override_text_color`
-/// (see `theme.rs::apply_style`) and render in the literal same color,
-/// making them hard to tell apart at a glance.
+/// muted rather than plain `palette.ink`. See `docs/crates/ui.md`'s Theming
+/// section for why (a real contrast bug this fixed).
 pub(crate) fn field_label(ui: &mut Ui, palette: &Palette, text: &str) {
     ui.label(RichText::new(text).color(palette.ink_muted));
 }
@@ -170,13 +158,11 @@ pub(crate) fn search_field(
 }
 
 /// A small "(i)" marker that reveals `text` as a tooltip on hover --
-/// Settings' replacement for always-visible small-gray-text footnotes
-/// ("Applies immediately -- no restart needed.", etc.), so each
-/// section/field reads as one line with the explanation tucked away
-/// instead of a wall of captions. Plain text, not
-/// `egui_phosphor::regular::INFO` -- that codepoint is one of the broken
-/// ones in the bundled icon font (see `theme.rs`'s module doc); it
-/// silently rendered as scattered dots instead of a circled "i".
+/// Settings' replacement for always-visible small-gray-text footnotes, so
+/// each section/field reads as one line with the explanation tucked away.
+/// Plain text, not `egui_phosphor::regular::INFO` -- see `theme.rs`'s module
+/// doc / docs/crates/ui.md's Theming section for why that codepoint is unsafe
+/// to use.
 pub(crate) fn info_hint(ui: &mut Ui, palette: &Palette, text: &str) {
     ui.label(RichText::new("(i)").font(egui::FontId::new(10.5, egui::FontFamily::Monospace)).color(palette.ink_muted))
         .on_hover_text(text);
@@ -234,13 +220,9 @@ pub(crate) fn empty_state(ui: &mut Ui, palette: &Palette, text: &str) {
 }
 
 /// Scopes `visuals.selection.bg_fill` to `palette.link` (blue) for whatever
-/// `add_contents` adds -- `egui::TextEdit`'s own selected-text-range
-/// highlight reads this same field the tab-bar/list "selected" chrome does
-/// (`theme::apply_style` sets it to `palette.surface_hover`, grey, per the
-/// v3.1 "grey chrome" decision), so this is scoped to just the text field
-/// rather than changed globally -- `ui.scope` automatically restores
-/// whatever the style was before once `add_contents` returns, so there's no
-/// separate "reset" value to keep in sync with `apply_style`'s own.
+/// `add_contents` adds, for a text field's own selection highlight -- see
+/// `docs/crates/ui.md`'s Theming section for why this needs to differ from
+/// `apply_style`'s global (grey) chrome selection color.
 pub(crate) fn text_edit_scope<R>(ui: &mut Ui, palette: &Palette, add_contents: impl FnOnce(&mut Ui) -> R) -> R {
     ui.scope(|ui| {
         ui.visuals_mut().selection.bg_fill = palette.link;
@@ -249,13 +231,10 @@ pub(crate) fn text_edit_scope<R>(ui: &mut Ui, palette: &Palette, add_contents: i
     .inner
 }
 
-/// `egui::Slider` draws its rail using `visuals.widgets.inactive.bg_fill` --
-/// this theme sets that to `palette.surface` (plain white) so ordinary
-/// buttons/comboboxes read as flat chrome, but that leaves every slider's
-/// rail invisible against a `surface`-colored card (just a bare circle
-/// handle, no track). Scoped to just the slider so it doesn't touch any
-/// other widget sharing the same `ui`. Shared by the Dialer's in/out gain
-/// sliders and Settings' ringtone-volume slider.
+/// Scopes `visuals.widgets.inactive.bg_fill` to `palette.border` for just a
+/// slider -- see `docs/crates/ui.md`'s Theming section for the rail-visibility
+/// bug this works around. Shared by the Dialer's in/out gain sliders and
+/// Settings' ringtone-volume slider.
 pub(crate) fn styled_slider(ui: &mut Ui, palette: &Palette, slider: egui::Slider<'_>) -> egui::Response {
     ui.scope(|ui| {
         ui.visuals_mut().widgets.inactive.bg_fill = palette.border;

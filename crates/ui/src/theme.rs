@@ -163,13 +163,8 @@ pub fn card_frame(palette: &Palette) -> egui::Frame {
 
 /// `card_frame(palette).show(ui, |ui| { ui.set_width(ui.available_width()); ... })`
 /// in one call -- every call site across Dialer/Settings paired the two
-/// identically, so this just removes that boilerplate (and the risk of a
-/// site forgetting the `set_width`, which would leave the card sized to its
-/// content instead of the full row). Takes `palette` by value (it's `Copy`)
-/// rather than `&Palette`: call sites that also read `self` inside
-/// `add_contents` (most of them) would otherwise hit a borrow conflict
-/// between `&self.palette` and the closure capturing `self` mutably, since
-/// both are evaluated as part of the same call.
+/// identically, so this just removes that boilerplate. Takes `palette` by
+/// value, not `&Palette` -- see `docs/crates/ui.md`'s Theming section for why.
 pub fn full_width_card<R>(ui: &mut egui::Ui, palette: Palette, add_contents: impl FnOnce(&mut egui::Ui) -> R) -> R {
     card_frame(&palette)
         .show(ui, |ui| {

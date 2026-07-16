@@ -1,10 +1,8 @@
 //! The account editor: header (add/remove/pick account) stays here since it
 //! runs before any per-account borrow is taken; the account-editing card's
 //! sections split into `identity.rs`/`codecs.rs`/`call_handling.rs`/
-//! `dial_plan.rs`/`network.rs` -- see `identity.rs`'s doc comment for why
-//! those are free functions taking `&mut SipAccount` rather than this
-//! crate's usual `impl DeelipApp`-per-file split (same precedent otherwise:
-//! `views/dialer/`, `sip-core/src/call/lifecycle/`).
+//! `dial_plan.rs`/`network.rs` as free functions taking `&mut SipAccount` --
+//! see `docs/crates/ui.md`'s Settings section for why.
 
 mod call_handling;
 mod codecs;

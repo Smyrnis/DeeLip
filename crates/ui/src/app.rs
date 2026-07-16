@@ -238,14 +238,8 @@ pub(crate) struct SettingsUiState {
 pub(crate) struct ContactsState {
     pub(crate) contacts: ContactBook,
     pub(crate) contact_search: String,
-    /// Cache of `contact_search`/`contacts.contacts.len()` as last used to
-    /// compute `contact_filtered` -- same "recompute only when actually
-    /// stale" idiom as `history_filter_key`/`history_filtered`. Without
-    /// this, `ContactBook::search` re-lowercased every contact's
-    /// name+URI on every single frame the Contacts tab was open, even
-    /// while idle. An in-place edit (same length) explicitly invalidates
-    /// this in `finish_contact_dialog`, since the length alone can't
-    /// detect that case.
+    /// Cache-and-compare key for `contact_filtered` -- see `docs/crates/ui.md`'s
+    /// "List views" section for the idiom this mirrors from `history_filter_key`.
     pub(crate) contact_filter_key: Option<(String, usize)>,
     /// Indices into `contacts.contacts` matching the current search.
     pub(crate) contact_filtered: Vec<usize>,
@@ -269,12 +263,8 @@ pub(crate) struct HistoryState {
     pub(crate) history_search: String,
     /// `None` = show every status.
     pub(crate) history_status_filter: Option<CallStatus>,
-    /// Cache of `history_search`/`history_status_filter`/`history.records.len()`
-    /// as last used to compute `history_filtered`, so a search string that
-    /// allocates a lowercased copy of every record's URI isn't redone on
-    /// every single frame (egui repaints continuously, and much faster than
-    /// that during a scroll drag) -- only recomputed when one of the three
-    /// actually changes. Mirrors the existing `audio_device_cache` idiom.
+    /// Cache-and-compare key for `history_filtered` -- see `docs/crates/ui.md`'s
+    /// "List views" section.
     pub(crate) history_filter_key: Option<(String, Option<CallStatus>, usize)>,
     /// Indices into `history.records` matching the current search/status
     /// filter, most-recent-first (same order as `history.records` itself).
@@ -309,12 +299,8 @@ pub(crate) struct TrayState {
     /// mirrored to the tray icon's badge (see `sync_tray_badge`) whenever
     /// it changes; reset to 0 on switching to the History tab.
     pub(crate) unseen_missed_calls: u32,
-    /// `(account, call_id)` for every entry in `calls`/`pending_call` as
-    /// last mirrored into the tray's `QuitState` -- lets
-    /// `process_tray_events` skip re-cloning Senders/call-ids and re-locking
-    /// the shared state on every frame when nothing has actually changed
-    /// since the last one. Mirrors `audio_device_cache`'s cache-and-compare
-    /// idiom.
+    /// Cache-and-compare key mirroring `calls`/`pending_call` into the tray's
+    /// `QuitState` -- see `docs/crates/ui.md`'s "List views" section for this idiom.
     pub(crate) tray_calls_key: Vec<(usize, String)>,
     pub(crate) tray_pending_key: Option<(usize, String)>,
 }
@@ -402,12 +388,8 @@ pub(crate) struct PendingAccept {
 }
 
 /// A not-yet-answered outgoing call — at most one at a time (placing a 2nd
-/// outbound call is blocked while this is `Some`). Which account it's on
-/// doesn't need to be stored here: `CallConnected`/`CallFailed` already carry
-/// that as the account index tagged onto the event itself. SDP/codec/ICE/
-/// TURN are entirely `SipStack`'s business now (see `deelip_sip::media_setup`)
-/// — this just tracks enough to build history/`CallSlot` once `CallConnected`
-/// arrives.
+/// outbound call is blocked while this is `Some`). Tracks just enough to
+/// build history/`CallSlot` once `CallConnected` arrives.
 pub(crate) struct PendingOutbound {
     pub(crate) remote_uri: String,
     pub(crate) start_time: u64,
@@ -416,8 +398,8 @@ pub(crate) struct PendingOutbound {
 /// A confirmed (connected) call — held or focused. Only the focused call has
 /// a live `MediaEngine`; a held call keeps just enough state here to restart
 /// media if the user swaps back to it. `media` is the already-negotiated
-/// state handed over by `SipStack` in `SipEvent::CallConnected` -- codec/
-/// SRTP/ICE/TURN resolution all happened there, not here.
+/// state handed over by `SipStack` in `SipEvent::CallConnected` (see
+/// `media.rs`).
 pub(crate) struct CallSlot {
     pub(crate) account: usize,
     pub(crate) call_id: String,
@@ -458,13 +440,8 @@ pub(crate) struct VideoViewCache {
 }
 
 /// One result of the background account-spawn task `main()` starts before
-/// `eframe::run_native` (see that doc comment) -- registering every enabled
-/// account used to block the window from ever appearing (an unreachable
-/// server's DNS/TCP/TLS connect could hang indefinitely), so spawning now
-/// happens off to the side and reports back through this channel instead.
-/// `Done` marks the end of the batch (every enabled account attempted,
-/// success or not) so `DeelipApp` can stop showing "connecting" once
-/// nothing more is coming -- see `process_account_spawn_events`.
+/// `eframe::run_native` -- see `docs/crates/ui.md`'s "Platform integration" section
+/// for why this is off-thread and what `Done` means. See `process_account_spawn_events`.
 pub enum AccountSpawnMsg {
     // `SipAccount` is large (500+ bytes) relative to `Done`'s zero -- boxed
     // to keep the enum itself small (clippy::large_enum_variant).

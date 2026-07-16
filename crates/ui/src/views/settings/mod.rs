@@ -1,12 +1,8 @@
 //! Settings window: one file per tab (general/account/audio/video/network/
-//! directory/hotkeys/advanced), all still just `impl DeelipApp` blocks --
-//! the split is purely organizational (mirrors
-//! `sip-core/src/call/lifecycle/`'s same multi-file-single-impl pattern;
-//! cross-file inherent-method calls like `self.show_account_section(...)`
-//! work regardless of which file defines the method). This file keeps only
-//! the shared scaffolding: opening the pop-out window, the tab-strip/
-//! dispatch logic, and a few small field-editing helpers used across more
-//! than one tab.
+//! directory/hotkeys/advanced) -- see this crate's Architecture notes for why
+//! the split is purely organizational. This file keeps only the shared
+//! scaffolding: opening the pop-out window, the tab-strip/dispatch logic, and
+//! a few small field-editing helpers used across more than one tab.
 
 mod account;
 mod advanced;
@@ -25,11 +21,9 @@ use crate::strings::t;
 use crate::theme::Palette;
 
 /// Shared between `show_settings_modal` (which opens the viewport under
-/// this id) and the background device-scan spawns in `audio.rs`/`video.rs`
-/// (which need the same id to wake *this* viewport specifically, not just
-/// `ROOT` -- see their own doc comments for why waking only `ROOT` left this
-/// window showing stale "Scanning..." text until the user happened to
-/// interact with it directly).
+/// this id) and the background device-scan spawns in `audio.rs`/`video.rs`,
+/// which need the same id to wake *this* viewport specifically -- see
+/// `docs/crates/ui.md`'s Settings section for why.
 const SETTINGS_VIEWPORT_NAME: &str = "deelip_settings_window";
 
 impl DeelipApp {
