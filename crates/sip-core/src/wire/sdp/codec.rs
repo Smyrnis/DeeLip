@@ -118,3 +118,7 @@ impl AudioCodec {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/unit/codec.rs"]
+mod tests;

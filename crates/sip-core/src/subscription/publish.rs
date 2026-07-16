@@ -186,3 +186,7 @@ impl SipStack {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/publish.rs"]
+mod tests;

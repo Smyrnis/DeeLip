@@ -46,3 +46,7 @@ impl SharedSecretStore for MemorySharedSecretStore {
         self.entries.remove(&(local_zid, remote_zid));
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/zrtp/cache.rs"]
+mod tests;
