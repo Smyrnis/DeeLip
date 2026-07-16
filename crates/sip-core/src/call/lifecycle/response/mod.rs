@@ -15,7 +15,7 @@ use std::net::SocketAddr;
 use tracing::debug;
 
 use crate::{
-    call::dialog::{DialogState, PendingOfferMedia},
+    call::dialog::{Dialog, DialogState, PendingOfferMedia},
     client::SipStack,
     events::SipEvent,
     wire::message::{SipMessage, SipMethod},
@@ -177,11 +177,7 @@ impl SipStack {
                                     // callee side -- see docs/crates/sip-core.md's
                                     // "Dialog::remote_contact must be populated on the caller
                                     // side too" note (a real bug, confirmed live).
-                                    dialog.remote_contact = msg
-                                        .header("Contact")
-                                        .and_then(crate::wire::util::parse_uri)
-                                        .and_then(|uri| crate::wire::util::uri_host_port(&uri))
-                                        .map(|(host, port)| format!("{host}:{port}"));
+                                    dialog.remote_contact = Dialog::parse_remote_contact(msg.header("Contact"));
                                     Act::Connected {
                                         call_id: dialog.call_id.clone(),
                                         remote_sdp: dialog.remote_sdp.clone().unwrap_or_default(),

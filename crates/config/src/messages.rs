@@ -60,3 +60,7 @@ impl MessageLog {
         self.messages.truncate(200);
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/messages.rs"]
+mod tests;

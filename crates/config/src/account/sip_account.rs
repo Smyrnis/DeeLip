@@ -9,7 +9,7 @@ use crate::dialplan::DialPlanRule;
 
 // ── SIP account ───────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SipAccount {
     pub username: String,
     pub password: String,

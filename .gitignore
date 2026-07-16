@@ -1,4 +1,20 @@
+# Ignore the autocreated rust files
 /target
+
+# Ignore the node autocreated files
 /node_modules
+
+# Ignore the vitepress autocreated files
 /pages/.vitepress/cache
 /pages/.vitepress/dist
+
+# Ignore IDE and Text editors autocreated files
+
+# Zed editor
+.zed
+
+# Vscode editor
+.vscode
+
+# Intellij IDE
+.idea

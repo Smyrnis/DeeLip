@@ -241,4 +241,23 @@ impl Dialog {
         self.local_cseq += 1;
         self.local_cseq
     }
+
+    /// Extract `host:port` from a caller-side 200 OK's own `Contact:` header
+    /// value, for `Dialog::remote_contact` -- split out of `on_response`'s
+    /// `Act::Connected` handling so the caller-side capture (see
+    /// docs/crates/sip-core.md's "Dialog::remote_contact must be populated on
+    /// the caller side too" note -- a real bug this project hit live) is
+    /// directly testable without a live `SipStack`. Mirrors what
+    /// `incoming.rs::on_invite` already captures from the source address on
+    /// the callee side.
+    pub(crate) fn parse_remote_contact(contact_header: Option<&str>) -> Option<String> {
+        contact_header
+            .and_then(crate::wire::util::parse_uri)
+            .and_then(|uri| crate::wire::util::uri_host_port(&uri))
+            .map(|(host, port)| format!("{host}:{port}"))
+    }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/dialog.rs"]
+mod tests;

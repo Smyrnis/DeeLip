@@ -76,19 +76,14 @@ impl SipStack {
     /// `public_address` is set (an explicit override always wins) or the
     /// response carries no `received=` param (e.g. no NAT in the path).
     fn maybe_rewrite_advertised_ip(&mut self, resp: &SipMessage) {
-        if !self.account.allow_ip_rewrite || self.account.public_address.is_some() {
-            return;
-        }
-        let Some(via) = resp.header("Via") else {
-            return;
-        };
-        let (received, _rport) = parse_via_received(via);
-        let Some(ip) = received else {
-            return;
-        };
-        if ip != self.advertised_ip {
-            info!("Allow IP Rewrite: advertised address {} -> {ip}", self.advertised_ip);
-            self.advertised_ip = ip;
+        if let Some(new_ip) = resolve_ip_rewrite(
+            &self.advertised_ip,
+            self.account.allow_ip_rewrite,
+            self.account.public_address.is_some(),
+            resp.header("Via"),
+        ) {
+            info!("Allow IP Rewrite: advertised address {} -> {new_ip}", self.advertised_ip);
+            self.advertised_ip = new_ip;
         }
     }
 
@@ -162,3 +157,23 @@ impl SipStack {
         }
     }
 }
+
+/// Pure decision for `SipAccount::allow_ip_rewrite`'s NAT self-discovery:
+/// given the currently advertised IP, the account's rewrite/override
+/// settings, and a response's raw `Via:` header (if any), decide the new
+/// advertised IP, if it should change. Split out of `maybe_rewrite_advertised_ip`
+/// so this is directly testable without a live registrar round-trip/`SipStack`.
+fn resolve_ip_rewrite(
+    current_advertised_ip: &str, allow_ip_rewrite: bool, public_address_is_set: bool, via: Option<&str>,
+) -> Option<String> {
+    if !allow_ip_rewrite || public_address_is_set {
+        return None;
+    }
+    let (received, _rport) = parse_via_received(via?);
+    let ip = received?;
+    if ip != current_advertised_ip { Some(ip) } else { None }
+}
+
+#[cfg(test)]
+#[path = "../tests/unit/registration.rs"]
+mod tests;

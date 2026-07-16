@@ -95,3 +95,7 @@ fn insert_kv(map: &mut HashMap<String, String>, s: &str) {
         map.insert(key, value);
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/auth.rs"]
+mod tests;

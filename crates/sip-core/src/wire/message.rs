@@ -177,3 +177,7 @@ impl SipMessage {
         Some((seq, method))
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/message.rs"]
+mod tests;
