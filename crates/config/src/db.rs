@@ -202,6 +202,25 @@ impl Db {
         Ok(())
     }
 
+    /// Test-only constructor: opens (creating if necessary) a database at an
+    /// explicit path, running schema creation/column migration like
+    /// `open_default` but *without* the legacy-file import/default-account
+    /// seeding it does on a fresh profile -- that step reads from the real
+    /// `deelip_dir()`, which would make tests depend on whatever (if
+    /// anything) happens to exist on the machine running them. Callers get a
+    /// deterministic, schema-only empty database instead.
+    #[cfg(test)]
+    pub(crate) fn open_at(path: &std::path::Path) -> anyhow::Result<Self> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).with_context(|| format!("Creating db dir {}", parent.display()))?;
+        }
+        let conn = Connection::open(path).with_context(|| format!("Opening database at {}", path.display()))?;
+        conn.execute_batch(SCHEMA).context("Creating database schema")?;
+        let db = Db { conn };
+        db.migrate_accounts_columns().context("Migrating accounts table columns")?;
+        Ok(db)
+    }
+
     pub(crate) fn get_setting(&self, key: &str) -> Option<String> {
         self.conn.query_row("SELECT value FROM settings WHERE key = ?1", [key], |row| row.get(0)).ok()
     }
@@ -268,3 +287,7 @@ pub(crate) fn sql_to_bool(s: &str) -> bool {
 pub(crate) fn sql_int_to_bool(i: i64) -> bool {
     i != 0
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/db.rs"]
+mod tests;

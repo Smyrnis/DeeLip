@@ -284,3 +284,7 @@ impl AppConfig {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/account_db.rs"]
+mod tests;

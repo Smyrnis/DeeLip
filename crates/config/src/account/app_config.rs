@@ -320,3 +320,7 @@ fn parse_zid_hex(hex: &str) -> Option<[u8; 12]> {
     }
     Some(bytes)
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/app_config.rs"]
+mod tests;

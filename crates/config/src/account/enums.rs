@@ -268,3 +268,7 @@ pub(super) fn language_from_str(_s: &str) -> Language {
     // this function's call sites.
     Language::En
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/enums.rs"]
+mod tests;

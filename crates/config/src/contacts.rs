@@ -95,40 +95,5 @@ fn normalize_uri_for_match(uri: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn contact(name: &str, sip_uri: &str) -> Contact {
-        Contact { name: name.to_string(), sip_uri: sip_uri.to_string(), watch_presence: false, presence_account: None }
-    }
-
-    #[test]
-    fn find_by_uri_exact_match() {
-        let book = ContactBook { contacts: vec![contact("Bob", "sip:600@127.0.0.1")] };
-        assert_eq!(book.find_by_uri("sip:600@127.0.0.1").unwrap().name, "Bob");
-    }
-
-    #[test]
-    fn find_by_uri_ignores_case() {
-        let book = ContactBook { contacts: vec![contact("Bob", "sip:Bob@Example.com")] };
-        assert_eq!(book.find_by_uri("SIP:bob@example.com").unwrap().name, "Bob");
-    }
-
-    #[test]
-    fn find_by_uri_ignores_trailing_params() {
-        let book = ContactBook { contacts: vec![contact("Bob", "sip:600@127.0.0.1")] };
-        assert_eq!(book.find_by_uri("sip:600@127.0.0.1;user=phone").unwrap().name, "Bob");
-    }
-
-    #[test]
-    fn find_by_uri_ignores_explicit_default_port() {
-        let book = ContactBook { contacts: vec![contact("Bob", "sip:600@127.0.0.1")] };
-        assert_eq!(book.find_by_uri("sip:600@127.0.0.1:5060").unwrap().name, "Bob");
-    }
-
-    #[test]
-    fn find_by_uri_no_match_returns_none() {
-        let book = ContactBook { contacts: vec![contact("Bob", "sip:600@127.0.0.1")] };
-        assert!(book.find_by_uri("sip:700@127.0.0.1").is_none());
-    }
-}
+#[path = "../tests/unit/contacts.rs"]
+mod tests;

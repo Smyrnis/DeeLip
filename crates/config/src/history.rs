@@ -95,3 +95,7 @@ impl CallHistory {
         self.records.truncate(200);
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/history.rs"]
+mod tests;
