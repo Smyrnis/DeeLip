@@ -1,11 +1,6 @@
-//! Outgoing presence PUBLISH (RFC 3903) -- the mirror image of
-//! `presence.rs`'s SUBSCRIBE/NOTIFY: instead of watching *someone else's*
-//! status, this publishes *our own* to the server, gated behind
-//! `SipAccount::publish_presence`. A standalone request/response
-//! transaction refreshed on its own timer, same shape as
-//! `PresenceSubscription`/`MwiSubscription`, but with an `etag` instead of
-//! a remote dialog tag (RFC 3903's `SIP-ETag`/`SIP-If-Match` identify which
-//! published event state a request refers to).
+//! Outgoing presence PUBLISH (RFC 3903), gated behind
+//! `SipAccount::publish_presence`. See docs/crates/sip-core.md's
+//! "Subscriptions" section for how this relates to `presence.rs`.
 
 use tokio::time::{Duration, Instant};
 use tracing::{debug, error};
@@ -100,12 +95,13 @@ impl SipStack {
         let local_port = self.local_port;
         let display = self.account.display_name.as_deref().unwrap_or(username);
         let via_proto = self.via_proto();
+        let via_line = crate::client::build_via(via_proto, local_ip, local_port, &branch);
         let body_len = body.len();
         let user_agent = crate::USER_AGENT;
 
         let mut msg = format!(
             "PUBLISH {entity} SIP/2.0\r\n\
-             Via: SIP/2.0/{via_proto} {local_ip}:{local_port};branch={branch};rport\r\n\
+             {via_line}\
              Max-Forwards: 70\r\n\
              To: <{entity}>\r\n\
              From: \"{display}\" <sip:{username}@{server}>;tag={from_tag}\r\n\
@@ -190,3 +186,7 @@ impl SipStack {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/publish.rs"]
+mod tests;

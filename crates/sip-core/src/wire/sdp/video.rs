@@ -6,7 +6,8 @@
 
 use std::net::SocketAddr;
 
-use super::build::{IceAttrs, crypto_lines, ice_lines, savp_profile};
+use super::build::{IceAttrs, crypto_lines, fingerprint_setup_lines, ice_lines, savp_profile};
+use super::dtls::{DtlsFingerprint, Setup};
 use super::srtp::SrtpParams;
 
 /// Negotiated video codec. H.264 only for now (via the `openh264` crate,
@@ -71,6 +72,12 @@ pub struct ParsedVideoMedia {
     pub ice_ufrag: Option<String>,
     pub ice_pwd: Option<String>,
     pub ice_candidates: Vec<String>,
+    /// Present only for consistency-checking against the audio section's
+    /// own fingerprint/setup -- DTLS-SRTP is negotiated once per call (see
+    /// `DtlsCallParams`'s doc comment), never re-negotiated per media
+    /// section, so this never drives a second handshake.
+    pub fingerprint: Option<DtlsFingerprint>,
+    pub setup: Option<Setup>,
 }
 
 /// Build just a `m=video ...` block, its own `c=` line, and its own `a=`
@@ -84,20 +91,24 @@ pub struct ParsedVideoMedia {
 /// cleanly onto `build_offer`'s/`build_answer`'s existing output -- see
 /// `call/lifecycle/outgoing.rs::prepare_video_offer`/
 /// `incoming.rs::prepare_video_answer` for where that concatenation happens.
+#[allow(clippy::too_many_arguments)]
 pub fn build_video_media_section(
     local_ip: &str, rtp_port: u16, codec: VideoCodec, srtp: Option<&SrtpParams>, ice: Option<&IceAttrs>,
+    dtls_fp: Option<&DtlsFingerprint>, dtls_setup: Option<Setup>,
 ) -> String {
-    let profile = savp_profile(srtp);
+    let profile = savp_profile(srtp, dtls_fp);
     let pt = codec.payload_type();
     format!(
         "m=video {rtp_port} {profile} {pt}\r\n\
          c=IN IP4 {local_ip}\r\n\
          {codec_lines}\
          {crypto}\
+         {fingerprint_setup}\
          {ice_lines}\
          a=sendrecv\r\n",
         codec_lines = video_rtpmap_and_fmtp_lines(codec),
         crypto = crypto_lines(srtp),
+        fingerprint_setup = fingerprint_setup_lines(dtls_fp, dtls_setup),
         ice_lines = ice_lines(ice),
     )
 }
@@ -126,6 +137,17 @@ pub fn split_media_sections(sdp: &str) -> Vec<(&str, Vec<&str>)> {
     sections
 }
 
+/// Whether an `a=rtpmap` name matches `codec`'s expected rtpmap prefix --
+/// an exhaustive match over `VideoCodec` (not an if/else over the raw
+/// string), so a future second variant forces a new arm here rather than
+/// silently falling through. See `resolve` (in `parse_video_section`) for
+/// the one call site.
+fn matches_rtpmap_name(codec: VideoCodec, name: &str) -> bool {
+    match codec {
+        VideoCodec::H264 => name.starts_with("h264"),
+    }
+}
+
 /// Parse one already-isolated video section (as produced by
 /// `split_media_sections`) into a `ParsedVideoMedia`. `m_line` is the raw
 /// `"m=video <port> <profile> <pt...>"` line; `attr_lines` are that
@@ -146,6 +168,8 @@ pub fn parse_video_section(m_line: &str, attr_lines: &[&str], allowed: &[VideoCo
     let mut ice_ufrag: Option<String> = None;
     let mut ice_pwd: Option<String> = None;
     let mut ice_candidates: Vec<String> = Vec::new();
+    let mut fingerprint: Option<DtlsFingerprint> = None;
+    let mut setup: Option<Setup> = None;
 
     for line in attr_lines {
         let line = line.trim();
@@ -168,6 +192,12 @@ pub fn parse_video_section(m_line: &str, attr_lines: &[&str], allowed: &[VideoCo
             is_sendonly = true;
         } else if line.starts_with("a=crypto:") && srtp.is_none() {
             srtp = SrtpParams::parse_crypto_line(line);
+        } else if line.starts_with("a=fingerprint:") && fingerprint.is_none() {
+            fingerprint = DtlsFingerprint::parse_line(line);
+        } else if let Some(val) = line.strip_prefix("a=setup:")
+            && setup.is_none()
+        {
+            setup = Setup::parse(val);
         }
     }
 
@@ -176,10 +206,21 @@ pub fn parse_video_section(m_line: &str, attr_lines: &[&str], allowed: &[VideoCo
 
     let resolve = |pt: u8| -> Option<VideoCodec> {
         let (_, name) = rtpmaps.iter().find(|(p, _)| *p == pt)?;
-        if name.starts_with("h264") { Some(VideoCodec::H264) } else { None }
+        [VideoCodec::H264].into_iter().find(|&c| matches_rtpmap_name(c, name))
     };
     let (codec, payload_type) =
         pt_list.iter().find_map(|&pt| resolve(pt).filter(|c| allowed.contains(c)).map(|c| (c, pt)))?;
 
-    Some(ParsedVideoMedia { rtp_addr, codec, payload_type, is_sendonly, srtp, ice_ufrag, ice_pwd, ice_candidates })
+    Some(ParsedVideoMedia {
+        rtp_addr,
+        codec,
+        payload_type,
+        is_sendonly,
+        srtp,
+        ice_ufrag,
+        ice_pwd,
+        ice_candidates,
+        fingerprint,
+        setup,
+    })
 }

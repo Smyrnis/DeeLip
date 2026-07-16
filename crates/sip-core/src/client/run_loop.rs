@@ -21,6 +21,9 @@ impl SipStack {
         }
         let mut reregister_at = Instant::now();
         let mut retry_delay = Duration::from_secs(5);
+        // See `PermanentRegError` -- once set, the `sleep_until` branch below
+        // never re-arms for this account again; everything else keeps working.
+        let mut permanently_failed = false;
         let mut presence_tick = interval(PRESENCE_TICK);
         // NAT/firewall keepalive -- only ticks when the account has one
         // configured; `if keepalive_tick.is_some()` below guards the whole
@@ -45,7 +48,7 @@ impl SipStack {
                 // send inside it) means `reregister_at`'s initial
                 // `Instant::now()` never fires and no retry/backoff
                 // machinery for it ever engages either.
-                _ = sleep_until(reregister_at), if !self.account.local_account => {
+                _ = sleep_until(reregister_at), if !self.account.local_account && !permanently_failed => {
                     match self.register_once().await {
                         Ok(expires) => {
                             retry_delay   = Duration::from_secs(5);
@@ -60,12 +63,18 @@ impl SipStack {
                             }
                         }
                         Err(e) => {
+                            let permanent = e.downcast_ref::<crate::registration::PermanentRegError>().is_some();
                             error!("Registration failed: {e}");
                             let _ = self.event_tx.send(SipEvent::RegistrationFailed {
                                 reason: e.to_string(),
+                                permanent,
                             });
-                            reregister_at = Instant::now() + retry_delay;
-                            retry_delay   = (retry_delay * 2).min(MAX_RETRY);
+                            if permanent {
+                                permanently_failed = true;
+                            } else {
+                                reregister_at = Instant::now() + retry_delay;
+                                retry_delay   = (retry_delay * 2).min(MAX_RETRY);
+                            }
                         }
                     }
                 }
@@ -78,17 +87,9 @@ impl SipStack {
                         }
                         Err(e) => {
                             error!("Transport error: {e:#}");
-                            // Any call whose dialog was live at the moment the
-                            // transport died is otherwise left to hang from the
-                            // UI's perspective indefinitely (or until Asterisk's
-                            // own retransmit timers eventually give up and send
-                            // a BYE/CANCEL we happen to still be around to
-                            // receive, which can take 20+ seconds) -- the
-                            // in-memory dialog itself is gone the moment
-                            // `spawn`'s reconnect loop rebuilds a fresh
-                            // `SipStack`, so there's no way to recover it either
-                            // way. Fail them immediately instead so the UI
-                            // reflects reality right away.
+                            // See docs/crates/sip-core.md's "Design decisions & invariants"
+                            // section ("A dead transport fails every in-flight call
+                            // immediately") for why every open dialog fails right here.
                             for call_id in self.dialogs.keys().cloned().collect::<Vec<_>>() {
                                 let _ = self.event_tx.send(SipEvent::CallFailed {
                                     call_id, code: 0, reason: "Connection lost".into(),
@@ -142,13 +143,9 @@ impl SipStack {
                     SipMethod::Cancel => self.on_cancel(msg, from).await,
                     SipMethod::Notify => self.on_notify(msg, from).await,
                     SipMethod::Options => self.send_ok(&msg, from).await,
-                    // A peer's own INFO (e.g. Asterisk echoing DTMF back once
-                    // `dtmf_mode=info` is set) doesn't carry anything DeeLip
-                    // needs to act on today, but RFC 6086 still expects a
-                    // response -- leaving it unanswered just makes the sender
-                    // retransmit it several times before giving up, which is
-                    // exactly what was observed live (three "unhandled
-                    // request" log lines for what was really 1-2 messages).
+                    // Must ack INFO even though we act on nothing in it, or
+                    // the sender retransmits it -- see docs/crates/sip-core.md's
+                    // "Answering a peer's own INFO" note.
                     SipMethod::Info => self.send_ok(&msg, from).await,
                     SipMethod::Message => self.on_message(msg, from).await,
                     _ => debug!(?method, "Ignoring unhandled request"),

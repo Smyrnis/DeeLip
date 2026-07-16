@@ -3,10 +3,11 @@
 //! independent construct, deliberately *not* part of `MediaEngine`. Full
 //! picture: `docs/crates/media-engine.md`.
 
+use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::Context;
 use tokio::net::UdpSocket;
@@ -18,30 +19,42 @@ use webrtc_srtp::protection_profile::ProtectionProfile;
 use webrtc_util::Conn;
 
 use deelip_sip::SrtpSession;
-use deelip_sip::sdp::H264_PAYLOAD_TYPE;
+use deelip_sip::sdp::VideoCodec;
 
 use crate::engine::RtpSocket;
 use crate::rtp::{RtpPacket, RtpSender};
-use crate::stats::LegStats;
-use crate::video_codec::{H264Decoder, H264Encoder, Yuv420Frame};
-use crate::video_rtp::{fragment_nal_units, reassemble_nal_units};
+use crate::stats::{JitterTracker, LegStats};
+use crate::video_codec::Yuv420Frame;
+use crate::video_codec_dispatch::{VideoDecoder, VideoEncoder};
+use crate::video_rtp::{fragment_video_frame, reassemble_video_frame};
 
 /// RTP payload fragmentation MTU -- conservative, safely under a typical
 /// 1500-byte Ethernet MTU once IP/UDP/(S)RTP headers are accounted for.
 const RTP_MTU: usize = 1200;
-/// H.264's RTP clock is always 90kHz (RFC 6184), regardless of the actual
-/// capture/encode frame rate.
+/// RFC 6184 (H.264) and RFC 7741 (VP8) both mandate a 90kHz RTP clock --
+/// unlike audio's per-codec-varying clock rate (see
+/// `codec_dispatch::clock_hz_for`), this isn't expected to vary if/when a
+/// second video codec is added, so it stays a plain constant rather than a
+/// `VideoCodec`-keyed function.
 const VIDEO_CLOCK_HZ: u32 = 90_000;
+/// How long `recv_loop` waits with no new packet before flushing whatever
+/// fragments it's holding for the in-progress frame, rather than waiting
+/// forever for a stream that's actually stalled. Comfortably larger than
+/// the gap between frames at any of this app's real framerates (66ms at
+/// 15fps), so it never fires during normal reception -- see
+/// docs/crates/media-engine.md's video jitter-buffering section.
+const STALL_FLUSH: Duration = Duration::from_millis(250);
 
 /// A second RTP leg for the local 3-way conference -- bundles what a video
-/// leg needs beyond `VideoEngine::start`'s existing leg-1 params. Unlike
-/// audio's `ConferenceLeg`, there's no `codec`/`dtmf_pt`: H.264 is the only
-/// video codec and video has no DTMF concept, so this is just the
-/// RTP/SRTP/relay identity of the second remote party's already-negotiated
-/// video leg.
+/// leg needs beyond `VideoEngine::start`'s existing leg-1 params. Mirrors
+/// audio's `ConferenceLeg.codec`: each leg carries its own independently
+/// negotiated `VideoCodec` (today always `H264`, since that's the only
+/// variant, but leg 2 must not be implicitly forced to match leg 1's codec
+/// once a second one exists).
 pub struct VideoConferenceLeg {
     pub local_rtp_port: u16,
     pub remote_rtp: SocketAddr,
+    pub codec: VideoCodec,
     pub srtp: Option<SrtpSession>,
     pub relay: Option<Arc<dyn Conn + Send + Sync>>,
 }
@@ -78,7 +91,7 @@ impl VideoEngine {
     ///   shape. `None` (every non-conference call) is unchanged.
     #[allow(clippy::too_many_arguments)]
     pub async fn start(
-        local_rtp_port: u16, remote_rtp: SocketAddr, srtp: Option<SrtpSession>,
+        local_rtp_port: u16, remote_rtp: SocketAddr, codec: VideoCodec, srtp: Option<SrtpSession>,
         relay: Option<Arc<dyn Conn + Send + Sync>>, frame_source: Arc<Mutex<Option<Yuv420Frame>>>, target_fps: u32,
         bitrate_bps: u32, second_leg: Option<VideoConferenceLeg>,
     ) -> anyhow::Result<Self> {
@@ -115,7 +128,7 @@ impl VideoEngine {
 
         // ── Leg 2 (conference), if present ────────────────────────────────────
         let mut leg2_send: Option<(Arc<RtpSocket>, SocketAddr, Option<SrtpContext>)> = None;
-        let mut leg2_recv: Option<(Arc<RtpSocket>, Option<SrtpContext>)> = None;
+        let mut leg2_recv: Option<(Arc<RtpSocket>, Option<SrtpContext>, VideoCodec, VideoDecoder)> = None;
         if let Some(leg) = second_leg {
             let socket2 = Arc::new(match leg.relay {
                 Some(conn) => RtpSocket::Relay(conn),
@@ -147,8 +160,14 @@ impl VideoEngine {
                 })
                 .transpose()
                 .context("Creating video SRTP decrypt context (leg2)")?;
+            // Constructed here, once, before either task spawns -- see
+            // docs/crates/media-engine.md for why (same as leg 1's
+            // encoder/decoder below). Leg 2 gets its own independent decoder
+            // for its own negotiated `leg.codec`; it never gets an encoder
+            // (the encode is shared from leg 1, see `send_loop`'s `sender2`).
+            let decoder2 = VideoDecoder::new(leg.codec).context("Creating video decoder (leg2)")?;
             leg2_send = Some((socket2.clone(), leg.remote_rtp, leg2_encrypt_ctx));
-            leg2_recv = Some((socket2, leg2_decrypt_ctx));
+            leg2_recv = Some((socket2, leg2_decrypt_ctx, leg.codec, decoder2));
         }
 
         let (stop_tx, stop_rx) = watch::channel(false);
@@ -157,12 +176,20 @@ impl VideoEngine {
         let latest_decoded_frame2: Arc<Mutex<Option<Yuv420Frame>>> = Arc::new(Mutex::new(None));
         let video_muted = Arc::new(AtomicBool::new(false));
 
+        // Constructed once here, before either task spawns, and moved in --
+        // a construction failure now fails `start()` itself synchronously
+        // via `?`. See docs/crates/media-engine.md's "Video pipeline"
+        // section for why this is a deliberate behavior change.
+        let encoder = VideoEncoder::new(codec, bitrate_bps).context("Creating video encoder")?;
+        let decoder = VideoDecoder::new(codec).context("Creating video decoder")?;
+
         let send_task = tokio::spawn(Self::send_loop(
             socket.clone(),
             remote_rtp,
+            codec,
+            encoder,
             frame_source,
             target_fps,
-            bitrate_bps,
             encrypt_ctx,
             stats.clone(),
             stop_rx.clone(),
@@ -171,13 +198,23 @@ impl VideoEngine {
         ));
         let recv_task = tokio::spawn(Self::recv_loop(
             socket,
+            codec,
+            decoder,
             decrypt_ctx,
             latest_decoded_frame.clone(),
             stats.clone(),
             stop_rx.clone(),
         ));
-        let recv_task2 = leg2_recv.map(|(socket2, decrypt_ctx2)| {
-            tokio::spawn(Self::recv_loop(socket2, decrypt_ctx2, latest_decoded_frame2.clone(), stats.clone(), stop_rx))
+        let recv_task2 = leg2_recv.map(|(socket2, decrypt_ctx2, codec2, decoder2)| {
+            tokio::spawn(Self::recv_loop(
+                socket2,
+                codec2,
+                decoder2,
+                decrypt_ctx2,
+                latest_decoded_frame2.clone(),
+                stats.clone(),
+                stop_rx,
+            ))
         });
 
         Ok(Self {
@@ -194,28 +231,20 @@ impl VideoEngine {
 
     #[allow(clippy::too_many_arguments)]
     async fn send_loop(
-        socket: Arc<RtpSocket>, remote_rtp: SocketAddr, frame_source: Arc<Mutex<Option<Yuv420Frame>>>, target_fps: u32,
-        bitrate_bps: u32, mut encrypt_ctx: Option<SrtpContext>, stats: Arc<Mutex<LegStats>>,
-        mut stop_rx: watch::Receiver<bool>, video_muted: Arc<AtomicBool>,
+        socket: Arc<RtpSocket>, remote_rtp: SocketAddr, codec: VideoCodec, mut encoder: VideoEncoder,
+        frame_source: Arc<Mutex<Option<Yuv420Frame>>>, target_fps: u32, mut encrypt_ctx: Option<SrtpContext>,
+        stats: Arc<Mutex<LegStats>>, mut stop_rx: watch::Receiver<bool>, video_muted: Arc<AtomicBool>,
         mut leg2: Option<(Arc<RtpSocket>, SocketAddr, Option<SrtpContext>)>,
     ) {
-        let mut encoder = match H264Encoder::new(bitrate_bps) {
-            Ok(e) => e,
-            Err(e) => {
-                warn!("Video send task: failed to create H.264 encoder, giving up: {e:#}");
-                return;
-            }
-        };
+        let payload_type = codec.payload_type();
         let fps = target_fps.max(1);
         // `ts_increment: 0` is deliberate -- see `docs/crates/media-engine.md`'s
         // "Video RTP timestamping" section for why.
-        let mut sender = RtpSender::new(H264_PAYLOAD_TYPE, 0);
-        // Leg 2 (conference) gets its own independent `RtpSender` -- a fresh
-        // random SSRC and its own sequence/timestamp counters, a distinct
-        // RTP session from the receiving party's point of view -- fed the
-        // same encoded fragments as leg 1 every tick, since the encode
-        // itself is shared (one camera, one `H264Encoder`).
-        let mut sender2 = leg2.is_some().then(|| RtpSender::new(H264_PAYLOAD_TYPE, 0));
+        let mut sender = RtpSender::new(payload_type, 0);
+        // Leg 2 (conference) gets its own independent `RtpSender` -- see
+        // docs/crates/media-engine.md's "Conferencing now carries video" for
+        // the SSRC/shared-codec-limitation details.
+        let mut sender2 = leg2.is_some().then(|| RtpSender::new(payload_type, 0));
         let ticks_per_frame = VIDEO_CLOCK_HZ / fps;
         let mut interval = tokio::time::interval(Duration::from_secs_f64(1.0 / fps as f64));
 
@@ -234,7 +263,7 @@ impl VideoEngine {
                     if bitstream.is_empty() {
                         continue;
                     }
-                    let packets = fragment_nal_units(&bitstream, RTP_MTU);
+                    let packets = fragment_video_frame(codec, &bitstream, RTP_MTU);
                     let last = packets.len().saturating_sub(1);
                     for (i, payload) in packets.into_iter().enumerate() {
                         let marker = i == last;
@@ -295,23 +324,21 @@ impl VideoEngine {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn recv_loop(
-        socket: Arc<RtpSocket>, mut decrypt_ctx: Option<SrtpContext>,
+        socket: Arc<RtpSocket>, codec: VideoCodec, mut decoder: VideoDecoder, mut decrypt_ctx: Option<SrtpContext>,
         latest_decoded_frame: Arc<Mutex<Option<Yuv420Frame>>>, stats: Arc<Mutex<LegStats>>,
         mut stop_rx: watch::Receiver<bool>,
     ) {
-        let mut decoder = match H264Decoder::new() {
-            Ok(d) => d,
-            Err(e) => {
-                warn!("Video recv task: failed to create H.264 decoder, giving up: {e:#}");
-                return;
-            }
-        };
-        // Accumulates one frame's worth of fragments in arrival order --
-        // see this module's doc comment on the no-reordering simplification.
-        let mut frame_fragments: Vec<Vec<u8>> = Vec::new();
-        let mut jitter = JitterState::default();
+        // Fragments for the RTP timestamp currently being assembled, keyed
+        // by sequence number so out-of-order arrivals slot into the right
+        // position instead of corrupting reassembly order -- see
+        // docs/crates/media-engine.md's video jitter-buffering section.
+        let mut current_ts: Option<u32> = None;
+        let mut fragments: BTreeMap<u16, Vec<u8>> = BTreeMap::new();
+        let mut jitter = JitterTracker::default();
         let mut buf = vec![0u8; 65_535];
+        let mut stall_check = tokio::time::interval(STALL_FLUSH);
 
         loop {
             tokio::select! {
@@ -336,20 +363,27 @@ impl VideoEngine {
                     let Some(pkt) = RtpPacket::decode(&plain) else { continue };
                     {
                         let mut s = stats.lock().unwrap();
-                        jitter.observe(&mut s, &pkt);
+                        jitter.observe(&mut s, &pkt, VIDEO_CLOCK_HZ as f64);
                         s.packets_received += 1;
                         s.bytes_received += plain.len() as u64;
                     }
-                    let marker = pkt.marker;
-                    frame_fragments.push(pkt.payload);
-                    if marker {
-                        let annex_b = reassemble_nal_units(&frame_fragments);
-                        frame_fragments.clear();
-                        match decoder.decode(&annex_b) {
-                            Ok(Some(frame)) => *latest_decoded_frame.lock().unwrap() = Some(frame),
-                            Ok(None) => {}
-                            Err(e) => warn!("Video decode failed: {e:#}"),
-                        }
+                    if current_ts != Some(pkt.timestamp) {
+                        // A packet for a different frame arrived -- whatever
+                        // we'd accumulated for the previous timestamp is
+                        // everything we're ever going to get, marker or not.
+                        flush_frame(codec, &mut fragments, &mut decoder, &latest_decoded_frame);
+                        current_ts = Some(pkt.timestamp);
+                    }
+                    fragments.insert(pkt.sequence, pkt.payload);
+                    stall_check.reset();
+                }
+                _ = stall_check.tick() => {
+                    // Safety net: nothing arrived for a while (stream
+                    // stalled, or the call is ending) -- flush whatever's
+                    // pending instead of holding the last frame forever.
+                    if current_ts.is_some() {
+                        flush_frame(codec, &mut fragments, &mut decoder, &latest_decoded_frame);
+                        current_ts = None;
                     }
                 }
                 Ok(()) = stop_rx.changed() => {
@@ -400,39 +434,23 @@ impl VideoEngine {
     }
 }
 
-/// Per-recv-task loss/jitter tracking -- mirrors `engine.rs`'s private
-/// `JitterTracker` (not shared cross-module since it's ~15 lines and the
-/// two engines otherwise have no reason to depend on each other).
-#[derive(Default)]
-struct JitterState {
-    last_seq: Option<u16>,
-    last_arrival: Option<Instant>,
-    last_rtp_ts: Option<u32>,
-}
-
-impl JitterState {
-    fn observe(&mut self, stats: &mut LegStats, pkt: &RtpPacket) {
-        if let Some(prev) = self.last_seq {
-            let expected = prev.wrapping_add(1);
-            if pkt.sequence != expected {
-                let gap = pkt.sequence.wrapping_sub(expected);
-                if gap < 1000 {
-                    stats.packets_lost += gap as u64;
-                }
-            }
-        }
-        self.last_seq = Some(pkt.sequence);
-
-        let now = Instant::now();
-        if let (Some(prev_arrival), Some(prev_ts)) = (self.last_arrival, self.last_rtp_ts) {
-            let arrival_diff_ms = now.duration_since(prev_arrival).as_secs_f64() * 1000.0;
-            let rtp_diff_ms =
-                (pkt.timestamp as i64 - prev_ts as i64).unsigned_abs() as f64 / VIDEO_CLOCK_HZ as f64 * 1000.0;
-            let d = (arrival_diff_ms - rtp_diff_ms).abs();
-            stats.jitter_ms += (d - stats.jitter_ms) / 16.0;
-        }
-        self.last_arrival = Some(now);
-        self.last_rtp_ts = Some(pkt.timestamp);
+/// Reassemble and decode whatever fragments are pending for the
+/// in-progress frame (sorted by sequence number, ascending -- see
+/// `recv_loop`'s doc comment on why plain numeric order is safe here), then
+/// clear the buffer. A no-op if nothing is pending.
+fn flush_frame(
+    codec: VideoCodec, fragments: &mut BTreeMap<u16, Vec<u8>>, decoder: &mut VideoDecoder,
+    latest_decoded_frame: &Mutex<Option<Yuv420Frame>>,
+) {
+    if fragments.is_empty() {
+        return;
+    }
+    let ordered: Vec<Vec<u8>> = std::mem::take(fragments).into_values().collect();
+    let annex_b = reassemble_video_frame(codec, &ordered);
+    match decoder.decode(&annex_b) {
+        Ok(Some(frame)) => *latest_decoded_frame.lock().unwrap() = Some(frame),
+        Ok(None) => {}
+        Err(e) => warn!("Video decode failed: {e:#}"),
     }
 }
 

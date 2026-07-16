@@ -2,12 +2,31 @@ use anyhow::Context;
 use std::sync::atomic::Ordering;
 use tracing::{debug, info, warn};
 
+use deelip_config::timeouts::REG_RECV_TIMEOUT;
+
 use crate::{
-    client::{REG_RECV_TIMEOUT, SipStack},
+    client::SipStack,
     wire::auth::build_challenge_response,
     wire::message::SipMessage,
     wire::util::{extract_expires, new_branch, parse_via_received},
 };
+
+/// Marks a REGISTER rejection that retrying will never fix on its own --
+/// wrong credentials (403) or an unknown user/domain (404). Downcast out of
+/// the `anyhow::Error` by `client::run_loop::run`'s reconnect loop to stop
+/// silently retrying forever on an error that can never succeed, instead of
+/// treating it the same as a transient network blip. Every other status
+/// code (including 5xx, which genuinely can be transient) keeps today's
+/// plain-string-error, keep-retrying behavior.
+#[derive(Debug)]
+pub(crate) struct PermanentRegError(pub(crate) u16);
+
+impl std::fmt::Display for PermanentRegError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "REGISTER rejected: {} (permanent, won't retry)", self.0)
+    }
+}
+impl std::error::Error for PermanentRegError {}
 
 impl SipStack {
     pub(crate) async fn register_once(&mut self) -> anyhow::Result<u32> {
@@ -21,6 +40,7 @@ impl SipStack {
                 return Ok(extract_expires(&resp).unwrap_or(self.account.register_expires));
             }
             Some(401) | Some(407) => {}
+            Some(c @ (403 | 404)) => return Err(PermanentRegError(c).into()),
             Some(c) => return Err(anyhow::anyhow!("REGISTER rejected: {c}")),
             None => return Err(anyhow::anyhow!("Expected response")),
         }
@@ -41,6 +61,7 @@ impl SipStack {
                 self.maybe_rewrite_advertised_ip(&resp2);
                 Ok(extract_expires(&resp2).unwrap_or(self.account.register_expires))
             }
+            Some(c @ (403 | 404)) => Err(PermanentRegError(c).into()),
             Some(c) => Err(anyhow::anyhow!("REGISTER rejected: {c}")),
             None => Err(anyhow::anyhow!("Expected response")),
         }
@@ -55,19 +76,14 @@ impl SipStack {
     /// `public_address` is set (an explicit override always wins) or the
     /// response carries no `received=` param (e.g. no NAT in the path).
     fn maybe_rewrite_advertised_ip(&mut self, resp: &SipMessage) {
-        if !self.account.allow_ip_rewrite || self.account.public_address.is_some() {
-            return;
-        }
-        let Some(via) = resp.header("Via") else {
-            return;
-        };
-        let (received, _rport) = parse_via_received(via);
-        let Some(ip) = received else {
-            return;
-        };
-        if ip != self.advertised_ip {
-            info!("Allow IP Rewrite: advertised address {} -> {ip}", self.advertised_ip);
-            self.advertised_ip = ip;
+        if let Some(new_ip) = resolve_ip_rewrite(
+            &self.advertised_ip,
+            self.account.allow_ip_rewrite,
+            self.account.public_address.is_some(),
+            resp.header("Via"),
+        ) {
+            info!("Allow IP Rewrite: advertised address {} -> {new_ip}", self.advertised_ip);
+            self.advertised_ip = new_ip;
         }
     }
 
@@ -84,18 +100,20 @@ impl SipStack {
         let display = self.account.display_name.as_deref().unwrap_or(username);
         let via_proto = self.via_proto();
         let contact_transport = self.contact_transport_param();
+        let via_line = crate::client::build_via(via_proto, local_ip, local_port, &branch);
+        let contact_line = crate::client::build_contact(username, adv_ip, local_port, contact_transport);
         let expires = self.account.register_expires;
         let user_agent = crate::USER_AGENT;
 
         let mut msg = format!(
             "REGISTER sip:{server} SIP/2.0\r\n\
-             Via: SIP/2.0/{via_proto} {local_ip}:{local_port};branch={branch};rport\r\n\
+             {via_line}\
              Max-Forwards: 70\r\n\
              To: \"{display}\" <sip:{username}@{server}>\r\n\
              From: \"{display}\" <sip:{username}@{server}>;tag={from_tag}\r\n\
              Call-ID: {call_id}\r\n\
              CSeq: {cseq} REGISTER\r\n\
-             Contact: <sip:{username}@{adv_ip}:{local_port}{contact_transport}>\r\n\
+             {contact_line}\
              Expires: {expires}\r\n\
              User-Agent: {user_agent}\r\n"
         );
@@ -139,3 +157,23 @@ impl SipStack {
         }
     }
 }
+
+/// Pure decision for `SipAccount::allow_ip_rewrite`'s NAT self-discovery:
+/// given the currently advertised IP, the account's rewrite/override
+/// settings, and a response's raw `Via:` header (if any), decide the new
+/// advertised IP, if it should change. Split out of `maybe_rewrite_advertised_ip`
+/// so this is directly testable without a live registrar round-trip/`SipStack`.
+fn resolve_ip_rewrite(
+    current_advertised_ip: &str, allow_ip_rewrite: bool, public_address_is_set: bool, via: Option<&str>,
+) -> Option<String> {
+    if !allow_ip_rewrite || public_address_is_set {
+        return None;
+    }
+    let (received, _rport) = parse_via_received(via?);
+    let ip = received?;
+    if ip != current_advertised_ip { Some(ip) } else { None }
+}
+
+#[cfg(test)]
+#[path = "../tests/unit/registration.rs"]
+mod tests;

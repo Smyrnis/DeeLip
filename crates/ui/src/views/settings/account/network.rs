@@ -2,7 +2,7 @@
 //! encryption, video, public-address override, IP rewrite, and per-account
 //! ICE override.
 
-use deelip_config::{MediaEncryption, SipAccount};
+use deelip_config::{MediaEncryption, SipAccount, TransportProtocol};
 use egui::Ui;
 
 use crate::helpers::{field_label, info_hint};
@@ -62,6 +62,7 @@ pub(super) fn show(
                 MediaEncryption::Disabled => t("settings.account.enc_disabled"),
                 MediaEncryption::Enabled => t("settings.account.enc_always_srtp"),
                 MediaEncryption::Zrtp => t("settings.account.enc_zrtp"),
+                MediaEncryption::DtlsSrtp => t("settings.account.enc_dtls_srtp"),
             })
             .show_ui(ui, |ui| {
                 *edited |= ui
@@ -92,9 +93,25 @@ pub(super) fn show(
                         t("settings.account.enc_zrtp"),
                     )
                     .changed();
+                *edited |= ui
+                    .selectable_value(
+                        &mut account.media_encryption,
+                        MediaEncryption::DtlsSrtp,
+                        t("settings.account.enc_dtls_srtp"),
+                    )
+                    .changed();
             });
     });
     info_hint(ui, palette, &t("settings.account.media_encryption_info"));
+    // DTLS-SRTP's only MITM protection is the SDP fingerprint's integrity
+    // in transit -- unlike ZRTP's own out-of-band SAS, it has no fallback
+    // authentication if signaling isn't actually secure. Worth a louder,
+    // always-visible warning here rather than just folding it into the
+    // hover-only `info_hint` above, matching `directory.rs`'s precedent for
+    // a real problem state (`ui.colored_label(palette.danger, ...)`).
+    if account.media_encryption == MediaEncryption::DtlsSrtp && account.transport != TransportProtocol::Tls {
+        ui.colored_label(palette.danger, t("settings.account.dtls_srtp_transport_warning"));
+    }
 
     ui.add_space(6.0);
     ui.horizontal(|ui| {

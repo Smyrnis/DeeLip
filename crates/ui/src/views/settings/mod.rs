@@ -1,12 +1,8 @@
 //! Settings window: one file per tab (general/account/audio/video/network/
-//! directory/hotkeys/advanced), all still just `impl DeelipApp` blocks --
-//! the split is purely organizational (mirrors
-//! `sip-core/src/call/lifecycle/`'s same multi-file-single-impl pattern;
-//! cross-file inherent-method calls like `self.show_account_section(...)`
-//! work regardless of which file defines the method). This file keeps only
-//! the shared scaffolding: opening the pop-out window, the tab-strip/
-//! dispatch logic, and a few small field-editing helpers used across more
-//! than one tab.
+//! directory/hotkeys/advanced) -- see this crate's Architecture notes for why
+//! the split is purely organizational. This file keeps only the shared
+//! scaffolding: opening the pop-out window, the tab-strip/dispatch logic, and
+//! a few small field-editing helpers used across more than one tab.
 
 mod account;
 mod advanced;
@@ -25,11 +21,9 @@ use crate::strings::t;
 use crate::theme::Palette;
 
 /// Shared between `show_settings_modal` (which opens the viewport under
-/// this id) and the background device-scan spawns in `audio.rs`/`video.rs`
-/// (which need the same id to wake *this* viewport specifically, not just
-/// `ROOT` -- see their own doc comments for why waking only `ROOT` left this
-/// window showing stale "Scanning..." text until the user happened to
-/// interact with it directly).
+/// this id) and the background device-scan spawns in `audio.rs`/`video.rs`,
+/// which need the same id to wake *this* viewport specifically -- see
+/// `docs/crates/ui.md`'s Settings section for why.
 const SETTINGS_VIEWPORT_NAME: &str = "deelip_settings_window";
 
 impl DeelipApp {
@@ -51,8 +45,8 @@ impl DeelipApp {
             [950.0, 740.0],
             [580.0, 520.0],
             true,
-            |app| app.settings_open,
-            |app| app.settings_open = false,
+            |app| app.settings_ui.settings_open,
+            |app| app.settings_ui.settings_open = false,
             |_app| t("settings.window_title"),
             |app, ui| {
                 ui.separator();
@@ -71,7 +65,7 @@ impl DeelipApp {
         if self.config.accounts.is_empty() {
             self.config.accounts.push(deelip_config::SipAccount::default());
         }
-        self.edit_account_idx = self.edit_account_idx.min(self.config.accounts.len() - 1);
+        self.settings_ui.edit_account_idx = self.settings_ui.edit_account_idx.min(self.config.accounts.len() - 1);
         let palette = self.palette;
 
         // A tab strip -- one section visible at a time, sized to fit
@@ -79,14 +73,18 @@ impl DeelipApp {
         // `ScrollArea` stacking all 12 sections in one column.
         ui.add_space(6.0);
         ui.horizontal_wrapped(|ui| {
-            ui.selectable_value(&mut self.settings_tab, SettingsTab::General, t("settings.tab_general"));
-            ui.selectable_value(&mut self.settings_tab, SettingsTab::Account, t("settings.tab_account"));
-            ui.selectable_value(&mut self.settings_tab, SettingsTab::Audio, t("settings.tab_audio"));
-            ui.selectable_value(&mut self.settings_tab, SettingsTab::Video, t("settings.tab_video"));
-            ui.selectable_value(&mut self.settings_tab, SettingsTab::Network, t("settings.tab_network"));
-            ui.selectable_value(&mut self.settings_tab, SettingsTab::Directory, t("settings.tab_directory"));
-            ui.selectable_value(&mut self.settings_tab, SettingsTab::Hotkeys, t("settings.tab_hotkeys"));
-            ui.selectable_value(&mut self.settings_tab, SettingsTab::Advanced, t("settings.tab_advanced"));
+            ui.selectable_value(&mut self.settings_ui.settings_tab, SettingsTab::General, t("settings.tab_general"));
+            ui.selectable_value(&mut self.settings_ui.settings_tab, SettingsTab::Account, t("settings.tab_account"));
+            ui.selectable_value(&mut self.settings_ui.settings_tab, SettingsTab::Audio, t("settings.tab_audio"));
+            ui.selectable_value(&mut self.settings_ui.settings_tab, SettingsTab::Video, t("settings.tab_video"));
+            ui.selectable_value(&mut self.settings_ui.settings_tab, SettingsTab::Network, t("settings.tab_network"));
+            ui.selectable_value(
+                &mut self.settings_ui.settings_tab,
+                SettingsTab::Directory,
+                t("settings.tab_directory"),
+            );
+            ui.selectable_value(&mut self.settings_ui.settings_tab, SettingsTab::Hotkeys, t("settings.tab_hotkeys"));
+            ui.selectable_value(&mut self.settings_ui.settings_tab, SettingsTab::Advanced, t("settings.tab_advanced"));
         });
         ui.separator();
         ui.add_space(6.0);
@@ -97,20 +95,20 @@ impl DeelipApp {
             ui.add_space(8.0);
             if ui.button(t("common.save_button")).clicked() {
                 match self.config.save(&self.db) {
-                    Ok(()) => self.settings_saved_notice = true,
+                    Ok(()) => self.settings_ui.settings_saved_notice = true,
                     Err(err) => {
-                        self.settings_saved_notice = false;
+                        self.settings_ui.settings_saved_notice = false;
                         tracing::error!("Failed to save config: {err}");
                     }
                 }
             }
-            if self.settings_saved_notice {
+            if self.settings_ui.settings_saved_notice {
                 ui.label(RichText::new(t("settings.saved_restart_notice")).color(palette.signal));
             }
             ui.add_space(4.0);
         });
 
-        let edited = match self.settings_tab {
+        let edited = match self.settings_ui.settings_tab {
             SettingsTab::General => {
                 self.show_notifications_section(ui, &palette);
                 ui.add_space(14.0);
@@ -149,7 +147,7 @@ impl DeelipApp {
         };
 
         if edited {
-            self.settings_saved_notice = false;
+            self.settings_ui.settings_saved_notice = false;
         }
     }
 }

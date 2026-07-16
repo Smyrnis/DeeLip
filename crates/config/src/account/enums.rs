@@ -63,6 +63,13 @@ pub enum MediaEncryption {
     /// on purpose). Full picture, including verification scope/caveats:
     /// `docs/crates/sip-core.md`.
     Zrtp,
+    /// RFC 5763/5764 DTLS-SRTP: keys are derived from a DTLS 1.2 handshake
+    /// run over the RTP socket, using `a=fingerprint`/`a=setup` SDP
+    /// attributes to bootstrap it -- unlike `Zrtp`, this DOES have SDP
+    /// footprint, but `wants_srtp` still returns `false` since the actual
+    /// key material is never SDES-carried. Security caveats vs. `Zrtp`:
+    /// `docs/crates/sip-core.md`'s DTLS-SRTP section.
+    DtlsSrtp,
 }
 
 pub(super) fn media_encryption_to_str(m: MediaEncryption) -> &'static str {
@@ -71,6 +78,7 @@ pub(super) fn media_encryption_to_str(m: MediaEncryption) -> &'static str {
         MediaEncryption::Disabled => "disabled",
         MediaEncryption::Enabled => "enabled",
         MediaEncryption::Zrtp => "zrtp",
+        MediaEncryption::DtlsSrtp => "dtls_srtp",
     }
 }
 pub(super) fn media_encryption_from_str(s: &str) -> MediaEncryption {
@@ -78,6 +86,7 @@ pub(super) fn media_encryption_from_str(s: &str) -> MediaEncryption {
         "disabled" => MediaEncryption::Disabled,
         "enabled" => MediaEncryption::Enabled,
         "zrtp" => MediaEncryption::Zrtp,
+        "dtls_srtp" => MediaEncryption::DtlsSrtp,
         _ => MediaEncryption::MatchTransport,
     }
 }
@@ -259,3 +268,7 @@ pub(super) fn language_from_str(_s: &str) -> Language {
     // this function's call sites.
     Language::En
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/enums.rs"]
+mod tests;

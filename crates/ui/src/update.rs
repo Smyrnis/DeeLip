@@ -37,8 +37,8 @@ impl DeelipApp {
         self.config.last_update_check = Some(crate::helpers::unix_now());
         self.save_config_quietly();
         let (tx, rx) = std::sync::mpsc::channel();
-        self.update_rx = Some(rx);
-        self.update_state = UpdateState::Checking;
+        self.update_check.update_rx = Some(rx);
+        self.update_check.update_state = UpdateState::Checking;
         let ctx_slot = self.ctx_slot.clone();
         std::thread::spawn(move || {
             let result = deelip_updater::check_latest(env!("CARGO_PKG_VERSION"));
@@ -53,29 +53,29 @@ impl DeelipApp {
     pub(crate) fn process_update_events(&mut self) {
         // Collect first, same reason as `process_sip_events`: a message can
         // itself need to spawn a new channel/thread (replacing
-        // `self.update_rx`), which can't happen while `rx` still borrows it.
-        let Some(rx) = &self.update_rx else { return };
+        // `self.update_check.update_rx`), which can't happen while `rx` still borrows it.
+        let Some(rx) = &self.update_check.update_rx else { return };
         let messages: Vec<UpdateMsg> = rx.try_iter().collect();
         for msg in messages {
             match msg {
                 UpdateMsg::Checked(Ok(Some(release))) => {
                     if self.config.update_skip_version.as_deref() == Some(release.version.as_str()) {
-                        self.update_state = UpdateState::Idle;
+                        self.update_check.update_state = UpdateState::Idle;
                     } else if self.config.auto_update_enabled && deelip_updater::can_self_replace() {
                         self.start_update_download(release);
                     } else {
-                        self.update_state = UpdateState::Available(release);
+                        self.update_check.update_state = UpdateState::Available(release);
                     }
                 }
-                UpdateMsg::Checked(Ok(None)) => self.update_state = UpdateState::Idle,
+                UpdateMsg::Checked(Ok(None)) => self.update_check.update_state = UpdateState::Idle,
                 UpdateMsg::Checked(Err(e)) => {
                     tracing::debug!("Update check failed (ignoring): {e:#}");
-                    self.update_state = UpdateState::Idle;
+                    self.update_check.update_state = UpdateState::Idle;
                 }
-                UpdateMsg::Installed(Ok(()), version) => self.update_state = UpdateState::Updated(version),
+                UpdateMsg::Installed(Ok(()), version) => self.update_check.update_state = UpdateState::Updated(version),
                 UpdateMsg::Installed(Err(e), _) => {
                     tracing::warn!("Auto-update failed: {e:#}");
-                    self.update_state = UpdateState::Failed(e.to_string());
+                    self.update_check.update_state = UpdateState::Failed(e.to_string());
                 }
             }
         }
@@ -86,9 +86,9 @@ impl DeelipApp {
     /// once it's done. Only meaningful when `can_self_replace()` is true --
     /// callers must check that first (both call sites below already do).
     pub(crate) fn start_update_download(&mut self, release: deelip_updater::ReleaseInfo) {
-        self.update_state = UpdateState::Downloading;
+        self.update_check.update_state = UpdateState::Downloading;
         let (tx, rx) = std::sync::mpsc::channel();
-        self.update_rx = Some(rx);
+        self.update_check.update_rx = Some(rx);
         let ctx_slot = self.ctx_slot.clone();
         std::thread::spawn(move || {
             let version = release.version.clone();
@@ -105,7 +105,10 @@ impl DeelipApp {
     /// the button that calls this is disabled in that case (see
     /// `show_update_popup`) so this is a last-resort guard, not the primary one.
     fn do_restart_to_update(&mut self) {
-        if !self.calls.is_empty() || self.pending_call.is_some() || self.pending_outbound.is_some() {
+        if !self.calls_state.calls.is_empty()
+            || self.calls_state.pending_call.is_some()
+            || self.calls_state.pending_outbound.is_some()
+        {
             return;
         }
         let Ok(exe) = std::env::current_exe() else {
@@ -119,9 +122,11 @@ impl DeelipApp {
     /// Small popup shown on top of whatever tab is active -- called once
     /// per frame from `update()`. No-op while `update_state` is `Idle`/`Checking`.
     pub(crate) fn show_update_popup(&mut self, ctx: &egui::Context) {
-        let call_active = !self.calls.is_empty() || self.pending_call.is_some() || self.pending_outbound.is_some();
+        let call_active = !self.calls_state.calls.is_empty()
+            || self.calls_state.pending_call.is_some()
+            || self.calls_state.pending_outbound.is_some();
 
-        match &self.update_state {
+        match &self.update_check.update_state {
             UpdateState::Idle | UpdateState::Checking => {}
             UpdateState::Available(release) => {
                 let version = release.version.clone();
@@ -163,9 +168,9 @@ impl DeelipApp {
                 } else if skip_clicked {
                     self.config.update_skip_version = Some(version);
                     self.save_config_quietly();
-                    self.update_state = UpdateState::Idle;
+                    self.update_check.update_state = UpdateState::Idle;
                 } else if later_clicked {
-                    self.update_state = UpdateState::Idle;
+                    self.update_check.update_state = UpdateState::Idle;
                 }
             }
             UpdateState::Downloading => {
@@ -207,7 +212,7 @@ impl DeelipApp {
                 if restart_clicked {
                     self.do_restart_to_update();
                 } else if later_clicked {
-                    self.update_state = UpdateState::Idle;
+                    self.update_check.update_state = UpdateState::Idle;
                 }
             }
             UpdateState::Failed(reason) => {
@@ -225,7 +230,7 @@ impl DeelipApp {
                         }
                     });
                 if dismiss_clicked {
-                    self.update_state = UpdateState::Idle;
+                    self.update_check.update_state = UpdateState::Idle;
                 }
             }
         }

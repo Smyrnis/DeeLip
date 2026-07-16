@@ -119,15 +119,8 @@ impl<S: SharedSecretStore> ZrtpEngine<S> {
             sas_types: vec![crypto::SAS_ALGO],
             mac: [0; 8],
         };
-        // `mac` here (like Commit's/DHPart's) isn't independently verified
-        // anywhere in this implementation -- the hash-chain-hop checks in
-        // `on_commit`/`on_dhpart1`/`on_dhpart2` already provide equivalent
-        // tamper-evidence for what actually matters (binding each message
-        // to the one before it). Computed as a self-consistent value (HMAC
-        // over this message's own wire encoding with the mac field
-        // zeroed, including whatever throwaway CRC that encoding has) --
-        // not a claim that this matches any real ZRTP implementation's
-        // exact convention.
+        // `mac` is never independently verified -- see docs/crates/sip-core.md's
+        // ZRTP "Scope cuts" section for why that's fine here.
         let mac = message_mac(&chain.h2, &Message::Hello(hello_no_mac.clone()).encode());
         let local_hello = Hello { mac, ..hello_no_mac };
         Self {

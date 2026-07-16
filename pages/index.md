@@ -13,8 +13,8 @@ hero:
       text: Download
       link: /downloads/
     - theme: alt
-      text: Read the Docs
-      link: /docs/README
+      text: FAQ
+      link: /faq/
     - theme: alt
       text: GitHub
       link: https://github.com/Smyrnis/DeeLip
@@ -69,7 +69,7 @@ features:
     <ul>
       <li><a href="https://github.com/Smyrnis/DeeLip" target="_blank" rel="noopener">Source code</a></li>
       <li><a href="https://github.com/Smyrnis/DeeLip/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a></li>
-      <li><a href="/docs/changelogs/CHANGELOG">Changelog</a></li>
+      <li><a href="/changelog/">Changelog</a></li>
     </ul>
   </div>
   <div class="info-col">

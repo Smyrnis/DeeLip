@@ -11,6 +11,7 @@ use deelip_nat::{IceConnection, IceGathered, TurnRelay};
 
 use crate::{
     call::dialog::{PendingOfferMedia, PendingVideoOffer},
+    call::media_setup::DtlsCallParams,
     events::SipEvent,
     wire::sdp::{AudioCodec, ParsedSdp, ParsedVideoMedia, SrtpParams, VideoCodec},
 };
@@ -41,6 +42,8 @@ pub(crate) enum StackEvent {
         local_srtp: Option<SrtpParams>,
         relay: Option<TurnRelay>,
         ice: Option<IceConnection>,
+        /// See `DtlsCallParams` -- call-scoped, not duplicated per video.
+        local_dtls: Option<DtlsCallParams>,
         /// Video counterpart of this event's audio fields, bundled into
         /// one struct -- `None` whenever the remote didn't offer video, we
         /// don't have it enabled, or video setup failed for this call.
@@ -59,6 +62,11 @@ pub(crate) enum StackEvent {
         cn_type: Option<u8>,
         remote_rtp: SocketAddr,
         remote_srtp: Option<SrtpParams>,
+        /// See `DtlsCallParams` -- call-scoped, not duplicated per video.
+        /// Fully resolved by now (`role`/`remote_fingerprint` both `Some`
+        /// whenever this is `Some` at all), unlike `OutgoingOfferReady`'s
+        /// copy inside `pending_offer`.
+        local_dtls: Option<DtlsCallParams>,
         /// Video counterpart of this event's audio fields, bundled into
         /// one struct -- `None` whenever we didn't offer video, the remote
         /// didn't accept it, or video setup failed for this call.
@@ -102,12 +110,8 @@ impl EventSender {
         Self { inner, waker }
     }
 
-    // Deliberately mirrors `UnboundedSender::send`'s exact signature (see
-    // this struct's doc comment) rather than boxing the error, so none of
-    // the ~30 call sites need to change -- the `SendError<SipEvent>` payload
-    // was already this size when callers held the raw `UnboundedSender`
-    // directly; wrapping it here doesn't make anything larger, it just puts
-    // a name on a function clippy now has a definition to measure.
+    // Deliberately mirrors `UnboundedSender::send`'s exact signature -- see
+    // this struct's doc comment / docs/crates/sip-core.md's "EventSender" section.
     #[allow(clippy::result_large_err)]
     pub fn send(&self, event: SipEvent) -> Result<(), mpsc::error::SendError<SipEvent>> {
         let result = self.inner.send(event);

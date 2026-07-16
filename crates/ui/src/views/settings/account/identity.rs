@@ -3,12 +3,8 @@
 //! transport, and TLS verify-skip.
 //!
 //! A free function taking `&mut SipAccount` directly, not an `impl
-//! DeelipApp` method like this crate's other multi-file splits -- `account`
-//! is borrowed from `self.config.accounts[idx]` for the whole body of
-//! `show_account_section`'s card closure, and a `self.method(...)` call
-//! would need to re-borrow all of `self` while that borrow is still live.
-//! Passing the pieces each section needs as explicit parameters sidesteps
-//! that entirely.
+//! DeelipApp` method like this crate's other multi-file splits -- see
+//! `docs/crates/ui.md`'s Settings section for why.
 
 use deelip_config::{SipAccount, TransportProtocol};
 use egui::{RichText, Ui};

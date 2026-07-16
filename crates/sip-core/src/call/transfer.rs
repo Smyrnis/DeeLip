@@ -33,21 +33,22 @@ impl SipStack {
         let from_tag = dialog.local_tag.clone();
         let to_uri = dialog.remote_uri.clone();
         let to_tag = dialog.remote_tag.as_deref().map(|t| format!(";tag={t}")).unwrap_or_default();
-        let contact: SocketAddr =
-            dialog.remote_contact.as_deref().and_then(|s| s.parse().ok()).unwrap_or(self.server_addr);
+        let contact = resolve_contact_addr(dialog.remote_contact.as_deref(), self.server_addr);
         let via_proto = self.via_proto();
         let contact_transport = self.contact_transport_param();
+        let via_line = crate::client::build_via(via_proto, &local_ip, local_port, &branch);
+        let contact_line = crate::client::build_contact(&username, &adv_ip, local_port, contact_transport);
         let user_agent = crate::USER_AGENT;
 
         let refer = format!(
             "REFER {to_uri} SIP/2.0\r\n\
-             Via: SIP/2.0/{via_proto} {local_ip}:{local_port};branch={branch};rport\r\n\
+             {via_line}\
              Max-Forwards: 70\r\n\
              To: <{to_uri}>{to_tag}\r\n\
              From: \"{display}\" <sip:{username}@{server}>;tag={from_tag}\r\n\
              Call-ID: {call_id_s}\r\n\
              CSeq: {cseq} REFER\r\n\
-             Contact: <sip:{username}@{adv_ip}:{local_port}{contact_transport}>\r\n\
+             {contact_line}\
              Refer-To: <{target}>\r\n\
              User-Agent: {user_agent}\r\n\
              Content-Length: 0\r\n\r\n"
@@ -74,7 +75,7 @@ impl SipStack {
             );
             (consult.remote_uri.clone(), replaces)
         };
-        let refer_to = format!("{target}?Replaces={}", encode_replaces_param(&replaces));
+        let refer_to = build_refer_to_with_replaces(&target, &replaces);
 
         let dialog = match self.dialogs.get_mut(call_id) {
             Some(d) if d.state == DialogState::Confirmed => d,
@@ -94,21 +95,22 @@ impl SipStack {
         let from_tag = dialog.local_tag.clone();
         let to_uri = dialog.remote_uri.clone();
         let to_tag = dialog.remote_tag.as_deref().map(|t| format!(";tag={t}")).unwrap_or_default();
-        let contact: SocketAddr =
-            dialog.remote_contact.as_deref().and_then(|s| s.parse().ok()).unwrap_or(self.server_addr);
+        let contact = resolve_contact_addr(dialog.remote_contact.as_deref(), self.server_addr);
         let via_proto = self.via_proto();
         let contact_transport = self.contact_transport_param();
+        let via_line = crate::client::build_via(via_proto, &local_ip, local_port, &branch);
+        let contact_line = crate::client::build_contact(&username, &adv_ip, local_port, contact_transport);
         let user_agent = crate::USER_AGENT;
 
         let refer = format!(
             "REFER {to_uri} SIP/2.0\r\n\
-             Via: SIP/2.0/{via_proto} {local_ip}:{local_port};branch={branch};rport\r\n\
+             {via_line}\
              Max-Forwards: 70\r\n\
              To: <{to_uri}>{to_tag}\r\n\
              From: \"{display}\" <sip:{username}@{server}>;tag={from_tag}\r\n\
              Call-ID: {call_id_s}\r\n\
              CSeq: {cseq} REFER\r\n\
-             Contact: <sip:{username}@{adv_ip}:{local_port}{contact_transport}>\r\n\
+             {contact_line}\
              Refer-To: <{refer_to}>\r\n\
              User-Agent: {user_agent}\r\n\
              Content-Length: 0\r\n\r\n"
@@ -122,8 +124,7 @@ impl SipStack {
     /// no-answer-forward timeout; removes the dialog like `reject_call` does.
     pub(crate) async fn redirect_call(&mut self, call_id: &str, target: &str) {
         if let Some(dialog) = self.dialogs.remove(call_id) {
-            let contact: SocketAddr =
-                dialog.remote_contact.as_deref().and_then(|s| s.parse().ok()).unwrap_or(self.server_addr);
+            let contact = resolve_contact_addr(dialog.remote_contact.as_deref(), self.server_addr);
             let username = &self.account.username;
             let server = &self.identity_host;
             let display = self.account.display_name.as_deref().unwrap_or(username);
@@ -148,3 +149,26 @@ impl SipStack {
         }
     }
 }
+
+/// Resolve a dialog's `remote_contact` (a `"host:port"` string, see
+/// `Dialog::parse_remote_contact`) into a `SocketAddr` to send mid-dialog
+/// requests (REFER, 302 redirect) directly to, falling back to the outbound
+/// proxy/registrar address when the far end's own Contact isn't known (no
+/// proxy in the path, e.g. `local_account` calls) or fails to parse. Split
+/// out since this exact fallback expression was previously duplicated
+/// verbatim at all three call sites above.
+fn resolve_contact_addr(remote_contact: Option<&str>, fallback: SocketAddr) -> SocketAddr {
+    remote_contact.and_then(|s| s.parse().ok()).unwrap_or(fallback)
+}
+
+/// Build the attended-transfer `Refer-To` URI: `target` with a
+/// percent-encoded `Replaces` (RFC 3891) query param identifying the
+/// consultation dialog. Split out of `attended_transfer` so the encoding is
+/// directly testable without a live transport/dialog.
+fn build_refer_to_with_replaces(target: &str, replaces: &str) -> String {
+    format!("{target}?Replaces={}", encode_replaces_param(replaces))
+}
+
+#[cfg(test)]
+#[path = "../../tests/unit/transfer.rs"]
+mod tests;

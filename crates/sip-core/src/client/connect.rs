@@ -13,9 +13,10 @@ use tokio::sync::mpsc;
 use tokio::time::Instant;
 use tracing::{debug, error, info};
 
+use deelip_config::timeouts::AUTO_PROBE_TIMEOUT;
 use deelip_config::{SipAccount, TransportProtocol};
 
-use super::builders::{contact_transport_param_str, via_proto_str};
+use super::builders::{build_contact, build_via, contact_transport_param_str, via_proto_str};
 use super::events::EventSender;
 use super::{CmdRx, MAX_RETRY, SipStack};
 use crate::call::media_setup::NetworkConfig;
@@ -256,7 +257,10 @@ impl SipStack {
                     Ok(()) => break,
                     Err((e, cmd_rx)) => {
                         error!("SIP stack disconnected ({e:#}), reconnecting in {retry_delay:?}");
-                        let _ = event_tx.send(SipEvent::RegistrationFailed { reason: format!("Disconnected: {e:#}") });
+                        let _ = event_tx.send(SipEvent::RegistrationFailed {
+                            reason: format!("Disconnected: {e:#}"),
+                            permanent: false,
+                        });
                         pending_cmd_rx = Some(cmd_rx);
                         tokio::time::sleep(retry_delay).await;
                         retry_delay = (retry_delay * 2).min(MAX_RETRY);
@@ -267,8 +271,6 @@ impl SipStack {
         Ok(SipHandle { event_rx, cmd_tx, advertised_ip, secure, domain })
     }
 }
-
-const AUTO_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// One-shot, unauthenticated `REGISTER` used only to test whether a
 /// just-connected transport candidate in `connect_transport_auto` actually
@@ -287,17 +289,19 @@ async fn probe_register(
     let display = account.display_name.as_deref().unwrap_or(username);
     let via_proto = via_proto_str(proto);
     let contact_transport = contact_transport_param_str(proto);
+    let via_line = build_via(via_proto, local_ip, local_port, &branch);
+    let contact_line = build_contact(username, advertised_ip, local_port, contact_transport);
 
     let user_agent = crate::USER_AGENT;
     let msg = format!(
         "REGISTER sip:{server} SIP/2.0\r\n\
-         Via: SIP/2.0/{via_proto} {local_ip}:{local_port};branch={branch};rport\r\n\
+         {via_line}\
          Max-Forwards: 70\r\n\
          To: \"{display}\" <sip:{username}@{server}>\r\n\
          From: \"{display}\" <sip:{username}@{server}>;tag={from_tag}\r\n\
          Call-ID: {call_id}\r\n\
          CSeq: 1 REGISTER\r\n\
-         Contact: <sip:{username}@{advertised_ip}:{local_port}{contact_transport}>\r\n\
+         {contact_line}\
          Expires: 0\r\n\
          User-Agent: {user_agent}\r\n\
          Content-Length: 0\r\n\r\n"

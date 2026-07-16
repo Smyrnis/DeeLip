@@ -137,15 +137,8 @@ impl Message {
 
         let mut out = Vec::with_capacity(4 + 8 + body.len() + 4);
         out.extend_from_slice(&MSG_PREAMBLE.to_be_bytes());
-        // Length in octets, covering the type block + body + CRC
-        // (everything after the length field itself). A plain byte count
-        // rather than a word count (unlike, per general recollection of
-        // the protocol, RFC 6189 itself) -- sidesteps a word-alignment
-        // requirement this implementation has no need for, since nothing
-        // outside this module ever inspects this field directly. See this
-        // file's module doc comment: the exact on-the-wire convention here
-        // wasn't obtainable from spec text this session, so this is a
-        // self-consistent choice, not a claim of RFC fidelity.
+        // Byte count, not a word count -- see docs/crates/sip-core.md's
+        // ZRTP "Provenance and verification status" section for why.
         let byte_len = (8 + body.len() + 4) as u16;
         out.extend_from_slice(&byte_len.to_be_bytes());
         out.extend_from_slice(&message_type_bytes(self.type_tag()));

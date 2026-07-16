@@ -1,9 +1,9 @@
 //! Minimal i18n infrastructure: flat/interpolated string lookup keyed by a
 //! flat dotted key (e.g. `"directory.search_hint"`), backed by an embedded
 //! per-locale JSON file (`assets/locales/<code>.json`). English-only for
-//! now -- see `ARCHITECTURE_GAPS.md` item 6 for the planned view-by-view
-//! migration to this API and why a second translated locale isn't wired up
-//! yet (RTL layout and pluralization are likewise out of scope for now).
+//! now -- see `docs/crates/i18n.md` for why a second translated locale
+//! isn't wired up yet (RTL layout and pluralization are likewise out of
+//! scope for now).
 
 use std::collections::HashMap;
 use std::sync::OnceLock;

@@ -100,13 +100,9 @@ pub struct AppConfig {
     pub log_to_file: bool,
     /// Save a local crash-report file (`deelip_config::crashes_dir()`,
     /// `~/.config/deelip/crashes/`) if the process panics -- timestamp,
-    /// version, panic message/location, and a backtrace. Purely local:
-    /// never uploaded or transmitted anywhere, there's no remote endpoint at
-    /// all. On by default *unlike* every other opt-in toggle here, since
-    /// there's no privacy cost to weigh (nothing leaves the machine) and a
-    /// crash report is only useful if it was already enabled *before* the
-    /// crash happened -- read once at startup to install the panic hook, so
-    /// it's restart-required like every other logging-adjacent setting.
+    /// version, panic message/location, and a backtrace. On by default;
+    /// restart-required. See docs/crates/config.md's "Option<T> as toggle"
+    /// discussion for why this one defaults on unlike its siblings.
     #[serde(default = "default_true")]
     pub crash_reporting_enabled: bool,
 
@@ -202,11 +198,9 @@ pub struct AppConfig {
     pub zrtp_zid: Option<String>,
 
     /// Corporate/LDAP directory server host, e.g. "ldap.example.com" --
-    /// presence of a value is what enables the Directory tab (same "an
-    /// `Option` field's presence *is* the toggle" idiom as `mailbox`/
-    /// `forward_always` elsewhere in this file), rather than a separate
-    /// enabled flag. `None`/empty: Directory tab shows a "configure this in
-    /// Settings" prompt instead of a search box.
+    /// presence of a value is what enables the Directory tab, rather than a
+    /// separate enabled flag (see docs/crates/config.md's "Option<T> as
+    /// toggle" discussion).
     #[serde(default)]
     pub ldap_server: Option<String>,
     #[serde(default = "default_ldap_port")]
@@ -326,3 +320,7 @@ fn parse_zid_hex(hex: &str) -> Option<[u8; 12]> {
     }
     Some(bytes)
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/app_config.rs"]
+mod tests;

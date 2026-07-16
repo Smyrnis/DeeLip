@@ -1,4 +1,4 @@
-use deelip_config::{CallDirection, CallStatus, DtmfMode};
+use deelip_config::{CallStatus, Direction, DtmfMode};
 
 use crate::app::{DeelipApp, PendingAccept, PendingOutbound, Tab};
 use crate::helpers::{normalize_target_with_prefix, short_uri, unix_now};
@@ -15,7 +15,11 @@ impl DeelipApp {
     /// `local_ip:local_port` for valid headers), so that alone can't detect
     /// the serverless case.
     pub(crate) fn dial_domain(&self, acc: usize) -> String {
-        if self.accounts[acc].account.local_account { String::new() } else { self.accounts[acc].handle.domain.clone() }
+        if self.accounts_state.accounts[acc].account.local_account {
+            String::new()
+        } else {
+            self.accounts_state.accounts[acc].handle.domain.clone()
+        }
     }
 
     /// Core dialing mechanics shared by ordinary dialing and the attended-
@@ -27,17 +31,17 @@ impl DeelipApp {
     /// for now (see `try_gather_ice`'s doc comment).
     pub(crate) fn place_call(&mut self, acc: usize, target: &str, attempt_ice: bool) {
         let domain = self.dial_domain(acc);
-        let prefix = self.accounts[acc].account.dialing_prefix.clone().unwrap_or_default();
-        let dial_plan = self.accounts[acc].account.dial_plan.clone();
+        let prefix = self.accounts_state.accounts[acc].account.dialing_prefix.clone().unwrap_or_default();
+        let dial_plan = self.accounts_state.accounts[acc].account.dial_plan.clone();
         let t = normalize_target_with_prefix(target, &domain, &prefix, &dial_plan);
-        self.accounts[acc].handle.make_call(&t, attempt_ice);
-        self.last_dialed = Some(t.clone());
-        self.pending_outbound = Some(PendingOutbound { remote_uri: t.clone(), start_time: unix_now() });
-        self.status_line = format!("Calling {}…", short_uri(&t));
+        self.accounts_state.accounts[acc].handle.make_call(&t, attempt_ice);
+        self.calls_state.last_dialed = Some(t.clone());
+        self.calls_state.pending_outbound = Some(PendingOutbound { remote_uri: t.clone(), start_time: unix_now() });
+        self.accounts_state.status_line = format!("Calling {}…", short_uri(&t));
     }
 
     pub(crate) fn do_call(&mut self, target: Option<String>) {
-        let raw = target.unwrap_or_else(|| self.call_target.trim().to_string());
+        let raw = target.unwrap_or_else(|| self.calls_state.call_target.trim().to_string());
         if raw.is_empty() {
             return;
         }
@@ -48,7 +52,7 @@ impl DeelipApp {
     }
 
     pub(crate) fn do_redial(&mut self) {
-        if let Some(target) = self.last_dialed.clone() {
+        if let Some(target) = self.calls_state.last_dialed.clone() {
             self.do_call(Some(target));
         }
     }
@@ -59,9 +63,11 @@ impl DeelipApp {
     /// identical sequence.
     pub(crate) fn dial_from_list(&mut self, target: String) {
         self.tab = Tab::Dialer;
-        self.call_target = target.clone();
-        let can_dial = self.calls.is_empty() && self.pending_call.is_none() && self.pending_outbound.is_none();
-        if can_dial && self.reg_ok {
+        self.calls_state.call_target = target.clone();
+        let can_dial = self.calls_state.calls.is_empty()
+            && self.calls_state.pending_call.is_none()
+            && self.calls_state.pending_outbound.is_none();
+        if can_dial && self.accounts_state.reg_ok {
             self.do_call(Some(target));
         }
     }
@@ -73,30 +79,33 @@ impl DeelipApp {
     /// already-open window to a different peer just as well as opening a
     /// fresh one.
     pub(crate) fn message_from_list(&mut self, target: String) {
-        self.messages_window_open = true;
-        self.messages_window_peer = Some(target);
+        self.messages_state.messages_window_open = true;
+        self.messages_state.messages_window_peer = Some(target);
     }
 
     /// Start the consultation call for an attended transfer: holds the
-    /// focused call and dials `self.attended_target` as a genuine 2nd
+    /// focused call and dials `self.calls_state.attended_target` as a genuine 2nd
     /// outbound call, placed from the *same* account. This is the one path
     /// allowed to dial while a call is already connected — normal dialing
     /// stays blocked by `can_dial` everywhere else, matching the existing
     /// "up to 2 concurrent calls" cap.
     pub(crate) fn do_attended_transfer_dial(&mut self) {
-        let Some(idx) = self.focused_call else { return };
-        let raw = self.attended_target.trim().to_string();
+        let Some(idx) = self.calls_state.focused_call else { return };
+        let raw = self.calls_state.attended_target.trim().to_string();
         if raw.is_empty() {
             return;
         }
-        if self.calls.len() != 1 || self.pending_call.is_some() || self.pending_outbound.is_some() {
+        if self.calls_state.calls.len() != 1
+            || self.calls_state.pending_call.is_some()
+            || self.calls_state.pending_outbound.is_some()
+        {
             return;
         }
-        let acc = self.calls[idx].account;
+        let acc = self.calls_state.calls[idx].account;
         self.do_hold_slot(idx);
-        self.attended_transfer_original = Some(idx);
-        self.attended_target.clear();
-        self.showing_attended = false;
+        self.calls_state.attended_transfer_original = Some(idx);
+        self.calls_state.attended_target.clear();
+        self.calls_state.showing_attended = false;
         self.place_call(acc, &raw, false);
     }
 
@@ -105,28 +114,28 @@ impl DeelipApp {
     /// Both legs are hung up once `TransferAccepted` confirms the far end
     /// accepted it (see `handle_sip_event`), not here.
     pub(crate) fn do_complete_attended_transfer(&mut self) {
-        let Some(original_idx) = self.attended_transfer_original else {
+        let Some(original_idx) = self.calls_state.attended_transfer_original else {
             return;
         };
-        if self.calls.len() != 2 {
+        if self.calls_state.calls.len() != 2 {
             return;
         }
         let consult_idx = 1 - original_idx;
-        let acc = self.calls[original_idx].account;
-        let original_call_id = self.calls[original_idx].call_id.clone();
-        let consult_call_id = self.calls[consult_idx].call_id.clone();
-        self.accounts[acc].handle.attended_transfer(&original_call_id, &consult_call_id);
-        self.status_line = t("status.completing_transfer");
+        let acc = self.calls_state.calls[original_idx].account;
+        let original_call_id = self.calls_state.calls[original_idx].call_id.clone();
+        let consult_call_id = self.calls_state.calls[consult_idx].call_id.clone();
+        self.accounts_state.accounts[acc].handle.attended_transfer(&original_call_id, &consult_call_id);
+        self.accounts_state.status_line = t("status.completing_transfer");
     }
 
     pub(crate) fn do_accept(&mut self) {
         // `pending_accept` is a single slot -- see its doc comment on
         // `DeelipApp` for why a 2nd accept before the first's
         // `CallConnected` lands must no-op here rather than overwrite it.
-        if self.pending_accept.is_some() {
+        if self.calls_state.pending_accept.is_some() {
             return;
         }
-        let Some(pending) = self.pending_call.take() else {
+        let Some(pending) = self.calls_state.pending_call.take() else {
             return;
         };
         let acc = pending.account;
@@ -135,17 +144,17 @@ impl DeelipApp {
         // The focused call's media is deliberately *not* held/freed here --
         // deferred to the `CallConnected` handler so a decline can't
         // needlessly leave an already-active call on hold.
-        self.accounts[acc].handle.accept_call(&pending.call_id);
-        self.pending_accept =
+        self.accounts_state.accounts[acc].handle.accept_call(&pending.call_id);
+        self.calls_state.pending_accept =
             Some(PendingAccept { call_id: pending.call_id, remote_uri: pending.from, start_time: pending.start_time });
-        self.status_line = "Accepting…".into();
+        self.accounts_state.status_line = "Accepting…".into();
         self.refresh_call_status();
     }
 
     pub(crate) fn do_reject(&mut self) {
-        if let Some(pending) = self.pending_call.take() {
-            self.record_history(pending.from, CallDirection::Inbound, pending.start_time, CallStatus::Rejected);
-            self.accounts[pending.account].handle.reject_call(&pending.call_id);
+        if let Some(pending) = self.calls_state.pending_call.take() {
+            self.record_history(pending.from, Direction::Inbound, pending.start_time, CallStatus::Rejected);
+            self.accounts_state.accounts[pending.account].handle.reject_call(&pending.call_id);
             self.refresh_call_status();
         }
     }
@@ -158,27 +167,27 @@ impl DeelipApp {
     /// here since it hard-requires a connected `focused_call`, not a still-
     /// ringing `pending_call`.
     pub(crate) fn do_redirect_pending_call(&mut self) {
-        let Some(pending) = self.pending_call.take() else { return };
-        let raw = self.redirect_target.trim().to_string();
+        let Some(pending) = self.calls_state.pending_call.take() else { return };
+        let raw = self.calls_state.redirect_target.trim().to_string();
         if raw.is_empty() {
-            self.pending_call = Some(pending);
+            self.calls_state.pending_call = Some(pending);
             return;
         }
         let domain = self.dial_domain(pending.account);
-        let prefix = self.accounts[pending.account].account.dialing_prefix.clone().unwrap_or_default();
-        let dial_plan = self.accounts[pending.account].account.dial_plan.clone();
+        let prefix = self.accounts_state.accounts[pending.account].account.dialing_prefix.clone().unwrap_or_default();
+        let dial_plan = self.accounts_state.accounts[pending.account].account.dial_plan.clone();
         let target = normalize_target_with_prefix(&raw, &domain, &prefix, &dial_plan);
-        self.accounts[pending.account].handle.redirect_call(&pending.call_id, target);
-        self.record_history(pending.from, CallDirection::Inbound, pending.start_time, CallStatus::Missed);
-        self.redirect_target.clear();
-        self.showing_redirect = false;
+        self.accounts_state.accounts[pending.account].handle.redirect_call(&pending.call_id, target);
+        self.record_history(pending.from, Direction::Inbound, pending.start_time, CallStatus::Missed);
+        self.calls_state.redirect_target.clear();
+        self.calls_state.showing_redirect = false;
         self.refresh_call_status();
     }
 
     pub(crate) fn do_hangup(&mut self, idx: usize) {
-        let call_id = self.calls[idx].call_id.clone();
-        let acc = self.calls[idx].account;
-        self.accounts[acc].handle.hang_up(&call_id);
+        let call_id = self.calls_state.calls[idx].call_id.clone();
+        let acc = self.calls_state.calls[idx].account;
+        self.accounts_state.accounts[acc].handle.hang_up(&call_id);
         let slot = self.remove_call(idx);
         self.record_history(slot.remote_uri, slot.direction, slot.start_time, CallStatus::Answered);
         self.refresh_call_status();
@@ -189,30 +198,25 @@ impl DeelipApp {
     /// callers that are actually switching audio away from this call do that
     /// themselves (see `do_hold_slot`/`do_accept`/`do_swap_to`).
     pub(crate) fn send_hold(&mut self, idx: usize) {
-        let call_id = self.calls[idx].call_id.clone();
-        let acc = self.calls[idx].account;
-        self.calls[idx].is_held = true;
-        self.accounts[acc].handle.hold_call(&call_id);
+        let call_id = self.calls_state.calls[idx].call_id.clone();
+        let acc = self.calls_state.calls[idx].account;
+        self.calls_state.calls[idx].is_held = true;
+        self.accounts_state.accounts[acc].handle.hold_call(&call_id);
     }
 
     pub(crate) fn send_resume(&mut self, idx: usize) {
-        let call_id = self.calls[idx].call_id.clone();
-        let acc = self.calls[idx].account;
-        self.accounts[acc].handle.resume_call(&call_id);
+        let call_id = self.calls_state.calls[idx].call_id.clone();
+        let acc = self.calls_state.calls[idx].account;
+        self.accounts_state.accounts[acc].handle.resume_call(&call_id);
     }
 
     /// Hold call `idx` — if it's the focused one, its media stops and no
     /// call has live audio until the user swaps back to something.
     pub(crate) fn do_hold_slot(&mut self, idx: usize) {
         self.send_hold(idx);
-        if self.focused_call == Some(idx) {
-            if let Some(engine) = self.media.take() {
-                self.rt.block_on(engine.stop());
-            }
-            if let Some(v) = self.video.take() {
-                self.rt.block_on(v.engine.stop());
-            }
-            self.focused_call = None;
+        if self.calls_state.focused_call == Some(idx) {
+            self.stop_focused_media();
+            self.calls_state.focused_call = None;
         }
         self.refresh_call_status();
     }
@@ -223,21 +227,16 @@ impl DeelipApp {
     /// negotiated RTP endpoint doesn't change between hold and resume, so
     /// there's nothing new to learn from a resume re-INVITE's response).
     pub(crate) fn do_swap_to(&mut self, idx: usize) {
-        if self.focused_call == Some(idx) {
+        if self.calls_state.focused_call == Some(idx) {
             return;
         }
-        if let Some(cur) = self.focused_call {
+        if let Some(cur) = self.calls_state.focused_call {
             self.send_hold(cur);
-            if let Some(engine) = self.media.take() {
-                self.rt.block_on(engine.stop());
-            }
-            if let Some(v) = self.video.take() {
-                self.rt.block_on(v.engine.stop());
-            }
-            self.focused_call = None;
+            self.stop_focused_media();
+            self.calls_state.focused_call = None;
         }
         self.send_resume(idx);
-        self.calls[idx].is_held = false;
+        self.calls_state.calls[idx].is_held = false;
         self.start_media(idx);
         self.refresh_call_status();
     }
@@ -245,16 +244,16 @@ impl DeelipApp {
     /// `selected_account` clamped to a valid index — `None` if there are no
     /// accounts at all (nothing to call from).
     pub(crate) fn selected_account_idx(&self) -> Option<usize> {
-        if self.accounts.is_empty() {
+        if self.accounts_state.accounts.is_empty() {
             return None;
         }
-        Some(self.selected_account.min(self.accounts.len() - 1))
+        Some(self.accounts_state.selected_account.min(self.accounts_state.accounts.len() - 1))
     }
 
     pub(crate) fn do_dtmf(&self, digit: char) {
-        let Some(idx) = self.focused_call else { return };
-        let call = &self.calls[idx];
-        let mode = self.accounts[call.account].account.dtmf_mode;
+        let Some(idx) = self.calls_state.focused_call else { return };
+        let call = &self.calls_state.calls[idx];
+        let mode = self.accounts_state.accounts[call.account].account.dtmf_mode;
         // `Auto` picks per-call from the already-negotiated media: RFC 2833
         // if the far end offered a telephone-event payload type, else SIP
         // INFO (doesn't depend on SDP negotiation at all, so it's always
@@ -266,28 +265,28 @@ impl DeelipApp {
         };
         match mode {
             DtmfMode::Rfc2833 => {
-                if let Some(engine) = &self.media {
+                if let Some(engine) = &self.calls_state.media {
                     engine.send_dtmf(digit);
                 }
             }
             DtmfMode::Inband => {
-                if let Some(engine) = &self.media {
+                if let Some(engine) = &self.calls_state.media {
                     engine.send_dtmf_inband(digit);
                 }
             }
             DtmfMode::SipInfo => {
-                self.accounts[call.account].handle.send_dtmf_info(&call.call_id, digit);
+                self.accounts_state.accounts[call.account].handle.send_dtmf_info(&call.call_id, digit);
             }
             DtmfMode::Auto => unreachable!("resolved to Rfc2833 or SipInfo above"),
         }
     }
 
     pub(crate) fn is_muted(&self) -> bool {
-        self.media.as_ref().is_some_and(|m| m.is_muted())
+        self.calls_state.media.as_ref().is_some_and(|m| m.is_muted())
     }
 
     pub(crate) fn do_mute_toggle(&self) {
-        if let Some(engine) = &self.media {
+        if let Some(engine) = &self.calls_state.media {
             engine.set_muted(!engine.is_muted());
         }
     }
@@ -296,11 +295,11 @@ impl DeelipApp {
     /// video leg -- `false` (not muted) for a call with no video at all,
     /// same "absent means not-toggled" convention as `is_muted`.
     pub(crate) fn is_video_muted(&self) -> bool {
-        self.video.as_ref().is_some_and(|v| v.engine.is_muted())
+        self.calls_state.video.as_ref().is_some_and(|v| v.engine.is_muted())
     }
 
     pub(crate) fn do_video_toggle(&self) {
-        if let Some(video) = &self.video {
+        if let Some(video) = &self.calls_state.video {
             video.engine.set_muted(!video.engine.is_muted());
         }
     }
@@ -309,7 +308,7 @@ impl DeelipApp {
     /// true either because auto-record is on, or because the user manually
     /// started it with `do_record_toggle` below.
     pub(crate) fn is_recording(&self) -> bool {
-        self.media.as_ref().is_some_and(|m| m.is_recording())
+        self.calls_state.media.as_ref().is_some_and(|m| m.is_recording())
     }
 
     /// Manual per-call Record button -- independent of the global
@@ -320,11 +319,11 @@ impl DeelipApp {
     /// not) exactly as the user last manually set it here, instead of
     /// `start_media` falling back to the global auto-record setting again.
     pub(crate) fn do_record_toggle(&mut self) {
-        if let Some(engine) = &self.media {
+        if let Some(engine) = &self.calls_state.media {
             let new_state = !engine.is_recording();
             engine.set_recording(new_state);
-            if let Some(idx) = self.focused_call {
-                self.calls[idx].recording_enabled = new_state;
+            if let Some(idx) = self.calls_state.focused_call {
+                self.calls_state.calls[idx].recording_enabled = new_state;
             }
         }
     }
@@ -333,46 +332,46 @@ impl DeelipApp {
     /// there's no active call, same "no-op without an engine" shape as
     /// `is_muted`.
     pub(crate) fn output_gain(&self) -> f32 {
-        self.media.as_ref().map_or(1.0, |m| m.output_gain())
+        self.calls_state.media.as_ref().map_or(1.0, |m| m.output_gain())
     }
     pub(crate) fn set_output_gain(&self, gain: f32) {
-        if let Some(engine) = &self.media {
+        if let Some(engine) = &self.calls_state.media {
             engine.set_output_gain(gain);
         }
     }
     pub(crate) fn input_gain(&self) -> f32 {
-        self.media.as_ref().map_or(1.0, |m| m.input_gain())
+        self.calls_state.media.as_ref().map_or(1.0, |m| m.input_gain())
     }
     pub(crate) fn set_input_gain(&self, gain: f32) {
-        if let Some(engine) = &self.media {
+        if let Some(engine) = &self.calls_state.media {
             engine.set_input_gain(gain);
         }
     }
 
-    /// Blind-transfer the focused call to `self.transfer_target`.
+    /// Blind-transfer the focused call to `self.calls_state.transfer_target`.
     pub(crate) fn do_transfer(&mut self) {
-        let Some(idx) = self.focused_call else { return };
-        let raw = self.transfer_target.trim().to_string();
+        let Some(idx) = self.calls_state.focused_call else { return };
+        let raw = self.calls_state.transfer_target.trim().to_string();
         if raw.is_empty() {
             return;
         }
-        let acc = self.calls[idx].account;
+        let acc = self.calls_state.calls[idx].account;
         let domain = self.dial_domain(acc);
-        let prefix = self.accounts[acc].account.dialing_prefix.clone().unwrap_or_default();
-        let dial_plan = self.accounts[acc].account.dial_plan.clone();
+        let prefix = self.accounts_state.accounts[acc].account.dialing_prefix.clone().unwrap_or_default();
+        let dial_plan = self.accounts_state.accounts[acc].account.dial_plan.clone();
         let target = normalize_target_with_prefix(&raw, &domain, &prefix, &dial_plan);
-        let call_id = self.calls[idx].call_id.clone();
-        self.accounts[acc].handle.blind_transfer(&call_id, target);
-        self.status_line = "Transferring…".into();
-        self.transfer_target.clear();
-        self.showing_transfer = false;
+        let call_id = self.calls_state.calls[idx].call_id.clone();
+        self.accounts_state.accounts[acc].handle.blind_transfer(&call_id, target);
+        self.accounts_state.status_line = "Transferring…".into();
+        self.calls_state.transfer_target.clear();
+        self.calls_state.showing_transfer = false;
     }
 
     /// If the pending incoming call has a no-answer-forward deadline and
     /// it's elapsed, redirect it (302) instead of leaving it ringing forever.
     /// Called once per frame from `update()`.
     pub(crate) fn check_pending_call_timeout(&mut self) {
-        let Some(pending) = &self.pending_call else {
+        let Some(pending) = &self.calls_state.pending_call else {
             return;
         };
         let now = unix_now();
@@ -389,11 +388,11 @@ impl DeelipApp {
             return;
         }
         let target = target.clone();
-        let Some(pending) = self.pending_call.take() else {
+        let Some(pending) = self.calls_state.pending_call.take() else {
             return;
         };
-        self.accounts[pending.account].handle.redirect_call(&pending.call_id, target);
-        self.record_history(pending.from, CallDirection::Inbound, pending.start_time, CallStatus::Missed);
+        self.accounts_state.accounts[pending.account].handle.redirect_call(&pending.call_id, target);
+        self.record_history(pending.from, Direction::Inbound, pending.start_time, CallStatus::Missed);
         self.refresh_call_status();
     }
 }

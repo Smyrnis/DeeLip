@@ -17,7 +17,13 @@ impl DeelipApp {
         // Search bar -- import/export moved to Settings' Advanced tab.
         let palette = self.palette;
         ui.horizontal(|ui| {
-            search_field(ui, &palette, &mut self.contact_search, &t("common.search_hint_name_or_number"), 200.0);
+            search_field(
+                ui,
+                &palette,
+                &mut self.contacts_state.contact_search,
+                &t("common.search_hint_name_or_number"),
+                200.0,
+            );
         });
         ui.add_space(4.0);
 
@@ -27,12 +33,26 @@ impl DeelipApp {
         let mut delete_idx: Option<usize> = None;
         let mut default_action_target: Option<usize> = None;
 
-        // Contact list
+        // Cache-and-compare idiom -- see docs/crates/ui.md's "List views" section.
+        let key = (self.contacts_state.contact_search.to_lowercase(), self.contacts_state.contacts.contacts.len());
+        if self.contacts_state.contact_filter_key.as_ref() != Some(&key) {
+            self.contacts_state.contact_filtered = self
+                .contacts_state
+                .contacts
+                .search(&self.contacts_state.contact_search)
+                .into_iter()
+                .map(|(i, _)| i)
+                .collect();
+            self.contacts_state.contact_filter_key = Some(key);
+        }
         let results: Vec<(usize, String, String, bool)> = self
-            .contacts
-            .search(&self.contact_search)
-            .into_iter()
-            .map(|(i, c)| (i, c.name.clone(), c.sip_uri.clone(), c.watch_presence))
+            .contacts_state
+            .contact_filtered
+            .iter()
+            .map(|&i| {
+                let c = &self.contacts_state.contacts.contacts[i];
+                (i, c.name.clone(), c.sip_uri.clone(), c.watch_presence)
+            })
             .collect();
 
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
@@ -41,7 +61,7 @@ impl DeelipApp {
             }
             for (idx, name, uri, watch_presence) in &results {
                 let palette = self.palette;
-                let presence = self.presence.get(uri).copied();
+                let presence = self.contacts_state.presence.get(uri).copied();
                 list_row_menu(
                     ui,
                     &palette,
@@ -101,11 +121,9 @@ impl DeelipApp {
             }
         });
 
-        // Floating "+" FAB -- opens the shared dialog in add mode. Anchored
-        // to this tab's own content rect (`ui.max_rect()`), not `ctx`'s full
-        // screen -- `Area::anchor` is window-relative and overlapped the
-        // bottom status bar; use `fixed_pos` for anything scoped to one
-        // tab's content instead.
+        // Floating "+" FAB -- opens the shared dialog in add mode. See
+        // docs/crates/ui.md's "List views" section for why this uses
+        // `fixed_pos`, not `Area::anchor`.
         let palette = self.palette;
         let fab_size = 40.0;
         let content_rect = ui.max_rect();
@@ -117,26 +135,37 @@ impl DeelipApp {
                 .min_size(egui::vec2(fab_size, fab_size))
                 .corner_radius(egui::CornerRadius::same(20));
             if ui.add(button).on_hover_text(t("contacts.add_contact_hover")).clicked() {
-                self.editing_contact_idx = None;
-                self.new_contact = Contact::default();
-                self.contact_dialog_open = true;
+                self.contacts_state.editing_contact_idx = None;
+                self.contacts_state.new_contact = Contact::default();
+                self.contacts_state.contact_dialog_open = true;
             }
         });
 
         if let Some(idx) = edit_idx {
-            self.editing_contact_idx = Some(idx);
-            self.new_contact = self.contacts.contacts[idx].clone();
-            self.contact_dialog_open = true;
+            self.contacts_state.editing_contact_idx = Some(idx);
+            self.contacts_state.new_contact = self.contacts_state.contacts.contacts[idx].clone();
+            self.contacts_state.contact_dialog_open = true;
         }
         if let Some(idx) = delete_idx {
-            let removed = self.contacts.contacts.remove(idx);
+            let removed = self.contacts_state.contacts.contacts.remove(idx);
             self.unsubscribe_contact_presence(&removed);
-            if self.editing_contact_idx == Some(idx) {
-                self.editing_contact_idx = None;
-                self.new_contact = Contact::default();
-                self.contact_dialog_open = false;
-            }
-            let _ = self.contacts.save(&self.db);
+            // Deleting the contact currently being edited resets the form
+            // (unchanged); deleting a lower-indexed contact instead must
+            // shift the still-open edit target down, matching how
+            // `remove_call` already keeps `focused_call` correct after a
+            // `Vec` shift -- without this, editing contact N then deleting
+            // a different, lower-indexed contact left `editing_contact_idx`
+            // silently pointing at the wrong contact.
+            self.contacts_state.editing_contact_idx = match self.contacts_state.editing_contact_idx {
+                Some(i) if i == idx => {
+                    self.contacts_state.new_contact = Contact::default();
+                    self.contacts_state.contact_dialog_open = false;
+                    None
+                }
+                Some(i) if i > idx => Some(i - 1),
+                other => other,
+            };
+            let _ = self.contacts_state.contacts.save(&self.db);
         }
 
         if let Some(target) = call_target {
@@ -148,15 +177,15 @@ impl DeelipApp {
         if let Some(idx) = default_action_target {
             match self.config.default_list_action {
                 deelip_config::DefaultListAction::Call => {
-                    self.dial_from_list(self.contacts.contacts[idx].sip_uri.clone());
+                    self.dial_from_list(self.contacts_state.contacts.contacts[idx].sip_uri.clone());
                 }
                 deelip_config::DefaultListAction::Message => {
-                    self.message_from_list(self.contacts.contacts[idx].sip_uri.clone());
+                    self.message_from_list(self.contacts_state.contacts.contacts[idx].sip_uri.clone());
                 }
                 deelip_config::DefaultListAction::Edit => {
-                    self.editing_contact_idx = Some(idx);
-                    self.new_contact = self.contacts.contacts[idx].clone();
-                    self.contact_dialog_open = true;
+                    self.contacts_state.editing_contact_idx = Some(idx);
+                    self.contacts_state.new_contact = self.contacts_state.contacts.contacts[idx].clone();
+                    self.contacts_state.contact_dialog_open = true;
                 }
             }
         }
@@ -165,10 +194,8 @@ impl DeelipApp {
     /// Shared create/edit contact dialog -- opened from Contacts' "+" FAB
     /// (add mode) or Contacts'/History's "Edit"/"Add to Contacts" actions
     /// (edit/prefilled mode). Rendered from `frame.rs::update()`, not from
-    /// inside `show_contacts`, since History needs to trigger it while
-    /// History -- not Contacts -- is the active tab. `on_close` and
-    /// `content` both end up calling `finish_contact_dialog`, harmlessly
-    /// even if neither button was actually clicked.
+    /// inside `show_contacts` -- see `docs/crates/ui.md`'s "Pop-out windows"
+    /// section for why.
     pub(crate) fn show_contact_dialog(&mut self, ctx: &egui::Context, self_app: SharedApp) {
         show_pop_out_window(
             self,
@@ -179,7 +206,7 @@ impl DeelipApp {
             [320.0, 300.0],
             [280.0, 260.0],
             false,
-            |app| app.contact_dialog_open,
+            |app| app.contacts_state.contact_dialog_open,
             |app| app.finish_contact_dialog(false, true),
             |app| app.contact_dialog_title(),
             |app, ui| {
@@ -190,7 +217,7 @@ impl DeelipApp {
     }
 
     fn contact_dialog_title(&self) -> String {
-        if self.editing_contact_idx.is_some() {
+        if self.contacts_state.editing_contact_idx.is_some() {
             t("contacts.edit_contact_title")
         } else {
             t("contacts.add_contact_title")
@@ -208,7 +235,7 @@ impl DeelipApp {
         ui.horizontal(|ui| {
             field_label(ui, &palette, &t("contacts.name_label"));
             text_edit_scope(ui, &palette, |ui| {
-                ui.add(egui::TextEdit::singleline(&mut self.new_contact.name).desired_width(160.0))
+                ui.add(egui::TextEdit::singleline(&mut self.contacts_state.new_contact.name).desired_width(160.0))
             });
         });
         ui.add_space(4.0);
@@ -216,7 +243,7 @@ impl DeelipApp {
             field_label(ui, &palette, &t("contacts.number_label"));
             text_edit_scope(ui, &palette, |ui| {
                 ui.add(
-                    egui::TextEdit::singleline(&mut self.new_contact.sip_uri)
+                    egui::TextEdit::singleline(&mut self.contacts_state.new_contact.sip_uri)
                         .hint_text(RichText::new(t("common.number_hint")).color(palette.ink_muted))
                         .font(theme::font_address())
                         .desired_width(220.0),
@@ -224,19 +251,21 @@ impl DeelipApp {
             });
         });
         ui.add_space(6.0);
-        ui.checkbox(&mut self.new_contact.watch_presence, t("contacts.watch_presence"));
-        if self.accounts.len() > 1 {
+        ui.checkbox(&mut self.contacts_state.new_contact.watch_presence, t("contacts.watch_presence"));
+        if self.accounts_state.accounts.len() > 1 {
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 field_label(ui, &palette, &t("contacts.via_label"));
-                let (current_reg_ok, current_text) = match &self.new_contact.presence_account {
+                let (current_reg_ok, current_text) = match &self.contacts_state.new_contact.presence_account {
                     Some(username) => self
+                        .accounts_state
                         .accounts
                         .iter()
                         .find(|a| &a.account.username == username)
                         .map(|a| (a.reg_ok, a.label.clone()))
                         .unwrap_or((false, username.clone())),
                     None => self
+                        .accounts_state
                         .accounts
                         .first()
                         .map(|a| (a.reg_ok, tf("contacts.default_account_suffix", &[("label", &a.label)])))
@@ -247,12 +276,12 @@ impl DeelipApp {
                 egui::ComboBox::from_id_salt("contact_presence_account_picker").selected_text(selected_label).show_ui(
                     ui,
                     |ui| {
-                        for acc in &self.accounts {
-                            let is_sel =
-                                self.new_contact.presence_account.as_deref() == Some(acc.account.username.as_str());
+                        for acc in &self.accounts_state.accounts {
+                            let is_sel = self.contacts_state.new_contact.presence_account.as_deref()
+                                == Some(acc.account.username.as_str());
                             let label = account_status_label(ui, &palette, acc.reg_ok, &acc.label);
                             if ui.add(egui::Button::selectable(is_sel, label)).clicked() {
-                                self.new_contact.presence_account = Some(acc.account.username.clone());
+                                self.contacts_state.new_contact.presence_account = Some(acc.account.username.clone());
                             }
                         }
                     },
@@ -261,7 +290,8 @@ impl DeelipApp {
         }
         ui.add_space(10.0);
         ui.horizontal(|ui| {
-            let can_save = !self.new_contact.name.is_empty() && !self.new_contact.sip_uri.is_empty();
+            let can_save =
+                !self.contacts_state.new_contact.name.is_empty() && !self.contacts_state.new_contact.sip_uri.is_empty();
             if ui.add_enabled(can_save, egui::Button::new(t("common.save_button"))).clicked() {
                 save_clicked = true;
             }
@@ -274,23 +304,26 @@ impl DeelipApp {
 
     fn finish_contact_dialog(&mut self, save_clicked: bool, cancel_clicked: bool) {
         if save_clicked {
-            let c = std::mem::take(&mut self.new_contact);
-            if let Some(idx) = self.editing_contact_idx.take() {
-                let old = self.contacts.contacts[idx].clone();
-                self.contacts.contacts[idx] = c.clone();
+            let c = std::mem::take(&mut self.contacts_state.new_contact);
+            if let Some(idx) = self.contacts_state.editing_contact_idx.take() {
+                let old = self.contacts_state.contacts.contacts[idx].clone();
+                self.contacts_state.contacts.contacts[idx] = c.clone();
+                // Same length as before -- `contact_filter_key` can't
+                // detect this edit on its own, so force a recompute.
+                self.contacts_state.contact_filter_key = None;
                 self.unsubscribe_contact_presence(&old);
                 self.subscribe_contact_presence(&c);
             } else {
-                self.contacts.contacts.push(c.clone());
+                self.contacts_state.contacts.contacts.push(c.clone());
                 self.subscribe_contact_presence(&c);
             }
-            let _ = self.contacts.save(&self.db);
-            self.contact_dialog_open = false;
+            let _ = self.contacts_state.contacts.save(&self.db);
+            self.contacts_state.contact_dialog_open = false;
         }
         if cancel_clicked {
-            self.editing_contact_idx = None;
-            self.new_contact = Contact::default();
-            self.contact_dialog_open = false;
+            self.contacts_state.editing_contact_idx = None;
+            self.contacts_state.new_contact = Contact::default();
+            self.contacts_state.contact_dialog_open = false;
         }
     }
 
@@ -299,7 +332,7 @@ impl DeelipApp {
             return;
         }
         if let Some(idx) = self.resolve_presence_account(contact) {
-            self.accounts[idx].handle.subscribe_presence(contact.sip_uri.clone());
+            self.accounts_state.accounts[idx].handle.subscribe_presence(contact.sip_uri.clone());
         }
     }
 
@@ -307,14 +340,14 @@ impl DeelipApp {
         if contact.watch_presence
             && let Some(idx) = self.resolve_presence_account(contact)
         {
-            self.accounts[idx].handle.unsubscribe_presence(contact.sip_uri.clone());
+            self.accounts_state.accounts[idx].handle.unsubscribe_presence(contact.sip_uri.clone());
         }
-        self.presence.remove(&contact.sip_uri);
+        self.contacts_state.presence.remove(&contact.sip_uri);
     }
 
     pub(crate) fn export_contacts_csv(&self) {
         let mut csv = String::from("name,sip_uri\n");
-        for c in &self.contacts.contacts {
+        for c in &self.contacts_state.contacts.contacts {
             csv.push_str(&format!(
                 "{},{}\n",
                 crate::helpers::csv_escape(&c.name),
@@ -326,7 +359,7 @@ impl DeelipApp {
 
     pub(crate) fn export_contacts_vcard(&self) {
         let mut vcf = String::new();
-        for c in &self.contacts.contacts {
+        for c in &self.contacts_state.contacts.contacts {
             vcf.push_str("BEGIN:VCARD\r\n");
             vcf.push_str("VERSION:3.0\r\n");
             vcf.push_str(&format!("FN:{}\r\n", c.name));
@@ -364,8 +397,8 @@ impl DeelipApp {
             return;
         }
 
-        self.contacts.contacts.extend(imported);
-        let _ = self.contacts.save(&self.db);
+        self.contacts_state.contacts.contacts.extend(imported);
+        let _ = self.contacts_state.contacts.save(&self.db);
     }
 }
 

@@ -45,20 +45,22 @@ Everything — accounts, contacts, call history, recordings, logs, crash reports
 SQLite database under your OS's standard config directory plus a `deelip` folder: `~/.config/deelip/`
 on Linux, `%APPDATA%\deelip\` on Windows, `~/Library/Application Support/deelip/` on macOS. Every
 table is created with `CREATE TABLE IF NOT EXISTS` on load, so that directory is self-healing;
-uninstalling normally leaves it untouched (see [Uninstall](/docs/install/uninstall)'s `--purge`
-flag if you want it gone too, on Linux).
+uninstalling normally leaves it untouched (on Linux, run `scripts/uninstall.sh --purge` if you
+want it gone too).
 
 ### Does it work behind NAT / on a real-world network, not just a LAN?
 
-Yes — DeeLip implements STUN, TURN relay fallback, and full ICE for RTP media traversal. See the
-[NAT docs](/docs/guide/nat) for how the pieces fit together.
+Yes — STUN (on by default, works for most home routers out of the box), full ICE, and TURN
+relay fallback for the strictest networks, all configurable in Settings > Network. One
+limitation: STUN support is IPv4-only today.
 
 ### Is the encryption real end-to-end, or just transport encryption?
 
 Real ZRTP (RFC 6189), implemented from scratch with SAS (Short Authentication String)
-verification, alongside SDES-SRTP as an alternative. Media stays encrypted peer-to-peer; see the
-[Calling & security](/docs/guide/calling-security) and [Audio & video quality](/docs/guide/audio-video)
-docs for the protocol and RTP-level details.
+verification you and the other party can read aloud to confirm nobody's intercepting the key
+exchange — alongside SDES-SRTP as a simpler alternative that doesn't need ZRTP support on the
+other end. Either way, no certificate authority or cloud account is involved; the key exchange
+happens directly between the two phones.
 
 ### It's not working — where do I start?
 

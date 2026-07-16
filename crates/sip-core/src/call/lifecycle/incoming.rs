@@ -10,16 +10,30 @@ use tracing::{debug, error};
 use super::{DialogRequestContext, VIDEO_CODECS};
 use crate::{
     call::dialog::{Dialog, DialogState},
-    call::media_setup::{self, NetworkConfig},
+    call::media_setup::{self, DtlsCallParams, NetworkConfig},
     client::{IncomingVideoAnswer, SipStack, StackEvent},
     events::SipEvent,
     wire::message::{SipMessage, SipMethod},
     wire::sdp::{
-        SrtpParams, build_answer, build_video_media_section, parse_sdp_forcing, parse_video_section,
+        Setup, SrtpParams, build_answer, build_video_media_section, parse_sdp_forcing, parse_video_section,
         split_media_sections,
     },
     wire::util::{new_tag, parse_tag, parse_uri},
 };
+
+/// RFC 4145 §4.1 / RFC 5763 §5: when the offer proposes `actpass`, the
+/// answerer picks which side initiates the DTLS handshake -- either is
+/// valid, but this default (`Active`, i.e. we send the ClientHello) is
+/// UNVERIFIED against a real interop peer. If the offer instead pins a
+/// specific role, we must take the complementary one (RFC 4145: the two
+/// sides can't both be active or both passive).
+fn resolve_answerer_dtls_role(offered_setup: Option<Setup>) -> Setup {
+    match offered_setup {
+        Some(Setup::Active) => Setup::Passive,
+        Some(Setup::Passive) => Setup::Active,
+        Some(Setup::ActPass) | None => Setup::Active,
+    }
+}
 
 impl SipStack {
     // ── Incoming INVITE ───────────────────────────────────────────────────────
@@ -171,6 +185,7 @@ impl SipStack {
         let network = self.network.clone();
         let advertised_ip = self.advertised_ip.clone();
         let wants_srtp = self.account.wants_srtp(self.resolved_transport);
+        let wants_dtls_srtp = self.account.wants_dtls_srtp();
         let wants_ice = self.account.wants_ice(self.network.ice_enabled);
         let vad_enabled = self.account.vad_enabled;
         let internal_tx = self.internal_tx.clone();
@@ -188,14 +203,41 @@ impl SipStack {
             };
 
             let local_srtp = if wants_srtp { Some(SrtpParams::generate()) } else { None };
-            let mut local_sdp =
-                build_answer(&rtp_ip, rtp_port, parsed.codec, local_srtp.as_ref(), ice_attrs.as_ref(), vad_enabled);
+            // Only attempted if the offer actually carried a fingerprint --
+            // otherwise the remote doesn't support DTLS-SRTP and we fall
+            // back to whatever SDES/plaintext `wants_srtp` already decided.
+            let local_dtls = if wants_dtls_srtp && let Some(remote_fingerprint) = parsed.fingerprint.clone() {
+                match DtlsCallParams::generate() {
+                    Ok(mut params) => {
+                        params.role = Some(resolve_answerer_dtls_role(parsed.setup));
+                        params.remote_fingerprint = Some(remote_fingerprint);
+                        Some(params)
+                    }
+                    Err(e) => {
+                        error!("Failed to generate DTLS-SRTP certificate: {e:#}");
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+            let mut local_sdp = build_answer(
+                &rtp_ip,
+                rtp_port,
+                parsed.codec,
+                local_srtp.as_ref(),
+                ice_attrs.as_ref(),
+                vad_enabled,
+                local_dtls.as_ref().map(|d| &d.local_fingerprint),
+                local_dtls.as_ref().and_then(|d| d.role),
+            );
 
             let video = Self::prepare_video_answer(
                 &network,
                 &advertised_ip,
                 wants_ice,
                 wants_srtp,
+                local_dtls.as_ref(),
                 parsed_video,
                 &mut local_sdp,
             )
@@ -209,6 +251,7 @@ impl SipStack {
                 local_srtp,
                 relay,
                 ice,
+                local_dtls,
                 video,
             });
         });
@@ -223,7 +266,8 @@ impl SipStack {
     /// additive, never a reason to decline the whole call.
     async fn prepare_video_answer(
         network: &NetworkConfig, advertised_ip: &str, wants_ice: bool, wants_srtp: bool,
-        parsed_video: Option<crate::wire::sdp::ParsedVideoMedia>, local_sdp: &mut String,
+        local_dtls: Option<&DtlsCallParams>, parsed_video: Option<crate::wire::sdp::ParsedVideoMedia>,
+        local_sdp: &mut String,
     ) -> Option<IncomingVideoAnswer> {
         let parsed = parsed_video?;
         let local_rtp = match deelip_nat::alloc_rtp_port(network.rtp_port_range) {
@@ -256,6 +300,8 @@ impl SipStack {
             parsed.codec,
             local_srtp.as_ref(),
             ice_attrs.as_ref(),
+            local_dtls.map(|d| &d.local_fingerprint),
+            local_dtls.and_then(|d| d.role),
         ));
 
         Some(IncomingVideoAnswer { parsed, local_rtp, local_srtp, relay, ice })
@@ -267,8 +313,17 @@ impl SipStack {
     /// dialog is already gone (CANCELed/hung-up while this was resolving) --
     /// there's nothing left to answer.
     pub(crate) async fn on_incoming_answer_ready(&mut self, ev: StackEvent) {
-        let StackEvent::IncomingAnswerReady { call_id, parsed, local_sdp, local_rtp, local_srtp, relay, ice, video } =
-            ev
+        let StackEvent::IncomingAnswerReady {
+            call_id,
+            parsed,
+            local_sdp,
+            local_rtp,
+            local_srtp,
+            relay,
+            ice,
+            local_dtls,
+            video,
+        } = ev
         else {
             unreachable!("caller already matched this variant")
         };
@@ -294,12 +349,8 @@ impl SipStack {
         let contact_transport = ctx.contact_transport;
         let body_len = local_sdp.len();
 
-        // RFC 4028 Session Timers: our own 2xx response's `refresher=` takes
-        // highest precedence per the RFC's own resolution rules, so we
-        // decide unilaterally here rather than just echoing the caller's
-        // request -- honor an explicit "uas" ask (they want us to refresh),
-        // otherwise default to "uac" (them), same default-favors-caller rule
-        // the outgoing-call side uses in `on_response`.
+        // See docs/crates/sip-core.md's "RFC 4028 Session Timers" note on why
+        // our own `refresher=` decision here takes precedence over the caller's.
         let session_timer_info = if self.account.session_timers_enabled {
             dialog.incoming_session_expires.take().map(|(interval, their_refresher)| {
                 let we_are_refresher = their_refresher.as_deref() == Some("uas");
@@ -345,6 +396,7 @@ impl SipStack {
             parsed.rtp_addr,
             parsed.srtp,
             wants_srtp,
+            local_dtls,
         );
         debug!(call_id = %call_id_str, video_negotiated = video.is_some(), "Incoming call answered");
         if let Some(v) = video {

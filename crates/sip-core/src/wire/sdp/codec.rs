@@ -5,6 +5,11 @@ pub const OPUS_PAYLOAD_TYPE: u8 = 111;
 /// Dynamic PT for iLBC (RFC 3952 has no static assignment) — picked clear
 /// of every other PT already in use here (0/3/8/9 static, 101/111 dynamic).
 pub const ILBC_PAYLOAD_TYPE: u8 = 98;
+/// Dynamic PT for `AudioCodec::L16` — RFC 3551 §4.5.11 does give L16 a
+/// static assignment (PT 10/11), but at 44100 Hz stereo/mono, not this
+/// pipeline's fixed 8kHz mono; a dynamic PT + explicit `a=rtpmap` describes
+/// what we actually send, same reasoning as iLBC's dynamic PT above.
+pub const L16_PAYLOAD_TYPE: u8 = 118;
 /// RFC 3551 static assignment for Comfort Noise at an 8000 Hz clock (RFC
 /// 3389). Only ever advertised/used alongside a codec whose own RTP clock
 /// is also 8000 Hz (i.e. never Opus, which is 48000) -- CN packets share
@@ -42,13 +47,22 @@ pub enum AudioCodec {
     /// discontinuous-transmission frames we'd otherwise have no comfort-
     /// noise generator to decode.
     G729,
+    /// Uncompressed 16-bit signed linear PCM, network (big-endian) byte
+    /// order per RFC 3551 §4.5.11 -- no real "codec" logic, just raw
+    /// samples on the wire. Mostly useful for lab/loopback testing or
+    /// interop with gear that specifically wants uncompressed audio;
+    /// double the bitrate of G.711 for no quality benefit at this
+    /// pipeline's 8kHz sample rate, so it's not a sensible default for a
+    /// real call. See `L16_PAYLOAD_TYPE`'s doc comment for why this is a
+    /// dynamic PT rather than RFC 3551's static one.
+    L16,
 }
 
 /// Every codec this codebase knows how to negotiate, in the historical
 /// default preference order — used as the fallback when an account's
 /// configured codec list is empty (shouldn't normally happen; the Settings
 /// UI itself refuses to let the last enabled codec be disabled).
-pub const ALL_CODECS: [AudioCodec; 7] = [
+pub const ALL_CODECS: [AudioCodec; 8] = [
     AudioCodec::Opus,
     AudioCodec::G722,
     AudioCodec::Pcmu,
@@ -56,6 +70,7 @@ pub const ALL_CODECS: [AudioCodec; 7] = [
     AudioCodec::Gsm,
     AudioCodec::Ilbc,
     AudioCodec::G729,
+    AudioCodec::L16,
 ];
 
 impl AudioCodec {
@@ -68,6 +83,7 @@ impl AudioCodec {
             AudioCodec::G729 => 18,
             AudioCodec::Opus => OPUS_PAYLOAD_TYPE,
             AudioCodec::Ilbc => ILBC_PAYLOAD_TYPE,
+            AudioCodec::L16 => L16_PAYLOAD_TYPE,
         }
     }
 
@@ -84,6 +100,7 @@ impl AudioCodec {
             AudioCodec::Gsm => "GSM/8000",
             AudioCodec::Ilbc => "iLBC/8000",
             AudioCodec::G729 => "G729/8000",
+            AudioCodec::L16 => "L16/8000",
         }
     }
 
@@ -101,3 +118,7 @@ impl AudioCodec {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/unit/codec.rs"]
+mod tests;

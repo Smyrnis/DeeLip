@@ -1,4 +1,4 @@
-use deelip_config::{Message, MessageDirection};
+use deelip_config::{Direction, Message};
 use egui::{RichText, Ui};
 
 use crate::app::{DeelipApp, SharedApp};
@@ -14,7 +14,7 @@ impl DeelipApp {
     /// `show_pop_out_window` -- see `docs/crates/ui.md`'s "Why Messages is the one
     /// exception".
     pub(crate) fn show_messages_window(&mut self, ctx: &egui::Context, self_app: SharedApp) {
-        if !self.messages_window_open {
+        if !self.messages_state.messages_window_open {
             return;
         }
 
@@ -40,7 +40,7 @@ impl DeelipApp {
                     });
                 });
             if !open {
-                self.messages_window_open = false;
+                self.messages_state.messages_window_open = false;
             }
             return;
         }
@@ -55,7 +55,7 @@ impl DeelipApp {
                 .with_icon(window_icon()),
             move |child_ui: &mut egui::Ui, _class| {
                 let mut app = self_app.lock();
-                if !app.messages_window_open {
+                if !app.messages_state.messages_window_open {
                     return;
                 }
                 // Recomputed here (not passed in from the outer call) since
@@ -79,7 +79,7 @@ impl DeelipApp {
                 egui::CentralPanel::default().show_inside(child_ui, |ui| app.show_messages_thread_and_compose(ui));
 
                 if child_ui.input(|i| i.viewport().close_requested()) {
-                    app.messages_window_open = false;
+                    app.messages_state.messages_window_open = false;
                 }
             },
         );
@@ -90,7 +90,7 @@ impl DeelipApp {
     /// while walking it in order is exactly that peer's latest activity.
     fn message_peers(&self) -> Vec<String> {
         let mut peers: Vec<String> = Vec::new();
-        for m in &self.messages.messages {
+        for m in &self.messages_state.messages.messages {
             if !peers.iter().any(|p| p == &m.peer_uri) {
                 peers.push(m.peer_uri.clone());
             }
@@ -117,8 +117,8 @@ impl DeelipApp {
     fn show_messages_peer_rows(&mut self, ui: &mut Ui, peers: &[String]) {
         let palette = self.palette;
         for peer in peers {
-            let selected = self.messages_window_peer.as_deref() == Some(peer.as_str());
-            let (name, _) = resolve_caller(&self.contacts, peer);
+            let selected = self.messages_state.messages_window_peer.as_deref() == Some(peer.as_str());
+            let (name, _) = resolve_caller(&self.contacts_state.contacts, peer);
             let bg_idx = ui.painter().add(egui::Shape::Noop);
             let row = ui
                 .push_id(peer.as_str(), |ui| {
@@ -134,7 +134,7 @@ impl DeelipApp {
             ui.painter().set(bg_idx, egui::Shape::rect_filled(row.rect, 0.0, bg));
             list_row_divider(ui, &palette, row.rect);
             if row.interact(egui::Sense::click()).clicked() {
-                self.messages_window_peer = Some(peer.clone());
+                self.messages_state.messages_window_peer = Some(peer.clone());
             }
         }
     }
@@ -144,13 +144,13 @@ impl DeelipApp {
     /// chrome-first ordering as Settings' Save button -- see docs/crates/ui.md's
     /// Settings section).
     fn show_messages_thread_and_compose(&mut self, ui: &mut Ui) {
-        let Some(peer) = self.messages_window_peer.clone() else {
+        let Some(peer) = self.messages_state.messages_window_peer.clone() else {
             empty_state(ui, &self.palette, &t("messages.select_conversation"));
             return;
         };
 
         egui::Panel::top("messages_thread_header").show_inside(ui, |ui| {
-            let (name, _) = resolve_caller(&self.contacts, &peer);
+            let (name, _) = resolve_caller(&self.contacts_state.contacts, &peer);
             ui.add_space(4.0);
             ui.label(RichText::new(name).font(crate::theme::font_heading(14.0)));
             ui.add_space(2.0);
@@ -162,26 +162,29 @@ impl DeelipApp {
             let palette = self.palette;
             text_edit_scope(ui, &palette, |ui| {
                 ui.add(
-                    egui::TextEdit::multiline(&mut self.message_body)
+                    egui::TextEdit::multiline(&mut self.messages_state.message_body)
                         .desired_rows(3)
                         .hint_text(RichText::new(t("messages.compose_hint")).color(palette.ink_muted))
                         .desired_width(f32::INFINITY),
                 )
             });
             ui.add_space(4.0);
-            let can_send = !self.message_body.trim().is_empty() && self.reg_ok && self.selected_account_idx().is_some();
+            let can_send = !self.messages_state.message_body.trim().is_empty()
+                && self.accounts_state.reg_ok
+                && self.selected_account_idx().is_some();
             if ui.add_enabled(can_send, egui::Button::new(t("common.send_button"))).clicked() {
                 self.do_send_message(peer.clone());
             }
             ui.add_space(4.0);
         });
 
-        let thread: Vec<&Message> = self.messages.messages.iter().filter(|m| m.peer_uri == peer).rev().collect();
+        let thread: Vec<&Message> =
+            self.messages_state.messages.messages.iter().filter(|m| m.peer_uri == peer).rev().collect();
 
         let palette = self.palette;
         egui::ScrollArea::vertical().id_salt("messages_thread_scroll").stick_to_bottom(true).show(ui, |ui| {
             for m in thread {
-                let outbound = m.direction == MessageDirection::Outbound;
+                let outbound = m.direction == Direction::Outbound;
                 let fill = if outbound { palette.signal.gamma_multiply(0.28) } else { palette.surface };
                 ui.with_layout(
                     egui::Layout::top_down(if outbound { egui::Align::Max } else { egui::Align::Min }),
@@ -211,17 +214,17 @@ impl DeelipApp {
         let Some(acc) = self.selected_account_idx() else {
             return;
         };
-        let body = self.message_body.trim().to_string();
-        self.accounts[acc].handle.send_message(&to, &body);
+        let body = self.messages_state.message_body.trim().to_string();
+        self.accounts_state.accounts[acc].handle.send_message(&to, &body);
 
-        self.messages.push(Message {
+        self.messages_state.messages.push(Message {
             peer_uri: to.clone(),
-            direction: MessageDirection::Outbound,
+            direction: Direction::Outbound,
             body,
             timestamp: unix_now(),
         });
-        let _ = self.messages.save(&self.db);
-        self.message_body.clear();
-        self.messages_window_peer = Some(to);
+        let _ = self.messages_state.messages.save(&self.db);
+        self.messages_state.message_body.clear();
+        self.messages_state.messages_window_peer = Some(to);
     }
 }

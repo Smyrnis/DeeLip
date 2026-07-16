@@ -6,7 +6,7 @@ use anyhow::Context;
 
 use crate::codec::{
     G722Decoder, G722Encoder, G729Decoder, G729Encoder, GsmDecoder, GsmEncoder, IlbcDecoder, IlbcEncoder, OpusDecoder,
-    OpusEncoder, decode_pcma, decode_pcmu, encode_pcma, encode_pcmu,
+    OpusEncoder, decode_l16, decode_pcma, decode_pcmu, encode_l16, encode_pcma, encode_pcmu,
 };
 use deelip_sip::AudioCodec;
 
@@ -25,6 +25,7 @@ pub(crate) enum AudioEncoder {
     G729(Box<G729Encoder>),
     Pcma,
     Pcmu,
+    L16,
 }
 
 impl AudioEncoder {
@@ -41,6 +42,7 @@ impl AudioEncoder {
             AudioCodec::G729 => Self::G729(Box::default()),
             AudioCodec::Pcma => Self::Pcma,
             AudioCodec::Pcmu => Self::Pcmu,
+            AudioCodec::L16 => Self::L16,
         })
     }
 
@@ -53,6 +55,7 @@ impl AudioEncoder {
             Self::G729(e) => e.encode(pcm),
             Self::Pcma => encode_pcma(pcm),
             Self::Pcmu => encode_pcmu(pcm),
+            Self::L16 => encode_l16(pcm),
         }
     }
 }
@@ -69,6 +72,7 @@ pub(crate) enum AudioDecoder {
     G729(Box<G729Decoder>),
     Pcma,
     Pcmu,
+    L16,
 }
 
 impl AudioDecoder {
@@ -85,6 +89,7 @@ impl AudioDecoder {
             AudioCodec::G729 => Self::G729(Box::default()),
             AudioCodec::Pcma => Self::Pcma,
             AudioCodec::Pcmu => Self::Pcmu,
+            AudioCodec::L16 => Self::L16,
         })
     }
 
@@ -97,6 +102,7 @@ impl AudioDecoder {
             Self::G729(d) => d.decode(payload),
             Self::Pcma => decode_pcma(payload),
             Self::Pcmu => decode_pcmu(payload),
+            Self::L16 => decode_l16(payload),
         }
     }
 }
@@ -113,7 +119,8 @@ pub(crate) fn ts_increment_for(codec: AudioCodec) -> u32 {
         | AudioCodec::G722
         | AudioCodec::Gsm
         | AudioCodec::Ilbc
-        | AudioCodec::G729 => 160,
+        | AudioCodec::G729
+        | AudioCodec::L16 => 160,
     }
 }
 
@@ -128,6 +135,11 @@ pub(crate) fn clock_hz_for(codec: AudioCodec) -> f64 {
         | AudioCodec::G722
         | AudioCodec::Gsm
         | AudioCodec::Ilbc
-        | AudioCodec::G729 => 8000.0,
+        | AudioCodec::G729
+        | AudioCodec::L16 => 8000.0,
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/codec_dispatch.rs"]
+mod tests;

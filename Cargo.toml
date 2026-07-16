@@ -20,7 +20,7 @@ default-members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.6"
 edition = "2024"
 authors = ["Smyrnis Giannis"]
 license = "MIT"
@@ -28,7 +28,13 @@ license = "MIT"
 [workspace.dependencies]
 anyhow = "1"
 thiserror = "1"
-tokio = { version = "1", features = ["full"] }
+# Explicit feature list instead of "full" -- "full" pulls in process/fs/
+# signal/test-util/etc that nothing in this workspace uses (a well-known
+# binary-size/compile-time bloat source); this set is the actual real
+# union across every crate (net/time/sync for the SIP/RTP/DTMF machinery,
+# rt+rt-multi-thread for main.rs's runtime, io-util for transport.rs's
+# split TCP/TLS streams, macros for #[tokio::test]).
+tokio = { version = "1", features = ["net", "time", "sync", "rt", "rt-multi-thread", "io-util", "macros"] }
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 tracing = "0.1"
@@ -54,7 +60,10 @@ webrtc-util = "0.17"
 async-trait = "0.1"
 fdaf-aec = "0.1"
 tray-icon = { version = "0.24", default-features = false }
-image = "0.25"
+# Only PNG is ever decoded (all three call sites load an embedded
+# assets/*.png icon) -- default features pull in jpeg/gif/webp/tiff/bmp/
+# ico/avif/etc decoders that are never used.
+image = { version = "0.25", default-features = false, features = ["png"] }
 gtk = "0.18"
 hound = "3"
 egui-phosphor = "0.12"
@@ -69,6 +78,11 @@ semver = "1"
 flate2 = "1"
 regex = "1"
 ring = "0.17"
+# Matches the version webrtc-dtls 0.12 itself pins internally (see
+# media-engine/Cargo.toml's DTLS-SRTP comment) -- generated here in sip-core
+# so the DER round-trips directly into webrtc_dtls::crypto::Certificate
+# without sip-core needing a webrtc-dtls dependency of its own.
+rcgen = "0.13"
 aes = "0.8"
 cfb-mode = "0.8"
 crc = "3"
@@ -110,6 +124,13 @@ image = { workspace = true }
 
 [profile.release]
 strip = true
+lto = true
+codegen-units = 1
+# Do NOT add `panic = "abort"` here: crates/ui/src/frame.rs's Windows tray
+# panic-safety fix depends on `std::panic::catch_unwind`, which silently
+# becomes a no-op under `panic = "abort"` (the process just aborts instead
+# of being caught) -- that would quietly reintroduce the exact
+# silent-crash-on-Windows-tray-init risk that fix closed.
 
 # Packaging metadata consumed by `cargo deb` / `cargo generate-rpm`
 # (see .github/workflows/package.yml). Asset paths are relative to this

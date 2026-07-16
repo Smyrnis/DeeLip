@@ -5,12 +5,14 @@
 
 mod build;
 mod codec;
+mod dtls;
 mod parse;
 mod srtp;
 mod video;
 
 pub use build::{IceAttrs, build_answer, build_hold_offer, build_offer, build_resume_offer};
 pub use codec::{ALL_CODECS, AudioCodec, CN_PAYLOAD_TYPE, ILBC_PAYLOAD_TYPE, OPUS_PAYLOAD_TYPE};
+pub use dtls::{DtlsFingerprint, Setup, generate_dtls_cert};
 pub use parse::{ParsedSdp, parse_sdp, parse_sdp_forcing};
 pub use srtp::{SRTP_MASTER_KEY_LEN, SRTP_MASTER_SALT_LEN, SrtpParams, SrtpSession};
 pub use video::{

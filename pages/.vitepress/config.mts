@@ -18,43 +18,16 @@ export default defineConfig({
 
     nav: [
       { text: 'Downloads', link: '/downloads/' },
-      { text: 'Documentation', link: '/docs/README' },
-      { text: 'Changelog', link: '/docs/changelogs/CHANGELOG' },
+      { text: 'Changelog', link: '/changelog/' },
       { text: 'FAQ', link: '/faq/' },
       { text: 'Troubleshooting', link: '/troubleshooting/' },
       { text: 'Contact', link: '/contact/' },
     ],
 
-    // Only shown under /docs/ — Downloads/FAQ/Troubleshooting/Contact stay
-    // clean single pages with just the top bar.
-    sidebar: {
-      '/docs/': [
-        {
-          text: 'Starting',
-          items: [
-            { text: 'Install', link: '/docs/install/install' },
-            { text: 'Uninstall', link: '/docs/install/uninstall' },
-            { text: 'Health check', link: '/docs/install/health-check' },
-          ],
-        },
-        {
-          text: 'Using DeeLip',
-          items: [
-            { text: 'Calling & security', link: '/docs/guide/calling-security' },
-            { text: 'Audio & video quality', link: '/docs/guide/audio-video' },
-            { text: 'Your data & privacy', link: '/docs/guide/data-privacy' },
-            { text: 'Working behind your router (NAT)', link: '/docs/guide/nat' },
-            { text: 'The interface', link: '/docs/guide/interface' },
-            { text: 'Staying up to date', link: '/docs/guide/updates' },
-            { text: 'Language support', link: '/docs/guide/language' },
-          ],
-        },
-        {
-          text: 'Changelog',
-          items: [{ text: 'Changelog', link: '/docs/changelogs/CHANGELOG' }],
-        },
-      ],
-    },
+    // This site is a showcase/marketing page for the app, not a documentation
+    // book — every route is a clean single page with just the top bar, no
+    // sidebar. In-depth engineering notes live in `docs/crates/` in the repo
+    // instead (linked directly to GitHub where relevant), not published here.
 
     socialLinks: [{ icon: 'github', link: 'https://github.com/Smyrnis/DeeLip' }],
   },

@@ -41,16 +41,16 @@ impl DeelipApp {
     pub(crate) fn sync_ringtone(&mut self) {
         let desired = if !self.config.ringtone_enabled {
             None
-        } else if self.pending_call.is_some() {
+        } else if self.calls_state.pending_call.is_some() {
             Some(RingKind::Incoming)
-        } else if self.pending_outbound.is_some() {
+        } else if self.calls_state.pending_outbound.is_some() {
             Some(RingKind::Outgoing)
         } else {
             None
         };
 
         let is_ringing = desired.is_some();
-        if is_ringing && !self.was_ringing {
+        if is_ringing && !self.notify.was_ringing {
             // Rising edge — attempt exactly once per ringing episode. A
             // failure here must NOT leave room for a retry next frame (see
             // `was_ringing` doc comment) — it's still `None` either way.
@@ -58,22 +58,22 @@ impl DeelipApp {
             let file = self.config.audio.ringtone_file.as_deref();
             let volume = self.config.audio.ringtone_volume;
             match Ringtone::start(desired.unwrap(), device, file, volume) {
-                Ok(r) => self.ringtone = Some(r),
+                Ok(r) => self.notify.ringtone = Some(r),
                 Err(e) => tracing::warn!("Ringtone failed to start: {e}"),
             }
         } else if !is_ringing {
-            self.ringtone = None;
+            self.notify.ringtone = None;
         }
-        self.was_ringing = is_ringing;
+        self.notify.was_ringing = is_ringing;
     }
 
     /// Raise/focus the main window once per incoming call -- deliberately
     /// not gated on `notifications_enabled`, so this tracks its own rising
     /// edge rather than reusing `sync_notifications`'s. Called once per frame.
     pub(crate) fn sync_window_raise(&mut self, ctx: &egui::Context) {
-        match &self.pending_call {
-            Some(p) if self.last_raised_call.as_deref() != Some(p.call_id.as_str()) => {
-                self.last_raised_call = Some(p.call_id.clone());
+        match &self.calls_state.pending_call {
+            Some(p) if self.notify.last_raised_call.as_deref() != Some(p.call_id.as_str()) => {
+                self.notify.last_raised_call = Some(p.call_id.clone());
                 if self.config.random_popup_position
                     && let Some(cmd) = random_position_on_screen(ctx)
                 {
@@ -82,7 +82,7 @@ impl DeelipApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
                 ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             }
-            None => self.last_raised_call = None,
+            None => self.notify.last_raised_call = None,
             _ => {}
         }
     }
@@ -91,15 +91,15 @@ impl DeelipApp {
     /// it's still ringing). Called once per frame.
     pub(crate) fn sync_notifications(&mut self) {
         if !self.config.notifications_enabled {
-            self.last_notified_call = None;
+            self.notify.last_notified_call = None;
             return;
         }
-        match &self.pending_call {
-            Some(p) if self.last_notified_call.as_deref() != Some(p.call_id.as_str()) => {
-                self.last_notified_call = Some(p.call_id.clone());
+        match &self.calls_state.pending_call {
+            Some(p) if self.notify.last_notified_call.as_deref() != Some(p.call_id.as_str()) => {
+                self.notify.last_notified_call = Some(p.call_id.clone());
                 notify::notify_incoming_call(&p.call_id, &p.from, self.ctx_slot.clone());
             }
-            None => self.last_notified_call = None,
+            None => self.notify.last_notified_call = None,
             _ => {}
         }
     }
@@ -135,28 +135,38 @@ impl DeelipApp {
         // Only rebuild when the set of live/pending calls actually changed
         // since last frame -- a borrow-only comparison, so the common
         // (unchanged) case costs just a cheap scan, not a full rebuild.
-        let calls_changed = self.calls.len() != self.tray_calls_key.len()
-            || self.calls.iter().zip(&self.tray_calls_key).any(|(c, (acc, id))| c.account != *acc || c.call_id != *id);
+        let calls_changed = self.calls_state.calls.len() != self.tray_state.tray_calls_key.len()
+            || self
+                .calls_state
+                .calls
+                .iter()
+                .zip(&self.tray_state.tray_calls_key)
+                .any(|(c, (acc, id))| c.account != *acc || c.call_id != *id);
         if calls_changed {
-            self.tray_calls_key = self.calls.iter().map(|c| (c.account, c.call_id.clone())).collect();
+            self.tray_state.tray_calls_key =
+                self.calls_state.calls.iter().map(|c| (c.account, c.call_id.clone())).collect();
             *quit_state.calls.lock().unwrap() = self
+                .tray_state
                 .tray_calls_key
                 .iter()
-                .map(|(account, call_id)| (self.accounts[*account].handle.cmd_tx.clone(), call_id.clone()))
+                .map(|(account, call_id)| {
+                    (self.accounts_state.accounts[*account].handle.cmd_tx.clone(), call_id.clone())
+                })
                 .collect();
         }
 
-        let pending_changed = match (&self.pending_call, &self.tray_pending_key) {
+        let pending_changed = match (&self.calls_state.pending_call, &self.tray_state.tray_pending_key) {
             (Some(p), Some((acc, id))) => p.account != *acc || p.call_id != *id,
             (None, None) => false,
             _ => true,
         };
         if pending_changed {
-            self.tray_pending_key = self.pending_call.as_ref().map(|p| (p.account, p.call_id.clone()));
-            *quit_state.pending.lock().unwrap() = self
-                .tray_pending_key
-                .as_ref()
-                .map(|(account, call_id)| (self.accounts[*account].handle.cmd_tx.clone(), call_id.clone()));
+            self.tray_state.tray_pending_key =
+                self.calls_state.pending_call.as_ref().map(|p| (p.account, p.call_id.clone()));
+            *quit_state.pending.lock().unwrap() =
+                self.tray_state.tray_pending_key.as_ref().map(|(account, call_id)| {
+                    (self.accounts_state.accounts[*account].handle.cmd_tx.clone(), call_id.clone())
+                });
         }
 
         if ctx.input(|i| i.viewport().close_requested()) {
@@ -170,28 +180,16 @@ impl DeelipApp {
     }
 
     /// Build the tray icon lazily on the app's first real frame -- only
-    /// does anything on Windows/macOS. Per `tray_icon`'s own docs, macOS
-    /// strictly requires the tray to be created once its event loop has
-    /// already started (the earliest safe point is winit's
-    /// `StartCause::Init`), and Windows needs it built on whichever
-    /// thread's event loop will pump its messages; by this app's first
-    /// frame, eframe's winit loop is definitely already running on this
-    /// thread, satisfying both. Linux instead builds the tray eagerly in
-    /// `main.rs`, before `eframe::run_native` even starts, since GTK drives
-    /// its own independent event loop on a dedicated thread -- so
-    /// `self.tray` is already `Some`/`None` there by the time this runs,
-    /// and this is a no-op.
-    ///
-    /// UNVERIFIED on real Windows/macOS hardware -- this sandbox is
-    /// Linux-only. See `tray::spawn_tray_icon`'s doc comment for the full
-    /// rationale.
+    /// does anything on Windows/macOS (a no-op on Linux, which builds the
+    /// tray eagerly in `main.rs` instead). See `docs/crates/ui.md`'s "Platform
+    /// integration" section, "Tray construction is genuinely per-OS", for why.
     #[cfg(not(target_os = "linux"))]
     fn init_lazy_tray(&mut self) {
         if self.tray.is_some() {
             return;
         }
-        match tray::spawn_tray_icon() {
-            Ok((tray_ids, badge_tx)) => {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(tray::spawn_tray_icon)) {
+            Ok(Ok((tray_ids, badge_tx))) => {
                 let quit_state = tray::QuitState {
                     calls: Arc::new(Mutex::new(Vec::new())),
                     pending: Arc::new(Mutex::new(None)),
@@ -200,7 +198,15 @@ impl DeelipApp {
                 tray::spawn_tray_event_handlers(tray_ids, self.ctx_slot.clone(), quit_state.clone());
                 self.tray = Some((self.ctx_slot.clone(), quit_state, badge_tx));
             }
-            Err(e) => tracing::warn!("Tray icon failed to start ({e}), continuing without it"),
+            Ok(Err(e)) => tracing::warn!("Tray icon failed to start ({e}), continuing without it"),
+            Err(panic_payload) => {
+                let msg = panic_payload
+                    .downcast_ref::<&str>()
+                    .map(|s| s.to_string())
+                    .or_else(|| panic_payload.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| "<non-string panic payload>".into());
+                tracing::warn!("Tray icon failed to start (panicked: {msg}), continuing without it");
+            }
         }
     }
 
@@ -208,37 +214,37 @@ impl DeelipApp {
     fn init_lazy_tray(&mut self) {}
 
     /// Dispatch any global-hotkey presses since the last frame. No-op if
-    /// global hotkeys are disabled or failed to register (`self.hotkeys`
+    /// global hotkeys are disabled or failed to register (`self.accounts_state.hotkeys`
     /// is `None`).
     pub(crate) fn process_hotkey_events(&mut self) {
-        let Some(hotkeys) = &self.hotkeys else { return };
+        let Some(hotkeys) = &self.accounts_state.hotkeys else { return };
         for action in hotkeys.poll() {
             match action {
                 HotkeyAction::Answer => {
-                    if self.pending_call.is_some() {
+                    if self.calls_state.pending_call.is_some() {
                         self.do_accept();
                     }
                 }
                 HotkeyAction::Hangup => {
-                    if let Some(idx) = self.focused_call {
+                    if let Some(idx) = self.calls_state.focused_call {
                         self.do_hangup(idx);
-                    } else if self.pending_call.is_some() {
+                    } else if self.calls_state.pending_call.is_some() {
                         self.do_reject();
-                    } else if !self.calls.is_empty() {
+                    } else if !self.calls_state.calls.is_empty() {
                         self.do_hangup(0);
                     }
                 }
                 HotkeyAction::Mute => {
-                    if self.media.is_some() {
+                    if self.calls_state.media.is_some() {
                         self.do_mute_toggle();
                     }
                 }
                 HotkeyAction::MediaHook => {
-                    if self.pending_call.is_some() {
+                    if self.calls_state.pending_call.is_some() {
                         self.do_accept();
-                    } else if let Some(idx) = self.focused_call {
+                    } else if let Some(idx) = self.calls_state.focused_call {
                         self.do_hangup(idx);
-                    } else if !self.calls.is_empty() {
+                    } else if !self.calls_state.calls.is_empty() {
                         self.do_hangup(0);
                     }
                 }
@@ -255,7 +261,7 @@ impl DeelipApp {
     /// silently ignored rather than accepting/rejecting the wrong thing.
     pub(crate) fn process_notification_actions(&mut self) {
         for (call_id, action) in notify::poll_actions() {
-            let Some(pending) = &self.pending_call else {
+            let Some(pending) = &self.calls_state.pending_call else {
                 continue;
             };
             if pending.call_id != call_id {
@@ -306,6 +312,7 @@ impl DeelipApp {
             }
         }
 
+        self.process_account_spawn_events();
         self.process_sip_events();
         self.check_pending_call_timeout();
         self.sync_ringtone();
@@ -325,14 +332,17 @@ impl DeelipApp {
         // History's label is recomputed only when its unseen count actually
         // changed (see `docs/crates/ui.md`'s list-view caching note), not rebuilt
         // every frame at this loop's ~20fps.
-        if self.history_tab_label_cache.0 != self.unseen_missed_calls {
-            self.history_tab_label_cache = (
-                self.unseen_missed_calls,
-                if self.unseen_missed_calls > 0 {
+        if self.history_state.history_tab_label_cache.0 != self.tray_state.unseen_missed_calls {
+            self.history_state.history_tab_label_cache = (
+                self.tray_state.unseen_missed_calls,
+                if self.tray_state.unseen_missed_calls > 0 {
                     format!(
                         "{}  {}",
                         egui_phosphor::regular::CLOCK_COUNTER_CLOCKWISE,
-                        tf("nav.history_tab_with_count", &[("count", &self.unseen_missed_calls.to_string())])
+                        tf(
+                            "nav.history_tab_with_count",
+                            &[("count", &self.tray_state.unseen_missed_calls.to_string())]
+                        )
                     )
                 } else {
                     format!("{}  {}", egui_phosphor::regular::CLOCK_COUNTER_CLOCKWISE, t("nav.history_tab"))
@@ -346,7 +356,11 @@ impl DeelipApp {
                     crate::app::Tab::Dialer,
                     format!("{}  {}", egui_phosphor::regular::PHONE, t("nav.dialer_tab")),
                 );
-                ui.selectable_value(&mut self.tab, crate::app::Tab::History, self.history_tab_label_cache.1.as_str());
+                ui.selectable_value(
+                    &mut self.tab,
+                    crate::app::Tab::History,
+                    self.history_state.history_tab_label_cache.1.as_str(),
+                );
                 ui.selectable_value(
                     &mut self.tab,
                     crate::app::Tab::Contacts,
@@ -364,14 +378,14 @@ impl DeelipApp {
                 // comment.
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button(egui_phosphor::regular::GEAR).on_hover_text(t("settings.window_title")).clicked() {
-                        self.settings_open = true;
+                        self.settings_ui.settings_open = true;
                     }
                 });
             });
         });
 
-        if self.tab == crate::app::Tab::History && self.unseen_missed_calls > 0 {
-            self.unseen_missed_calls = 0;
+        if self.tab == crate::app::Tab::History && self.tray_state.unseen_missed_calls > 0 {
+            self.tray_state.unseen_missed_calls = 0;
             self.sync_tray_badge();
         }
 
@@ -380,17 +394,33 @@ impl DeelipApp {
         // DND toggle, and the selected account's label on the right, in that
         // left-to-right order (added right-to-left so the account label lands
         // pinned to the far right edge, e.g. "● Online ... extension").
-        let on_hold = self.focused_call.is_none() && !self.calls.is_empty();
-        let new_voicemail: u32 =
-            self.accounts.iter().filter_map(|a| a.mwi.as_ref()).filter(|m| m.waiting).map(|m| m.new_messages).sum();
+        let on_hold = self.calls_state.focused_call.is_none() && !self.calls_state.calls.is_empty();
+        let new_voicemail: u32 = self
+            .accounts_state
+            .accounts
+            .iter()
+            .filter_map(|a| a.mwi.as_ref())
+            .filter(|m| m.waiting)
+            .map(|m| m.new_messages)
+            .sum();
         egui::Panel::bottom("status").show_inside(ui, |ui| {
             ui.horizontal(|ui| {
-                crate::helpers::status_bar(ui, &self.palette, &self.status_line, self.reg_ok, on_hold);
+                crate::helpers::status_bar(
+                    ui,
+                    &self.palette,
+                    &self.accounts_state.status_line,
+                    self.accounts_state.reg_ok,
+                    on_hold,
+                );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if let Some(idx) = self.selected_account_idx() {
-                        ui.label(egui::RichText::new(&self.accounts[idx].label).color(self.palette.ink_muted).small());
+                        ui.label(
+                            egui::RichText::new(&self.accounts_state.accounts[idx].label)
+                                .color(self.palette.ink_muted)
+                                .small(),
+                        );
                         ui.add_space(8.0);
-                        let dnd = self.accounts[idx].account.dnd;
+                        let dnd = self.accounts_state.accounts[idx].account.dnd;
                         let (icon, color) = if dnd {
                             (egui_phosphor::regular::BELL_SLASH, self.palette.danger)
                         } else {
@@ -437,7 +467,9 @@ impl DeelipApp {
         // "Repaint plumbing" section for why the idle branch below is now
         // just a rare safety net, not the primary way anything gets noticed,
         // and why it must stay long (2s) rather than short.
-        let has_live_call = self.pending_call.is_some() || self.pending_outbound.is_some() || !self.calls.is_empty();
+        let has_live_call = self.calls_state.pending_call.is_some()
+            || self.calls_state.pending_outbound.is_some()
+            || !self.calls_state.calls.is_empty();
         let repaint_interval = if has_live_call { Duration::from_millis(50) } else { Duration::from_secs(2) };
         ctx.request_repaint_after(repaint_interval);
     }
@@ -450,12 +482,12 @@ impl DeelipApp {
     /// runtime is torn down.
     fn hangup_before_exit(&mut self) {
         let mut sent = false;
-        for call in &self.calls {
-            self.accounts[call.account].handle.hang_up(&call.call_id);
+        for call in &self.calls_state.calls {
+            self.accounts_state.accounts[call.account].handle.hang_up(&call.call_id);
             sent = true;
         }
-        if let Some(pending) = self.pending_call.take() {
-            self.accounts[pending.account].handle.reject_call(&pending.call_id);
+        if let Some(pending) = self.calls_state.pending_call.take() {
+            self.accounts_state.accounts[pending.account].handle.reject_call(&pending.call_id);
             sent = true;
         }
         if sent {

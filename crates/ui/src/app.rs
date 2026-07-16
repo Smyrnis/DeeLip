@@ -1,9 +1,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use deelip_config::{
-    AppConfig, CallDirection, CallHistory, CallStatus, Contact, ContactBook, Db, MessageLog, SipAccount,
-};
+use deelip_config::{AppConfig, CallHistory, CallStatus, Contact, ContactBook, Db, Direction, MessageLog, SipAccount};
 use deelip_media::MediaEngine;
 use deelip_sip::{CallMediaReady, MwiState, PresenceState, SipHandle};
 use tokio::runtime::Handle;
@@ -43,32 +41,63 @@ pub(crate) enum SettingsTab {
 // ── App state ─────────────────────────────────────────────────────────────────
 
 pub struct DeelipApp {
-    /// One registered SIP identity per enabled account in `config.accounts`,
-    /// each independently registering/re-registering on its own transport.
-    pub(crate) accounts: Vec<AccountState>,
+    pub(crate) accounts_state: AccountsState,
     pub(crate) rt: Handle,
 
     pub(crate) tab: Tab,
-    /// Whether the Settings dialog is open -- a separate modal window
-    /// rather than a tab, since a settings screen the size of this one
-    /// competing for tab-bar space with Dialer/History/etc. would read as
-    /// "just another view" rather than the distinct, out-of-the-way
-    /// configuration surface it's meant to be.
-    pub(crate) settings_open: bool,
-    /// Which Settings tab is currently shown -- see `SettingsTab`.
-    pub(crate) settings_tab: SettingsTab,
 
+    pub(crate) calls_state: CallsState,
+
+    pub(crate) notify: NotifyState,
+
+    /// Live-edited settings draft, shown/edited in the Settings tab and
+    /// saved to `db` on demand — takes effect on next restart.
+    pub(crate) config: AppConfig,
+    /// Handle to `~/.config/deelip/deelip.db` -- the single SQLite database
+    /// backing `config`/`contacts`/`history` alike (see `deelip_config::db`).
+    pub(crate) db: Db,
+    pub(crate) settings_ui: SettingsUiState,
+    /// One-shot flag consumed on the very first `update()` call, to send a
+    /// `Visible(false)` viewport command if `config.start_minimized` -- see
+    /// the comment in `main.rs` on why this can't be done via `NativeOptions`.
+    pub(crate) first_frame: bool,
+    /// Set once in `new()` -- Darcula is the app's only theme now (see
+    /// `theme.rs`'s v3-revision doc comment), so this no longer changes per
+    /// frame. Kept as a field (not a free fn call at each use site) so
+    /// tab-rendering methods can reach `self.palette` without threading an
+    /// extra parameter through every fn signature.
+    pub(crate) palette: Palette,
+
+    /// Shared handles for the tray's independent event-handling threads (see
+    /// `tray` module docs) — `None` degrades to normal close-quits-the-app
+    /// behavior if the tray icon failed to start.
+    pub(crate) tray: Option<(CtxSlot, QuitState, tray::BadgeSender)>,
+    /// Slot every background producer uses to call `request_repaint()` the
+    /// instant it has something, instead of the idle tick polling for it --
+    /// see `docs/crates/ui.md`'s "Repaint plumbing" section.
+    pub(crate) ctx_slot: CtxSlot,
+    pub(crate) tray_state: TrayState,
+
+    pub(crate) history_state: HistoryState,
+
+    pub(crate) messages_state: MessagesState,
+
+    pub(crate) contacts_state: ContactsState,
+
+    pub(crate) update_check: UpdateCheckState,
+
+    // Directory (LDAP) -- see `views::directory`.
+    pub(crate) directory_ui: DirectoryUiState,
+}
+
+/// Live call state: the dialer's target field, confirmed/pending calls,
+/// active media, and the transfer/redirect/DTMF popover boxes tied to
+/// whichever call is focused -- see `views::dialer`/`call_actions.rs`.
+pub(crate) struct CallsState {
     // Dialer
     pub(crate) call_target: String,
-    /// Index into `accounts` — which identity new outgoing calls are placed
-    /// from. Irrelevant (and hidden in the UI) when there's only one account.
-    pub(crate) selected_account: usize,
     /// Last successfully-dialed target (already normalized), for Redial.
     pub(crate) last_dialed: Option<String>,
-
-    // Status
-    pub(crate) status_line: String,
-    pub(crate) reg_ok: bool,
 
     /// Confirmed (connected) calls — capped at 2 (one focused + one held),
     /// matching a simple "call waiting" model rather than arbitrary
@@ -125,30 +154,44 @@ pub struct DeelipApp {
     /// (always `Some(0)`) rather than meaning "only this one is active" --
     /// both slots are simultaneously un-held.
     pub(crate) in_conference: bool,
+}
 
-    /// Live while a call is ringing (incoming) or dialing out (outgoing) —
-    /// see `sync_ringtone`. `None` whenever neither applies.
-    pub(crate) ringtone: Option<Ringtone>,
-    /// Whether something was ringing/dialing as of last frame — used to
-    /// attempt `Ringtone::start` only once per ringing episode (on the
-    /// false→true edge), not on every frame a failed start left `ringtone`
-    /// as `None` (that retried the audio backend 20x/sec on any real device
-    /// failure — the ALSA/jack probe spam this was fixed after).
-    pub(crate) was_ringing: bool,
-    /// The `call_id` last notified about, so `sync_notifications` fires once
-    /// per incoming call rather than every frame it's still ringing.
-    pub(crate) last_notified_call: Option<String>,
-    /// Same idiom as `last_notified_call`, for `sync_window_raise` -- kept
-    /// as a separate field since window-raising isn't gated on
-    /// `notifications_enabled` and so can't share the same edge tracking.
-    pub(crate) last_raised_call: Option<String>,
+/// One registered SIP identity per enabled account, plus the top-level
+/// registration status line/hotkeys tied to the account set as a whole.
+pub(crate) struct AccountsState {
+    /// One registered SIP identity per enabled account in `config.accounts`,
+    /// each independently registering/re-registering on its own transport.
+    /// Starts empty and fills in as `account_spawn_rx` delivers results --
+    /// see `AccountSpawnMsg`'s doc comment.
+    pub(crate) accounts: Vec<AccountState>,
+    /// Background account-spawn channel from `main()`'s pre-window
+    /// `rt.spawn` task -- `Some` until the task's final `AccountSpawnMsg::Done`
+    /// arrives, then set to `None` (see `process_account_spawn_events`).
+    /// Distinct from "zero accounts configured": `refresh_idle_status` checks
+    /// this to show "connecting" instead of "no accounts configured" while
+    /// results are still arriving.
+    pub(crate) account_spawn_rx: Option<std::sync::mpsc::Receiver<AccountSpawnMsg>>,
+    /// Index into `accounts` — which identity new outgoing calls are placed
+    /// from. Irrelevant (and hidden in the UI) when there's only one account.
+    pub(crate) selected_account: usize,
+    pub(crate) status_line: String,
+    pub(crate) reg_ok: bool,
+    /// System-wide Answer/Hangup/Mute hotkeys (see `hotkeys` module docs) --
+    /// `None` if disabled in config, or if registration failed (logged, not
+    /// fatal — the app works fine without global hotkeys).
+    pub(crate) hotkeys: Option<Hotkeys>,
+}
 
-    /// Live-edited settings draft, shown/edited in the Settings tab and
-    /// saved to `db` on demand — takes effect on next restart.
-    pub(crate) config: AppConfig,
-    /// Handle to `~/.config/deelip/deelip.db` -- the single SQLite database
-    /// backing `config`/`contacts`/`history` alike (see `deelip_config::db`).
-    pub(crate) db: Db,
+/// Settings dialog UI state -- see `views::settings`.
+pub(crate) struct SettingsUiState {
+    /// Whether the Settings dialog is open -- a separate modal window
+    /// rather than a tab, since a settings screen the size of this one
+    /// competing for tab-bar space with Dialer/History/etc. would read as
+    /// "just another view" rather than the distinct, out-of-the-way
+    /// configuration surface it's meant to be.
+    pub(crate) settings_open: bool,
+    /// Which Settings tab is currently shown -- see `SettingsTab`.
+    pub(crate) settings_tab: SettingsTab,
     /// Set after a successful Settings save; cleared on the next edit.
     pub(crate) settings_saved_notice: bool,
     /// Index into `config.accounts` currently shown in the Settings tab's
@@ -182,89 +225,24 @@ pub struct DeelipApp {
     /// its own bit of UI-bound state (checked once at startup, then kept in
     /// sync by the Settings checkbox itself).
     pub(crate) autostart_enabled: bool,
-    /// One-shot flag consumed on the very first `update()` call, to send a
-    /// `Visible(false)` viewport command if `config.start_minimized` -- see
-    /// the comment in `main.rs` on why this can't be done via `NativeOptions`.
-    pub(crate) first_frame: bool,
-    /// Set once in `new()` -- Darcula is the app's only theme now (see
-    /// `theme.rs`'s v3-revision doc comment), so this no longer changes per
-    /// frame. Kept as a field (not a free fn call at each use site) so
-    /// tab-rendering methods can reach `self.palette` without threading an
-    /// extra parameter through every fn signature.
-    pub(crate) palette: Palette,
-
-    /// Shared handles for the tray's independent event-handling threads (see
-    /// `tray` module docs) — `None` degrades to normal close-quits-the-app
-    /// behavior if the tray icon failed to start.
-    pub(crate) tray: Option<(CtxSlot, QuitState, tray::BadgeSender)>,
-    /// Slot every background producer uses to call `request_repaint()` the
-    /// instant it has something, instead of the idle tick polling for it --
-    /// see `docs/crates/ui.md`'s "Repaint plumbing" section.
-    pub(crate) ctx_slot: CtxSlot,
-    /// Missed calls not yet acknowledged by opening the History tab —
-    /// mirrored to the tray icon's badge (see `sync_tray_badge`) whenever
-    /// it changes; reset to 0 on switching to the History tab.
-    pub(crate) unseen_missed_calls: u32,
-    /// `(account, call_id)` for every entry in `calls`/`pending_call` as
-    /// last mirrored into the tray's `QuitState` -- lets
-    /// `process_tray_events` skip re-cloning Senders/call-ids and re-locking
-    /// the shared state on every frame when nothing has actually changed
-    /// since the last one. Mirrors `audio_device_cache`'s cache-and-compare
-    /// idiom.
-    pub(crate) tray_calls_key: Vec<(usize, String)>,
-    pub(crate) tray_pending_key: Option<(usize, String)>,
-
-    /// System-wide Answer/Hangup/Mute hotkeys (see `hotkeys` module docs) --
-    /// `None` if disabled in config, or if registration failed (logged, not
-    /// fatal — the app works fine without global hotkeys).
-    pub(crate) hotkeys: Option<Hotkeys>,
-
-    // History
-    pub(crate) history: CallHistory,
-    pub(crate) history_search: String,
-    /// `None` = show every status.
-    pub(crate) history_status_filter: Option<CallStatus>,
-    /// Cache of `history_search`/`history_status_filter`/`history.records.len()`
-    /// as last used to compute `history_filtered`, so a search string that
-    /// allocates a lowercased copy of every record's URI isn't redone on
-    /// every single frame (egui repaints continuously, and much faster than
-    /// that during a scroll drag) -- only recomputed when one of the three
-    /// actually changes. Mirrors the existing `audio_device_cache` idiom.
-    pub(crate) history_filter_key: Option<(String, Option<CallStatus>, usize)>,
-    /// Indices into `history.records` matching the current search/status
-    /// filter, most-recent-first (same order as `history.records` itself).
-    pub(crate) history_filtered: Vec<usize>,
-    /// `(unseen_missed_calls, label)` as last rendered for the tab bar --
-    /// recomputed only when the count changes, instead of `format!()`ing a
-    /// fresh label every frame regardless. Same cache-and-compare idiom as
-    /// `history_filter_key`.
-    pub(crate) history_tab_label_cache: (u32, String),
-
-    // Messages
-    pub(crate) messages: MessageLog,
-    /// Whether the Messages window is open -- same separate-native-window
-    /// pattern as `settings_open`, except there's no tab-bar entry point at
-    /// all: the only way to set this `true` is `message_from_list` (a
-    /// right-click "Message" action on a History/Contacts/Directory row).
-    pub(crate) messages_window_open: bool,
-    /// Which peer's thread the Messages window is showing -- always a full
-    /// SIP URI sourced from a right-click target or an existing `peer_uri`,
-    /// never freehand-typed (there's no more manual "To:" field). `None`
-    /// only when the window has never been scoped to anyone yet.
-    pub(crate) messages_window_peer: Option<String>,
-    pub(crate) message_body: String,
-
     // Blocklist
     pub(crate) blocklist_input: String,
-
     // Dial Plan rule editor (Settings' account editor) -- new-rule input
     // fields, mirroring `blocklist_input`'s shape.
     pub(crate) dialplan_pattern_input: String,
     pub(crate) dialplan_replacement_input: String,
+}
 
-    // Contacts
+/// Contacts tab + shared create/edit-contact dialog + presence state -- see
+/// `views::contacts`.
+pub(crate) struct ContactsState {
     pub(crate) contacts: ContactBook,
     pub(crate) contact_search: String,
+    /// Cache-and-compare key for `contact_filtered` -- see `docs/crates/ui.md`'s
+    /// "List views" section for the idiom this mirrors from `history_filter_key`.
+    pub(crate) contact_filter_key: Option<(String, usize)>,
+    /// Indices into `contacts.contacts` matching the current search.
+    pub(crate) contact_filtered: Vec<usize>,
     pub(crate) new_contact: Contact,
     /// Index into `contacts.contacts` currently loaded into `new_contact`
     /// for editing — `None` means the form is in "Add" mode.
@@ -277,15 +255,88 @@ pub struct DeelipApp {
     /// Last-known presence state per watched contact, keyed by `sip_uri`
     /// (presence isn't call-scoped, so it doesn't fit any per-call state).
     pub(crate) presence: HashMap<String, PresenceState>,
+}
 
-    /// Startup GitHub-release check / auto-update state (see `update.rs`).
+/// Call History tab search/filter state -- see `views::history`.
+pub(crate) struct HistoryState {
+    pub(crate) history: CallHistory,
+    pub(crate) history_search: String,
+    /// `None` = show every status.
+    pub(crate) history_status_filter: Option<CallStatus>,
+    /// Cache-and-compare key for `history_filtered` -- see `docs/crates/ui.md`'s
+    /// "List views" section.
+    pub(crate) history_filter_key: Option<(String, Option<CallStatus>, usize)>,
+    /// Indices into `history.records` matching the current search/status
+    /// filter, most-recent-first (same order as `history.records` itself).
+    pub(crate) history_filtered: Vec<usize>,
+    /// `(unseen_missed_calls, label)` as last rendered for the tab bar --
+    /// recomputed only when the count changes, instead of `format!()`ing a
+    /// fresh label every frame regardless. Same cache-and-compare idiom as
+    /// `history_filter_key`.
+    pub(crate) history_tab_label_cache: (u32, String),
+}
+
+/// In-app SIP MESSAGE state -- see `views::messages`.
+pub(crate) struct MessagesState {
+    pub(crate) messages: MessageLog,
+    /// Whether the Messages window is open -- same separate-native-window
+    /// pattern as `settings_open`, except there's no tab-bar entry point at
+    /// all: the only way to set this `true` is `message_from_list` (a
+    /// right-click "Message" action on a History/Contacts/Directory row).
+    pub(crate) messages_window_open: bool,
+    /// Which peer's thread the Messages window is showing -- always a full
+    /// SIP URI sourced from a right-click target or an existing `peer_uri`,
+    /// never freehand-typed (there's no more manual "To:" field). `None`
+    /// only when the window has never been scoped to anyone yet.
+    pub(crate) messages_window_peer: Option<String>,
+    pub(crate) message_body: String,
+}
+
+/// Tray-icon badge/menu mirroring -- see `frame.rs::sync_tray_badge`/
+/// `process_tray_events`.
+pub(crate) struct TrayState {
+    /// Missed calls not yet acknowledged by opening the History tab —
+    /// mirrored to the tray icon's badge (see `sync_tray_badge`) whenever
+    /// it changes; reset to 0 on switching to the History tab.
+    pub(crate) unseen_missed_calls: u32,
+    /// Cache-and-compare key mirroring `calls`/`pending_call` into the tray's
+    /// `QuitState` -- see `docs/crates/ui.md`'s "List views" section for this idiom.
+    pub(crate) tray_calls_key: Vec<(usize, String)>,
+    pub(crate) tray_pending_key: Option<(usize, String)>,
+}
+
+/// Ringing/dialing sound + incoming-call notification/window-raise
+/// edge-tracking -- see `frame.rs::sync_ringtone`/`sync_notifications`.
+pub(crate) struct NotifyState {
+    /// Live while a call is ringing (incoming) or dialing out (outgoing) —
+    /// see `sync_ringtone`. `None` whenever neither applies.
+    pub(crate) ringtone: Option<Ringtone>,
+    /// Whether something was ringing/dialing as of last frame — used to
+    /// attempt `Ringtone::start` only once per ringing episode (on the
+    /// false→true edge), not on every frame a failed start left `ringtone`
+    /// as `None` (that retried the audio backend 20x/sec on any real device
+    /// failure — the ALSA/jack probe spam this was fixed after).
+    pub(crate) was_ringing: bool,
+    /// The `call_id` last notified about, so `sync_notifications` fires once
+    /// per incoming call rather than every frame it's still ringing.
+    pub(crate) last_notified_call: Option<String>,
+    /// Same idiom as `last_notified_call`, for `sync_window_raise` -- kept
+    /// as a separate field since window-raising isn't gated on
+    /// `notifications_enabled` and so can't share the same edge tracking.
+    pub(crate) last_raised_call: Option<String>,
+}
+
+/// Startup GitHub-release check / auto-update state -- see `update.rs`.
+pub(crate) struct UpdateCheckState {
     pub(crate) update_state: crate::update::UpdateState,
     /// Channel the background check/download thread reports back on --
     /// re-created (old one just dropped) each time a new one is spawned,
     /// same one-shot-channel-per-async-op idiom as elsewhere in this app.
     pub(crate) update_rx: Option<std::sync::mpsc::Receiver<crate::update::UpdateMsg>>,
+}
 
-    // Directory (LDAP) -- see `views::directory`.
+/// Directory (LDAP) search UI state -- see `views::directory`.
+pub(crate) struct DirectoryUiState {
     pub(crate) directory_query: String,
     pub(crate) directory_state: crate::views::directory::DirectoryState,
     pub(crate) directory_rx: Option<std::sync::mpsc::Receiver<crate::views::directory::DirectoryMsg>>,
@@ -337,12 +388,8 @@ pub(crate) struct PendingAccept {
 }
 
 /// A not-yet-answered outgoing call — at most one at a time (placing a 2nd
-/// outbound call is blocked while this is `Some`). Which account it's on
-/// doesn't need to be stored here: `CallConnected`/`CallFailed` already carry
-/// that as the account index tagged onto the event itself. SDP/codec/ICE/
-/// TURN are entirely `SipStack`'s business now (see `deelip_sip::media_setup`)
-/// — this just tracks enough to build history/`CallSlot` once `CallConnected`
-/// arrives.
+/// outbound call is blocked while this is `Some`). Tracks just enough to
+/// build history/`CallSlot` once `CallConnected` arrives.
 pub(crate) struct PendingOutbound {
     pub(crate) remote_uri: String,
     pub(crate) start_time: u64,
@@ -351,13 +398,13 @@ pub(crate) struct PendingOutbound {
 /// A confirmed (connected) call — held or focused. Only the focused call has
 /// a live `MediaEngine`; a held call keeps just enough state here to restart
 /// media if the user swaps back to it. `media` is the already-negotiated
-/// state handed over by `SipStack` in `SipEvent::CallConnected` -- codec/
-/// SRTP/ICE/TURN resolution all happened there, not here.
+/// state handed over by `SipStack` in `SipEvent::CallConnected` (see
+/// `media.rs`).
 pub(crate) struct CallSlot {
     pub(crate) account: usize,
     pub(crate) call_id: String,
     pub(crate) remote_uri: String,
-    pub(crate) direction: CallDirection,
+    pub(crate) direction: Direction,
     pub(crate) start_time: u64,
     pub(crate) is_held: bool,
     /// Whether `start_media` should start this call's `MediaEngine` with
@@ -392,6 +439,16 @@ pub(crate) struct VideoViewCache {
     pub(crate) texture: Option<egui::TextureHandle>,
 }
 
+/// One result of the background account-spawn task `main()` starts before
+/// `eframe::run_native` -- see `docs/crates/ui.md`'s "Platform integration" section
+/// for why this is off-thread and what `Done` means. See `process_account_spawn_events`.
+pub enum AccountSpawnMsg {
+    // `SipAccount` is large (500+ bytes) relative to `Done`'s zero -- boxed
+    // to keep the enum itself small (clippy::large_enum_variant).
+    Spawned(Box<SipAccount>, SipHandle),
+    Done,
+}
+
 /// A single registered SIP identity: its stack handle plus the registration
 /// status shown next to it in the account picker.
 pub(crate) struct AccountState {
@@ -410,21 +467,9 @@ pub(crate) struct AccountState {
 
 impl DeelipApp {
     pub fn new(
-        accounts: Vec<(SipAccount, SipHandle)>, rt: Handle, config: AppConfig, db: Db,
+        account_spawn_rx: std::sync::mpsc::Receiver<AccountSpawnMsg>, rt: Handle, config: AppConfig, db: Db,
         tray: Option<(CtxSlot, QuitState, tray::BadgeSender)>, ctx_slot: CtxSlot,
     ) -> Self {
-        let accounts = accounts
-            .into_iter()
-            .map(|(account, handle)| AccountState {
-                label: crate::helpers::account_label(&account),
-                account,
-                handle,
-                reg_ok: false,
-                status: t("status.registering"),
-                mwi: None,
-            })
-            .collect();
-
         let history = CallHistory::load(&db).unwrap_or_default();
         let contacts = ContactBook::load(&db).unwrap_or_default();
         let messages = MessageLog::load(&db).unwrap_or_default();
@@ -447,81 +492,97 @@ impl DeelipApp {
         };
 
         let mut app = Self {
-            accounts,
+            accounts_state: AccountsState {
+                accounts: Vec::new(),
+                account_spawn_rx: Some(account_spawn_rx),
+                selected_account: 0,
+                status_line: t("status.registering"),
+                reg_ok: false,
+                hotkeys,
+            },
             rt,
             tab: Tab::Dialer,
-            settings_open: false,
-            settings_tab: SettingsTab::default(),
-            call_target: String::new(),
-            selected_account: 0,
-            last_dialed: None,
-            status_line: t("status.registering"),
-            reg_ok: false,
-            calls: Vec::new(),
-            focused_call: None,
-            media: None,
-            video: None,
-            pending_outbound: None,
-            pending_call: None,
-            pending_accept: None,
-            transfer_target: String::new(),
-            showing_transfer: false,
-            attended_target: String::new(),
-            showing_attended: false,
-            redirect_target: String::new(),
-            showing_redirect: false,
-            showing_dtmf: false,
-            attended_transfer_original: None,
-            in_conference: false,
-            ringtone: None,
-            was_ringing: false,
-            last_notified_call: None,
-            last_raised_call: None,
+            calls_state: CallsState {
+                call_target: String::new(),
+                last_dialed: None,
+                calls: Vec::new(),
+                focused_call: None,
+                media: None,
+                video: None,
+                pending_outbound: None,
+                pending_call: None,
+                pending_accept: None,
+                transfer_target: String::new(),
+                showing_transfer: false,
+                attended_target: String::new(),
+                showing_attended: false,
+                redirect_target: String::new(),
+                showing_redirect: false,
+                showing_dtmf: false,
+                attended_transfer_original: None,
+                in_conference: false,
+            },
+            notify: NotifyState {
+                ringtone: None,
+                was_ringing: false,
+                last_notified_call: None,
+                last_raised_call: None,
+            },
             config,
             db,
-            settings_saved_notice: false,
-            edit_account_idx: 0,
-            show_account_password: false,
-            audio_device_cache: None,
-            audio_device_rx: None,
-            camera_device_cache: None,
-            camera_device_rx: None,
-            autostart_enabled: deelip_config::is_autostart_enabled(),
+            settings_ui: SettingsUiState {
+                settings_open: false,
+                settings_tab: SettingsTab::default(),
+                settings_saved_notice: false,
+                edit_account_idx: 0,
+                show_account_password: false,
+                audio_device_cache: None,
+                audio_device_rx: None,
+                camera_device_cache: None,
+                camera_device_rx: None,
+                autostart_enabled: deelip_config::is_autostart_enabled(),
+                blocklist_input: String::new(),
+                dialplan_pattern_input: String::new(),
+                dialplan_replacement_input: String::new(),
+            },
             first_frame: true,
             palette: Palette::light(),
             tray,
             ctx_slot,
-            unseen_missed_calls: 0,
-            tray_calls_key: Vec::new(),
-            tray_pending_key: None,
-            hotkeys,
-            history,
-            history_search: String::new(),
-            history_status_filter: None,
-            history_filter_key: None,
-            history_filtered: Vec::new(),
-            // `u32::MAX` is a "never computed yet" sentinel, not a real
-            // count -- guarantees the very first frame's mismatch check
-            // computes the real label instead of leaving it empty.
-            history_tab_label_cache: (u32::MAX, String::new()),
-            messages,
-            messages_window_open: false,
-            messages_window_peer: None,
-            message_body: String::new(),
-            blocklist_input: String::new(),
-            dialplan_pattern_input: String::new(),
-            dialplan_replacement_input: String::new(),
-            contacts,
-            contact_search: String::new(),
-            new_contact: Contact::default(),
-            editing_contact_idx: None,
-            contact_dialog_open: false,
-            presence: HashMap::new(),
-            update_state: crate::update::UpdateState::Idle,
-            update_rx: None,
-            directory_query: String::new(),
-            directory_state: crate::views::directory::DirectoryState::default(),
-            directory_rx: None,
+            tray_state: TrayState { unseen_missed_calls: 0, tray_calls_key: Vec::new(), tray_pending_key: None },
+            history_state: HistoryState {
+                history,
+                history_search: String::new(),
+                history_status_filter: None,
+                history_filter_key: None,
+                history_filtered: Vec::new(),
+                // `u32::MAX` is a "never computed yet" sentinel, not a real
+                // count -- guarantees the very first frame's mismatch check
+                // computes the real label instead of leaving it empty.
+                history_tab_label_cache: (u32::MAX, String::new()),
+            },
+            messages_state: MessagesState {
+                messages,
+                messages_window_open: false,
+                messages_window_peer: None,
+                message_body: String::new(),
+            },
+            contacts_state: ContactsState {
+                contacts,
+                contact_search: String::new(),
+                contact_filter_key: None,
+                contact_filtered: Vec::new(),
+                new_contact: Contact::default(),
+                editing_contact_idx: None,
+                contact_dialog_open: false,
+                presence: HashMap::new(),
+            },
+            update_check: UpdateCheckState { update_state: crate::update::UpdateState::Idle, update_rx: None },
+            directory_ui: DirectoryUiState {
+                directory_query: String::new(),
+                directory_state: crate::views::directory::DirectoryState::default(),
+                directory_rx: None,
+            },
         };
 
         let now = crate::helpers::unix_now();

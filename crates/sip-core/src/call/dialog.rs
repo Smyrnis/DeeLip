@@ -1,5 +1,6 @@
 use deelip_nat::{IceConnection, IceGathered, TurnRelay};
 
+use crate::call::media_setup::DtlsCallParams;
 use crate::wire::sdp::{AudioCodec, SrtpParams, VideoCodec};
 
 /// State of a SIP call dialog (simplified early/confirmed dialog).
@@ -35,6 +36,10 @@ pub struct CallMedia {
     /// both offered/accepted one -- `None` for an audio-only call. See
     /// docs/crates/sip-core.md's "Video negotiation" section.
     pub video: Option<VideoMedia>,
+    /// RFC 5763/5764 DTLS-SRTP session state, call-scoped (shared by
+    /// `video` too, not duplicated into `VideoMedia`) -- see
+    /// `DtlsCallParams`'s doc comment.
+    pub local_dtls: Option<DtlsCallParams>,
 }
 
 /// Video counterpart of `CallMedia` -- no `dtmf_type`/`cn_type` (neither
@@ -58,6 +63,10 @@ pub struct PendingOfferMedia {
     pub local_rtp: u16,
     pub local_srtp: Option<SrtpParams>,
     pub relay: Option<TurnRelay>,
+    /// See `DtlsCallParams`'s doc comment -- `role`/`remote_fingerprint`
+    /// are still unresolved at this point, filled in once the answer
+    /// arrives (`handle_connected`).
+    pub local_dtls: Option<DtlsCallParams>,
 }
 
 /// Offerer-side video-leg state resolved before the INVITE was sent,
@@ -232,4 +241,23 @@ impl Dialog {
         self.local_cseq += 1;
         self.local_cseq
     }
+
+    /// Extract `host:port` from a caller-side 200 OK's own `Contact:` header
+    /// value, for `Dialog::remote_contact` -- split out of `on_response`'s
+    /// `Act::Connected` handling so the caller-side capture (see
+    /// docs/crates/sip-core.md's "Dialog::remote_contact must be populated on
+    /// the caller side too" note -- a real bug this project hit live) is
+    /// directly testable without a live `SipStack`. Mirrors what
+    /// `incoming.rs::on_invite` already captures from the source address on
+    /// the callee side.
+    pub(crate) fn parse_remote_contact(contact_header: Option<&str>) -> Option<String> {
+        contact_header
+            .and_then(crate::wire::util::parse_uri)
+            .and_then(|uri| crate::wire::util::uri_host_port(&uri))
+            .map(|(host, port)| format!("{host}:{port}"))
+    }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/dialog.rs"]
+mod tests;

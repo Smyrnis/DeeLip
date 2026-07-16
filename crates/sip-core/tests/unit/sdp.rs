@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn offer_prefers_opus() {
-    let sdp = build_offer("192.0.2.1", 40000, None, &ALL_CODECS, None, false);
+    let sdp = build_offer("192.0.2.1", 40000, None, &ALL_CODECS, None, false, None, None);
     let parsed = parse_sdp(&sdp, &ALL_CODECS).unwrap();
     assert_eq!(parsed.codec, AudioCodec::Opus);
     assert_eq!(parsed.payload_type, OPUS_PAYLOAD_TYPE);
@@ -13,8 +13,8 @@ fn offer_prefers_opus() {
 
 #[test]
 fn answer_honors_selected_codec() {
-    for codec in [AudioCodec::Pcmu, AudioCodec::Pcma, AudioCodec::Opus, AudioCodec::G722] {
-        let sdp = build_answer("192.0.2.2", 40002, codec, None, None, false);
+    for codec in [AudioCodec::Pcmu, AudioCodec::Pcma, AudioCodec::Opus, AudioCodec::G722, AudioCodec::L16] {
+        let sdp = build_answer("192.0.2.2", 40002, codec, None, None, false, None, None);
         let parsed = parse_sdp(&sdp, &ALL_CODECS).unwrap();
         assert_eq!(parsed.codec, codec);
         assert_eq!(parsed.payload_type, codec.payload_type());
@@ -23,7 +23,7 @@ fn answer_honors_selected_codec() {
 
 #[test]
 fn offer_includes_g722_with_correct_clock_quirk() {
-    let sdp = build_offer("192.0.2.1", 40000, None, &ALL_CODECS, None, false);
+    let sdp = build_offer("192.0.2.1", 40000, None, &ALL_CODECS, None, false, None, None);
     assert!(sdp.contains("a=rtpmap:9 G722/8000"), "G722's RTP clock must be signalled as 8000 per RFC 3551, not 16000");
     // An answerer selecting G722 (e.g. one without Opus support) must parse correctly.
     let g722_only = "v=0\r\n\
@@ -43,7 +43,7 @@ fn offer_includes_g722_with_correct_clock_quirk() {
 #[test]
 fn offer_with_srtp_uses_savp_and_carries_crypto() {
     let srtp = SrtpParams::generate();
-    let sdp = build_offer("192.0.2.1", 40000, Some(&srtp), &ALL_CODECS, None, false);
+    let sdp = build_offer("192.0.2.1", 40000, Some(&srtp), &ALL_CODECS, None, false, None, None);
     assert!(sdp.contains("RTP/SAVP"));
     let parsed = parse_sdp(&sdp, &ALL_CODECS).unwrap();
     assert_eq!(parsed.codec, AudioCodec::Opus);
@@ -78,7 +78,7 @@ fn parse_falls_back_when_opus_unsupported() {
 
 #[test]
 fn hold_offer_is_sendonly() {
-    let sdp = build_hold_offer("192.0.2.3", 40004, AudioCodec::Opus, None);
+    let sdp = build_hold_offer("192.0.2.3", 40004, AudioCodec::Opus, None, None, None);
     let parsed = parse_sdp(&sdp, &ALL_CODECS).unwrap();
     assert!(parsed.is_sendonly);
     assert_eq!(parsed.codec, AudioCodec::Opus);
@@ -87,7 +87,7 @@ fn hold_offer_is_sendonly() {
 #[test]
 fn build_offer_honors_restricted_and_reordered_codec_list() {
     let codecs = [AudioCodec::Pcma, AudioCodec::Pcmu];
-    let sdp = build_offer("192.0.2.1", 40000, None, &codecs, None, false);
+    let sdp = build_offer("192.0.2.1", 40000, None, &codecs, None, false, None, None);
     assert!(sdp.contains(&format!(
         "m=audio 40000 RTP/AVP {} {} 101",
         AudioCodec::Pcma.payload_type(),
@@ -133,7 +133,7 @@ fn ice_attrs_round_trip_through_offer() {
             "2 1 udp 1694498815 203.0.113.5 40000 typ srflx raddr 192.0.2.1 rport 40000".into(),
         ],
     };
-    let sdp = build_offer("192.0.2.1", 40000, None, &ALL_CODECS, Some(&ice), false);
+    let sdp = build_offer("192.0.2.1", 40000, None, &ALL_CODECS, Some(&ice), false, None, None);
     assert!(sdp.contains("a=ice-ufrag:abcd1234"));
     assert!(sdp.contains("a=ice-pwd:s0mel0ngicepasswordvalue"));
     assert!(sdp.contains("a=candidate:1 1 udp 2130706431 192.0.2.1 40000 typ host"));
@@ -147,7 +147,7 @@ fn ice_attrs_round_trip_through_offer() {
 
 #[test]
 fn no_ice_attrs_leaves_ice_fields_empty() {
-    let sdp = build_offer("192.0.2.1", 40000, None, &ALL_CODECS, None, false);
+    let sdp = build_offer("192.0.2.1", 40000, None, &ALL_CODECS, None, false, None, None);
     let parsed = parse_sdp(&sdp, &ALL_CODECS).unwrap();
     assert!(parsed.ice_ufrag.is_none());
     assert!(parsed.ice_pwd.is_none());
@@ -156,7 +156,7 @@ fn no_ice_attrs_leaves_ice_fields_empty() {
 
 #[test]
 fn vad_disabled_never_offers_comfort_noise() {
-    let sdp = build_offer("192.0.2.1", 40000, None, &ALL_CODECS, None, false);
+    let sdp = build_offer("192.0.2.1", 40000, None, &ALL_CODECS, None, false, None, None);
     assert!(!sdp.contains("CN/8000"));
     let parsed = parse_sdp(&sdp, &ALL_CODECS).unwrap();
     assert!(parsed.cn_type.is_none());
@@ -165,7 +165,7 @@ fn vad_disabled_never_offers_comfort_noise() {
 #[test]
 fn vad_enabled_offers_comfort_noise_alongside_narrowband_codecs() {
     let codecs = [AudioCodec::Pcmu, AudioCodec::Pcma];
-    let sdp = build_offer("192.0.2.1", 40000, None, &codecs, None, true);
+    let sdp = build_offer("192.0.2.1", 40000, None, &codecs, None, true, None, None);
     assert!(sdp.contains(&format!("a=rtpmap:{CN_PAYLOAD_TYPE} CN/8000")));
     let parsed = parse_sdp(&sdp, &codecs).unwrap();
     assert_eq!(parsed.cn_type, Some(CN_PAYLOAD_TYPE));
@@ -176,7 +176,7 @@ fn vad_enabled_answer_excludes_comfort_noise_for_opus() {
     // Opus's RTP clock (48000) doesn't match CN's static 8000 Hz assignment
     // -- see `CN_PAYLOAD_TYPE`'s doc comment -- so it must never be offered
     // alongside a negotiated Opus answer even with vad_enabled on.
-    let sdp = build_answer("192.0.2.2", 40002, AudioCodec::Opus, None, None, true);
+    let sdp = build_answer("192.0.2.2", 40002, AudioCodec::Opus, None, None, true, None, None);
     assert!(!sdp.contains("CN/8000"));
     let parsed = parse_sdp(&sdp, &ALL_CODECS).unwrap();
     assert!(parsed.cn_type.is_none());
@@ -184,7 +184,7 @@ fn vad_enabled_answer_excludes_comfort_noise_for_opus() {
 
 #[test]
 fn vad_enabled_answer_includes_comfort_noise_for_narrowband_codec() {
-    let sdp = build_answer("192.0.2.2", 40002, AudioCodec::Pcmu, None, None, true);
+    let sdp = build_answer("192.0.2.2", 40002, AudioCodec::Pcmu, None, None, true, None, None);
     let parsed = parse_sdp(&sdp, &ALL_CODECS).unwrap();
     assert_eq!(parsed.cn_type, Some(CN_PAYLOAD_TYPE));
 }
@@ -199,8 +199,8 @@ const ALL_VIDEO_CODECS: [VideoCodec; 1] = [VideoCodec::H264];
 /// audio-only and video is always appended externally (see
 /// `build_video_media_section`'s doc comment for why).
 fn build_audio_video_offer() -> String {
-    let audio = build_offer("192.0.2.1", 40000, None, &ALL_CODECS, None, false);
-    let video = build_video_media_section("192.0.2.1", 40002, VideoCodec::H264, None, None);
+    let audio = build_offer("192.0.2.1", 40000, None, &ALL_CODECS, None, false, None, None);
+    let video = build_video_media_section("192.0.2.1", 40002, VideoCodec::H264, None, None, None, None);
     format!("{audio}{video}")
 }
 
@@ -245,8 +245,8 @@ fn video_section_with_srtp_and_ice() {
         pwd: "vpwd".into(),
         candidates: vec!["1 1 UDP 2130706431 192.0.2.1 40002 typ host".into()],
     };
-    let audio = build_offer("192.0.2.1", 40000, None, &ALL_CODECS, None, false);
-    let video = build_video_media_section("192.0.2.1", 40002, VideoCodec::H264, Some(&srtp), Some(&ice));
+    let audio = build_offer("192.0.2.1", 40000, None, &ALL_CODECS, None, false, None, None);
+    let video = build_video_media_section("192.0.2.1", 40002, VideoCodec::H264, Some(&srtp), Some(&ice), None, None);
     let sdp = format!("{audio}{video}");
 
     let sections = split_media_sections(&sdp);
@@ -259,6 +259,80 @@ fn video_section_with_srtp_and_ice() {
     assert_eq!(parsed.ice_candidates.len(), 1);
 }
 
+// ── DTLS-SRTP (RFC 5763/5764/8122) ──────────────────────────────────────────
+
+#[test]
+fn offer_with_dtls_srtp_uses_udp_tls_savp_and_carries_fingerprint_actpass() {
+    let fp = DtlsFingerprint { hash_func: "sha-256".into(), hex: "AB:CD:EF:01".into() };
+    let sdp = build_offer("192.0.2.1", 40000, None, &ALL_CODECS, None, false, Some(&fp), Some(Setup::ActPass));
+    assert!(sdp.contains("UDP/TLS/RTP/SAVP"));
+    assert!(sdp.contains("a=fingerprint:sha-256 AB:CD:EF:01"));
+    assert!(sdp.contains("a=setup:actpass"));
+
+    let parsed = parse_sdp(&sdp, &ALL_CODECS).unwrap();
+    assert_eq!(parsed.fingerprint, Some(fp));
+    assert_eq!(parsed.setup, Some(Setup::ActPass));
+    assert!(parsed.srtp.is_none(), "DTLS-SRTP never carries SDES key material");
+}
+
+#[test]
+fn answer_with_dtls_srtp_resolves_active_or_passive() {
+    let fp = DtlsFingerprint { hash_func: "sha-256".into(), hex: "11:22:33:44".into() };
+    for setup in [Setup::Active, Setup::Passive] {
+        let sdp = build_answer("192.0.2.2", 40002, AudioCodec::Opus, None, None, false, Some(&fp), Some(setup));
+        let parsed = parse_sdp(&sdp, &ALL_CODECS).unwrap();
+        assert_eq!(parsed.fingerprint, Some(fp.clone()));
+        assert_eq!(parsed.setup, Some(setup));
+    }
+}
+
+#[test]
+fn hold_and_resume_repeat_dtls_fingerprint_without_renegotiating() {
+    let fp = DtlsFingerprint { hash_func: "sha-256".into(), hex: "DE:AD:BE:EF".into() };
+    let hold = build_hold_offer("192.0.2.3", 40004, AudioCodec::Opus, None, Some(&fp), Some(Setup::Active));
+    let resume = build_resume_offer("192.0.2.3", 40004, AudioCodec::Opus, None, Some(&fp), Some(Setup::Active));
+    for sdp in [hold, resume] {
+        let parsed = parse_sdp(&sdp, &ALL_CODECS).unwrap();
+        assert_eq!(parsed.fingerprint, Some(fp.clone()));
+        assert_eq!(parsed.setup, Some(Setup::Active));
+    }
+}
+
+#[test]
+fn no_dtls_fingerprint_leaves_dtls_fields_empty() {
+    let sdp = build_offer("192.0.2.1", 40000, None, &ALL_CODECS, None, false, None, None);
+    assert!(!sdp.contains("a=fingerprint:"));
+    assert!(!sdp.contains("a=setup:"));
+    let parsed = parse_sdp(&sdp, &ALL_CODECS).unwrap();
+    assert!(parsed.fingerprint.is_none());
+    assert!(parsed.setup.is_none());
+}
+
+#[test]
+fn dtls_fingerprint_line_roundtrip() {
+    let fp = DtlsFingerprint { hash_func: "sha-256".into(), hex: "AB:CD:EF:01:23".into() };
+    let line = fp.to_line();
+    assert_eq!(line, "a=fingerprint:sha-256 AB:CD:EF:01:23\r\n");
+    let parsed = DtlsFingerprint::parse_line(line.trim()).unwrap();
+    assert_eq!(parsed, fp);
+}
+
+#[test]
+fn video_section_repeats_audio_leg_dtls_fingerprint() {
+    let fp = DtlsFingerprint { hash_func: "sha-256".into(), hex: "FE:ED:FA:CE".into() };
+    let audio = build_offer("192.0.2.1", 40000, None, &ALL_CODECS, None, false, Some(&fp), Some(Setup::ActPass));
+    let video =
+        build_video_media_section("192.0.2.1", 40002, VideoCodec::H264, None, None, Some(&fp), Some(Setup::ActPass));
+    let sdp = format!("{audio}{video}");
+
+    let sections = split_media_sections(&sdp);
+    assert!(sections[1].0.contains("UDP/TLS/RTP/SAVP"));
+    let (video_m_line, video_attrs) = &sections[1];
+    let parsed = parse_video_section(video_m_line, video_attrs, &ALL_VIDEO_CODECS).unwrap();
+    assert_eq!(parsed.fingerprint, Some(fp));
+    assert_eq!(parsed.setup, Some(Setup::ActPass));
+}
+
 #[test]
 fn video_payload_type_does_not_collide_with_existing_pts() {
     for codec in ALL_CODECS {
@@ -266,4 +340,15 @@ fn video_payload_type_does_not_collide_with_existing_pts() {
     }
     assert_ne!(H264_PAYLOAD_TYPE, CN_PAYLOAD_TYPE);
     assert_ne!(H264_PAYLOAD_TYPE, 101, "must not collide with the DTMF telephone-event PT");
+}
+
+#[test]
+fn audio_payload_types_are_all_unique() {
+    for (i, a) in ALL_CODECS.iter().enumerate() {
+        for b in &ALL_CODECS[i + 1..] {
+            assert_ne!(a.payload_type(), b.payload_type(), "{a:?} and {b:?} share a payload type");
+        }
+        assert_ne!(a.payload_type(), CN_PAYLOAD_TYPE);
+        assert_ne!(a.payload_type(), 101, "must not collide with the DTMF telephone-event PT");
+    }
 }

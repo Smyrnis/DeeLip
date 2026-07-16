@@ -70,3 +70,7 @@ impl JitterTracker {
         self.last_rtp_ts = Some(pkt.timestamp);
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/stats.rs"]
+mod tests;

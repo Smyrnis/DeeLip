@@ -98,6 +98,29 @@ fn gsm_decode_rejects_wrong_length() {
 }
 
 #[test]
+fn l16_roundtrip_is_lossless() {
+    // Unlike every other codec here, L16 is uncompressed -- decode(encode(x))
+    // must be byte-for-byte identical, not just "close enough."
+    let frame = test_tone();
+    let encoded = encode_l16(&frame);
+    assert_eq!(encoded.len(), frame.len() * 2, "L16 is exactly 2 bytes per sample");
+    let decoded = decode_l16(&encoded);
+    assert_eq!(decoded, frame);
+}
+
+#[test]
+fn l16_uses_network_byte_order() {
+    // RFC 3551 §4.5.11: big-endian, same as every other RTP audio payload.
+    assert_eq!(encode_l16(&[0x0102i16]), vec![0x01, 0x02]);
+    assert_eq!(decode_l16(&[0x01, 0x02]), vec![0x0102i16]);
+}
+
+#[test]
+fn l16_decode_drops_a_trailing_odd_byte() {
+    assert_eq!(decode_l16(&[0x00, 0x01, 0xFF]), vec![1i16]);
+}
+
+#[test]
 fn ilbc_roundtrip() {
     let mut encoder = IlbcEncoder::new().unwrap();
     let mut decoder = IlbcDecoder::new().unwrap();

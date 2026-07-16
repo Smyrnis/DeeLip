@@ -4,15 +4,15 @@
 //! "Wire layer" section.
 
 use std::net::{IpAddr, SocketAddr};
-use std::time::Duration;
 
+use anyhow::Context;
 use deelip_config::TransportProtocol;
+use deelip_config::timeouts::DNS_TIMEOUT;
 use rand::Rng;
 use tokio::net::UdpSocket;
 use tokio::time::timeout;
 use tracing::debug;
 
-const DNS_TIMEOUT: Duration = Duration::from_secs(3);
 const QTYPE_A: u16 = 1;
 const QTYPE_AAAA: u16 = 28;
 const QTYPE_SRV: u16 = 33;
@@ -88,10 +88,11 @@ async fn resolve_host(host: &str, port: u16, custom_nameserver: Option<&str>) ->
         return Ok(SocketAddr::new(ip, port));
     }
     let Some(server) = custom_nameserver.and_then(parse_nameserver).or_else(system_resolver) else {
-        // No custom nameserver configured and no usable /etc/resolv.conf --
-        // fall back to the OS resolver exactly like before this module existed.
-        return tokio::net::lookup_host((host, port))
-            .await?
+        // Must stay timeout-bounded -- this sits on main()'s startup path
+        // before the app window exists. See this module's doc comment.
+        return timeout(DNS_TIMEOUT, tokio::net::lookup_host((host, port)))
+            .await
+            .context("DNS lookup timed out")??
             .next()
             .ok_or_else(|| anyhow::anyhow!("DNS lookup failed for {host}"));
     };

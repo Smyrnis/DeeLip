@@ -72,6 +72,10 @@ peers that don't speak ICE.
   reserving-and-holding the port across the probe and the real bind, which the
   standard socket API doesn't offer cleanly, and the race is narrow enough in practice
   not to have caused a real failure.
+- **`turn_relay.rs`'s `RELAY_ALLOC_TIMEOUT` (5s, matching `stun.rs`'s existing
+  timeout) bounds both the TURN listener startup and the Allocate request.**
+  Without it, an unreachable or silently-dropping TURN server left a call
+  stuck in "Calling…"/"Ringing" indefinitely with no way to cancel.
 - **ICE's connectivity-check cancel channel is never actually triggered** (`connect()`
   in `ice.rs`) — `_cancel_tx` is kept alive for the whole call so `cancel_rx.recv()`
   doesn't resolve immediately (a closed channel's `recv` returns `None` right away,

@@ -1,4 +1,4 @@
-use deelip_config::{CallDirection, CallStatus, Contact};
+use deelip_config::{CallStatus, Contact, Direction};
 use egui::{RichText, Ui};
 
 use crate::app::DeelipApp;
@@ -12,7 +12,7 @@ use crate::strings::t;
 impl DeelipApp {
     pub(crate) fn show_history(&mut self, ui: &mut Ui, _ctx: &egui::Context) {
         ui.add_space(8.0);
-        if self.history.records.is_empty() {
+        if self.history_state.history.records.is_empty() {
             empty_state(ui, &self.palette, &t("history.no_history"));
             return;
         }
@@ -20,29 +20,35 @@ impl DeelipApp {
         // ── Search / filter / export bar ─────────────────────────────────────
         let palette = self.palette;
         ui.horizontal(|ui| {
-            search_field(ui, &palette, &mut self.history_search, &t("common.search_hint_name_or_number"), 140.0);
+            search_field(
+                ui,
+                &palette,
+                &mut self.history_state.history_search,
+                &t("common.search_hint_name_or_number"),
+                140.0,
+            );
             ui.label(t("history.status_label"));
             egui::ComboBox::from_id_salt("history_status_filter")
-                .selected_text(status_filter_label(&self.history_status_filter))
+                .selected_text(status_filter_label(&self.history_state.history_status_filter))
                 .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut self.history_status_filter, None, t("history.status_all"));
+                    ui.selectable_value(&mut self.history_state.history_status_filter, None, t("history.status_all"));
                     ui.selectable_value(
-                        &mut self.history_status_filter,
+                        &mut self.history_state.history_status_filter,
                         Some(CallStatus::Answered),
                         call_status_label(&CallStatus::Answered),
                     );
                     ui.selectable_value(
-                        &mut self.history_status_filter,
+                        &mut self.history_state.history_status_filter,
                         Some(CallStatus::Missed),
                         call_status_label(&CallStatus::Missed),
                     );
                     ui.selectable_value(
-                        &mut self.history_status_filter,
+                        &mut self.history_state.history_status_filter,
                         Some(CallStatus::Rejected),
                         call_status_label(&CallStatus::Rejected),
                     );
                     ui.selectable_value(
-                        &mut self.history_status_filter,
+                        &mut self.history_state.history_status_filter,
                         Some(CallStatus::Failed),
                         call_status_label(&CallStatus::Failed),
                     );
@@ -50,26 +56,25 @@ impl DeelipApp {
         });
         ui.add_space(4.0);
 
-        // Recompute the filtered index list only when the search text,
-        // status filter, or the record count itself has actually changed --
-        // this used to re-lowercase every record's URI and rebuild the list
-        // on every single frame regardless (egui repaints continuously, and
-        // much faster than that during a scroll drag), which was the actual
-        // cause of this tab dropping frames while scrolling. Mirrors the
-        // existing `audio_device_cache` idiom.
-        let key = (self.history_search.to_lowercase(), self.history_status_filter.clone(), self.history.records.len());
-        if self.history_filter_key.as_ref() != Some(&key) {
+        // Cache-and-compare idiom -- see docs/crates/ui.md's "List views" section.
+        let key = (
+            self.history_state.history_search.to_lowercase(),
+            self.history_state.history_status_filter.clone(),
+            self.history_state.history.records.len(),
+        );
+        if self.history_state.history_filter_key.as_ref() != Some(&key) {
             let query = &key.0;
-            self.history_filtered = self
+            self.history_state.history_filtered = self
+                .history_state
                 .history
                 .records
                 .iter()
                 .enumerate()
-                .filter(|(_, r)| self.history_status_filter.as_ref().is_none_or(|s| *s == r.status))
+                .filter(|(_, r)| self.history_state.history_status_filter.as_ref().is_none_or(|s| *s == r.status))
                 .filter(|(_, r)| query.is_empty() || r.remote_uri.to_lowercase().contains(query))
                 .map(|(i, _)| i)
                 .collect();
-            self.history_filter_key = Some(key);
+            self.history_state.history_filter_key = Some(key);
         }
 
         let mut call_target: Option<String> = None;
@@ -80,25 +85,15 @@ impl DeelipApp {
         let mut default_action_target: Option<String> = None;
         let mut add_contact_target: Option<(String, String)> = None;
 
-        if self.history_filtered.is_empty() {
+        if self.history_state.history_filtered.is_empty() {
             empty_state(ui, &self.palette, &t("history.no_matching_calls"));
         } else {
-            // `show_rows` only lays out the rows actually scrolled into view
-            // instead of all of them every frame -- with up to 200 records
-            // and this app's continuous ~20fps repaint, the plain `show`
-            // form was doing thousands of unnecessary widget layouts/sec.
-            // `show_rows` needs one precisely-known height per iteration --
-            // each row is deliberately kept to a *single* widget (the
-            // `ui.horizontal` group, divider painted directly onto its own
-            // rect below) rather than two siblings (group + a separate
-            // `ui.separator()`), since two widgets means two auto-inserted
-            // `item_spacing.y` gaps that a single flat height estimate can't
-            // represent -- that mismatch was the actual cause of this tab's
-            // scroll jitter, not raw row count.
+            // `show_rows` virtualization -- see docs/crates/ui.md's "List views"
+            // section for why each row must stay a single widget.
             let row_height = ui.spacing().interact_size.y.max(ui.text_style_height(&egui::TextStyle::Body))
                 + ui.spacing().item_spacing.y;
-            let filtered = &self.history_filtered;
-            let records = &self.history.records;
+            let filtered = &self.history_state.history_filtered;
+            let records = &self.history_state.history.records;
             egui::ScrollArea::vertical().auto_shrink([false, false]).show_rows(
                 ui,
                 row_height,
@@ -108,8 +103,8 @@ impl DeelipApp {
                         let real_idx = filtered[idx];
                         let record = &records[real_idx];
                         let (dir_icon, dir_color) = match record.direction {
-                            CallDirection::Inbound => (egui_phosphor::regular::PHONE_INCOMING, self.palette.ink_muted),
-                            CallDirection::Outbound => (egui_phosphor::regular::PHONE_OUTGOING, self.palette.signal),
+                            Direction::Inbound => (egui_phosphor::regular::PHONE_INCOMING, self.palette.ink_muted),
+                            Direction::Outbound => (egui_phosphor::regular::PHONE_OUTGOING, self.palette.signal),
                         };
                         let (status_icon, status_color) = call_status_icon_color(&record.status, &self.palette);
                         // `Answered` shows the call duration instead of the
@@ -121,7 +116,7 @@ impl DeelipApp {
                         } else {
                             call_status_label(&record.status)
                         };
-                        let (display_name, is_name) = resolve_caller(&self.contacts, &record.remote_uri);
+                        let (display_name, is_name) = resolve_caller(&self.contacts_state.contacts, &record.remote_uri);
 
                         let palette = self.palette;
                         let remote_uri = record.remote_uri.clone();
@@ -207,9 +202,9 @@ impl DeelipApp {
             ui.ctx().copy_text(target);
         }
         if let Some(idx) = delete_idx {
-            self.history.records.remove(idx);
-            self.history_filter_key = None; // force the filtered list to recompute against the new indices
-            if let Err(e) = self.history.save(&self.db) {
+            self.history_state.history.records.remove(idx);
+            self.history_state.history_filter_key = None; // force the filtered list to recompute against the new indices
+            if let Err(e) = self.history_state.history.save(&self.db) {
                 tracing::error!("Failed to save call history: {e}");
             }
         }
@@ -224,28 +219,29 @@ impl DeelipApp {
             }
         }
         if let Some((remote_uri, display_name)) = add_contact_target {
-            self.editing_contact_idx = None;
-            self.new_contact = Contact { name: display_name, sip_uri: remote_uri, ..Default::default() };
-            self.contact_dialog_open = true;
+            self.contacts_state.editing_contact_idx = None;
+            self.contacts_state.new_contact = Contact { name: display_name, sip_uri: remote_uri, ..Default::default() };
+            self.contacts_state.contact_dialog_open = true;
         }
     }
 
     /// Export the currently filtered history view (respecting the search box
     /// and status dropdown) to a CSV file via a native save dialog.
     pub(crate) fn export_history_csv(&self) {
-        let query = self.history_search.to_lowercase();
+        let query = self.history_state.history_search.to_lowercase();
         let filtered = self
+            .history_state
             .history
             .records
             .iter()
-            .filter(|r| self.history_status_filter.as_ref().is_none_or(|s| *s == r.status))
+            .filter(|r| self.history_state.history_status_filter.as_ref().is_none_or(|s| *s == r.status))
             .filter(|r| query.is_empty() || r.remote_uri.to_lowercase().contains(&query));
 
         let mut csv = String::from("timestamp,direction,remote_uri,status,duration_secs\n");
         for r in filtered {
             let direction = match r.direction {
-                CallDirection::Inbound => "inbound",
-                CallDirection::Outbound => "outbound",
+                Direction::Inbound => "inbound",
+                Direction::Outbound => "outbound",
             };
             let status = call_status_csv_label(&r.status);
             csv.push_str(&format!(

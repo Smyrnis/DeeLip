@@ -10,7 +10,7 @@ mod theme;
 mod update;
 mod views;
 
-pub use app::{DeelipApp, SharedApp};
+pub use app::{AccountSpawnMsg, DeelipApp, SharedApp};
 pub use platform::tray;
 pub use strings::init as init_strings;
 

@@ -13,6 +13,17 @@ audiopus  = { workspace = true }
 deelip-sip = { workspace = true }
 webrtc-srtp = { workspace = true }
 webrtc-util = { workspace = true }
+# DTLS-SRTP (RFC 5763/5764): webrtc-dtls pulls webrtc-util 0.11, a third
+# version alongside this workspace's own 0.17 pin (used by webrtc-ice) and
+# webrtc-srtp 0.10's transitive 0.7 -- renamed so both can coexist. DTLS-SRTP
+# never needs to interoperate with ICE/TURN's Conn type, so this is fully
+# isolated to the new dtls_demux/dtls_srtp_session modules.
+webrtc-dtls = "0.12"
+webrtc-util-dtls = { package = "webrtc-util", version = "0.11" }
+rcgen = { workspace = true }
+rustls = { workspace = true }
+async-trait = { workspace = true }
+sha2 = { workspace = true }
 fdaf-aec    = { workspace = true }
 hound       = { workspace = true }
 deelip-config = { workspace = true }

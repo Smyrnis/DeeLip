@@ -1,7 +1,7 @@
 use super::*;
 use crate::rtp::RtpSender;
 use deelip_sip::SrtpSession;
-use deelip_sip::sdp::{H264_PAYLOAD_TYPE, SrtpParams};
+use deelip_sip::sdp::{H264_PAYLOAD_TYPE, SrtpParams, VideoCodec};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -25,6 +25,39 @@ fn zero_ts_increment_sender_shares_timestamp_within_a_frame() {
     sender.timestamp = sender.timestamp.wrapping_add(3000); // e.g. 90000/30fps
     let p4 = sender.next_packet(vec![4]);
     assert_eq!(p4.timestamp, before.wrapping_add(3000));
+}
+
+/// Directly exercises `flush_frame`'s reorder-tolerant reassembly: a real
+/// H.264 frame is encoded and fragmented, then fed into the same
+/// `BTreeMap<u16, Vec<u8>>` shape `recv_loop` uses -- but inserted in
+/// reverse (worst-case out-of-order) sequence, not arrival order. If
+/// reassembly were still arrival-order-dependent (the bug this fix
+/// addresses), decoding would fail or produce garbage; keying by sequence
+/// number means insertion order can't matter.
+#[test]
+fn flush_frame_reassembles_correctly_despite_reversed_insertion_order() {
+    let frame = Yuv420Frame::solid_color(64, 64, 100, 128, 128);
+    let mut encoder = VideoEncoder::new(VideoCodec::H264, 300_000).unwrap();
+    let bitstream = encoder.encode(&frame).unwrap();
+    // A deliberately tiny MTU forces multiple fragments regardless of how
+    // small the encoded keyframe happens to be, so this test doesn't
+    // depend on the encoder's actual output size.
+    let payloads = fragment_video_frame(VideoCodec::H264, &bitstream, 50);
+    assert!(payloads.len() >= 3, "test needs several fragments to be meaningful");
+
+    let mut fragments: BTreeMap<u16, Vec<u8>> = BTreeMap::new();
+    for (seq, payload) in payloads.iter().enumerate().rev() {
+        fragments.insert(seq as u16, payload.clone());
+    }
+
+    let mut decoder = VideoDecoder::new(VideoCodec::H264).unwrap();
+    let latest: Arc<Mutex<Option<Yuv420Frame>>> = Arc::new(Mutex::new(None));
+    flush_frame(VideoCodec::H264, &mut fragments, &mut decoder, &latest);
+
+    let decoded = latest.lock().unwrap().clone().expect("frame should decode despite reversed fragment order");
+    assert_eq!(decoded.width, 64);
+    assert_eq!(decoded.height, 64);
+    assert!(fragments.is_empty(), "flush_frame should clear the buffer");
 }
 
 async fn run_pair(
@@ -54,6 +87,7 @@ async fn run_pair(
     let alice = VideoEngine::start(
         alice_port,
         format!("127.0.0.1:{bob_port}").parse().unwrap(),
+        VideoCodec::H264,
         alice_srtp,
         None,
         alice_source.clone(),
@@ -66,6 +100,7 @@ async fn run_pair(
     let bob = VideoEngine::start(
         bob_port,
         format!("127.0.0.1:{alice_port}").parse().unwrap(),
+        VideoCodec::H264,
         bob_srtp,
         None,
         bob_source,
@@ -181,6 +216,7 @@ async fn conference_fans_out_to_both_legs_and_decodes_both_independently() {
     let peer1 = VideoEngine::start(
         peer1_port,
         format!("127.0.0.1:{host_port}").parse().unwrap(),
+        VideoCodec::H264,
         None,
         None,
         peer1_source,
@@ -194,6 +230,7 @@ async fn conference_fans_out_to_both_legs_and_decodes_both_independently() {
     let peer2 = VideoEngine::start(
         peer2_port,
         format!("127.0.0.1:{host_leg2_port}").parse().unwrap(),
+        VideoCodec::H264,
         None,
         None,
         peer2_source,
@@ -206,6 +243,7 @@ async fn conference_fans_out_to_both_legs_and_decodes_both_independently() {
     let host = VideoEngine::start(
         host_port,
         format!("127.0.0.1:{peer1_port}").parse().unwrap(),
+        VideoCodec::H264,
         None,
         None,
         host_source,
@@ -214,6 +252,7 @@ async fn conference_fans_out_to_both_legs_and_decodes_both_independently() {
         Some(VideoConferenceLeg {
             local_rtp_port: host_leg2_port,
             remote_rtp: format!("127.0.0.1:{peer2_port}").parse().unwrap(),
+            codec: VideoCodec::H264,
             srtp: None,
             relay: None,
         }),

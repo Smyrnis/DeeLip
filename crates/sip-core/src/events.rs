@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use webrtc_util::Conn;
 
+use crate::call::media_setup::DtlsCallParams;
 use crate::subscription::mwi::MwiState;
 use crate::subscription::presence::PresenceState;
 use crate::wire::sdp::{AudioCodec, SrtpSession, VideoCodec};
@@ -32,6 +33,10 @@ pub struct CallMediaReady {
     /// both offered/accepted one -- `None` for an audio-only call. See
     /// `VideoMediaReady` and docs/crates/sip-core.md's "Video negotiation" section.
     pub video: Option<VideoMediaReady>,
+    /// RFC 5763/5764 DTLS-SRTP session state to hand to
+    /// `MediaEngineOptions.dtls_srtp` -- call-scoped, shared by `video` too
+    /// (not duplicated into `VideoMediaReady`). See `DtlsCallParams`.
+    pub local_dtls: Option<DtlsCallParams>,
 }
 
 /// Video counterpart of `CallMediaReady` -- no `dtmf_type`/`cn_type` (neither
@@ -46,12 +51,20 @@ pub struct VideoMediaReady {
 }
 
 /// Events emitted by the SIP stack to the application.
+// See docs/crates/sip-core.md's "SipEvent/Act left un-boxed" note.
+#[allow(clippy::large_enum_variant)]
 pub enum SipEvent {
     Registered {
         expires: u32,
     },
     RegistrationFailed {
         reason: String,
+        /// `true` if retrying can never fix this (wrong credentials/unknown
+        /// user) -- see `registration::PermanentRegError`. The reconnect
+        /// loop stops re-registering once this fires; `false` covers every
+        /// other case (network blips, 5xx, disconnects), which keep
+        /// retrying with backoff exactly like before this field existed.
+        permanent: bool,
     },
     /// Remote party is ringing (180 received on outgoing call).
     CallRinging {

@@ -106,6 +106,12 @@ impl Db {
         let path = default_db_path()?;
         let is_fresh = !path.exists();
 
+        // `Connection::open` never creates its parent directory -- must exist
+        // first. See docs/crates/config.md's Design decisions & invariants
+        // section for the fresh-profile bug this avoids.
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).with_context(|| format!("Creating config dir {}", parent.display()))?;
+        }
         let conn = Connection::open(&path).with_context(|| format!("Opening database at {}", path.display()))?;
         conn.execute_batch(SCHEMA).context("Creating database schema")?;
         let db = Db { conn };
@@ -119,7 +125,9 @@ impl Db {
 
     /// Idempotent `ALTER TABLE ADD COLUMN` for anything `SCHEMA` expects but
     /// an existing `accounts` table predates -- adding a column here always
-    /// needs a matching entry in `SCHEMA` too. Full picture: `docs/crates/config.md`.
+    /// needs a matching entry in `SCHEMA` too. Full picture (including why
+    /// this checks `PRAGMA table_info` up front instead of just attempting
+    /// every `ALTER TABLE`): `docs/crates/config.md`.
     fn migrate_accounts_columns(&self) -> anyhow::Result<()> {
         const COLUMNS: &[&str] = &[
             "account_name   TEXT",
@@ -144,12 +152,18 @@ impl Db {
             "local_account INTEGER NOT NULL DEFAULT 0",
             "video_enabled INTEGER NOT NULL DEFAULT 0",
         ];
+        let mut existing = std::collections::HashSet::new();
+        let mut stmt = self.conn.prepare("PRAGMA table_info(accounts)")?;
+        for name in stmt.query_map([], |row| row.get::<_, String>(1))? {
+            existing.insert(name?);
+        }
+
         for col in COLUMNS {
-            if let Err(e) = self.conn.execute(&format!("ALTER TABLE accounts ADD COLUMN {col}"), [])
-                && !e.to_string().contains("duplicate column name")
-            {
-                return Err(e.into());
+            let col_name = col.split_whitespace().next().unwrap_or(col);
+            if existing.contains(col_name) {
+                continue;
             }
+            self.conn.execute(&format!("ALTER TABLE accounts ADD COLUMN {col}"), [])?;
         }
         Ok(())
     }
@@ -188,6 +202,25 @@ impl Db {
         Ok(())
     }
 
+    /// Test-only constructor: opens (creating if necessary) a database at an
+    /// explicit path, running schema creation/column migration like
+    /// `open_default` but *without* the legacy-file import/default-account
+    /// seeding it does on a fresh profile -- that step reads from the real
+    /// `deelip_dir()`, which would make tests depend on whatever (if
+    /// anything) happens to exist on the machine running them. Callers get a
+    /// deterministic, schema-only empty database instead.
+    #[cfg(test)]
+    pub(crate) fn open_at(path: &std::path::Path) -> anyhow::Result<Self> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).with_context(|| format!("Creating db dir {}", parent.display()))?;
+        }
+        let conn = Connection::open(path).with_context(|| format!("Opening database at {}", path.display()))?;
+        conn.execute_batch(SCHEMA).context("Creating database schema")?;
+        let db = Db { conn };
+        db.migrate_accounts_columns().context("Migrating accounts table columns")?;
+        Ok(db)
+    }
+
     pub(crate) fn get_setting(&self, key: &str) -> Option<String> {
         self.conn.query_row("SELECT value FROM settings WHERE key = ?1", [key], |row| row.get(0)).ok()
     }
@@ -214,6 +247,22 @@ impl Db {
             None => self.delete_setting(key),
         }
     }
+
+    /// Shared by `CallHistory::save`/`ContactBook::save`/`MessageLog::save`:
+    /// wraps `DELETE FROM <table>` + `insert_all`'s row-by-row inserts in
+    /// one transaction, committed once at the end -- see `docs/crates/config.md`'s
+    /// Architecture section for why. `table` is always a hardcoded literal
+    /// from one of the three call sites, never user input, so interpolating
+    /// it into the DELETE is safe here.
+    pub(crate) fn replace_all_in_transaction(
+        &self, table: &str, insert_all: impl FnOnce(&rusqlite::Transaction) -> anyhow::Result<()>,
+    ) -> anyhow::Result<()> {
+        let tx = self.conn.unchecked_transaction().with_context(|| format!("Starting transaction for {table}"))?;
+        tx.execute(&format!("DELETE FROM {table}"), []).with_context(|| format!("Clearing {table} table"))?;
+        insert_all(&tx)?;
+        tx.commit().with_context(|| format!("Committing {table} transaction"))?;
+        Ok(())
+    }
 }
 
 /// Returns `~/.config/deelip/deelip.db`.
@@ -238,3 +287,7 @@ pub(crate) fn sql_to_bool(s: &str) -> bool {
 pub(crate) fn sql_int_to_bool(i: i64) -> bool {
     i != 0
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/db.rs"]
+mod tests;

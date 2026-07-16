@@ -185,10 +185,8 @@ pub async fn connect(
         gathered.agent.add_remote_candidate(&candidate).context("Adding remote ICE candidate")?;
     }
 
-    // Never actually cancelled -- kept alive for the duration of the call so
-    // `cancel_rx.recv()` doesn't resolve immediately (a closed channel's recv
-    // returns `None` right away, which `dial`/`accept` would treat as a
-    // cancel request).
+    // Never actually cancelled -- see docs/crates/nat.md's design-decisions
+    // section for why.
     let (_cancel_tx, cancel_rx) = mpsc::channel::<()>(1);
 
     let raw_conn: Arc<dyn Conn + Send + Sync> = if is_controlling {

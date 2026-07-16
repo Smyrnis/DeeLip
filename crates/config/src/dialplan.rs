@@ -1,10 +1,9 @@
 //! Rule-based number transformation applied before dialing a bare
 //! (non-URI) number -- a small ordered list of regex match/replace rules,
 //! evaluated first-match-wins, falling back to `SipAccount::dialing_prefix`'s
-//! simple auto-prepend if nothing matches. Uses the `regex` crate directly
-//! (already present in this workspace's dependency tree transitively)
-//! rather than a hand-rolled pattern language, since a real match/replace
-//! engine is exactly what `regex` already is -- no reason to reinvent it.
+//! simple auto-prepend if nothing matches. See `docs/crates/config.md`'s
+//! Design decisions & invariants section for why this uses the `regex`
+//! crate directly.
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};

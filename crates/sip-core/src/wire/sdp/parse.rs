@@ -4,6 +4,7 @@
 use std::net::SocketAddr;
 
 use super::codec::AudioCodec;
+use super::dtls::{DtlsFingerprint, Setup};
 use super::srtp::SrtpParams;
 
 #[derive(Debug, Clone)]
@@ -30,6 +31,11 @@ pub struct ParsedSdp {
     pub ice_pwd: Option<String>,
     /// Remote's ICE candidates (raw values, without the `a=candidate:` prefix).
     pub ice_candidates: Vec<String>,
+    /// Remote's DTLS certificate fingerprint, if this SDP signaled
+    /// DTLS-SRTP (`a=fingerprint`) at all.
+    pub fingerprint: Option<DtlsFingerprint>,
+    /// Remote's DTLS role (`a=setup`), if this SDP signaled DTLS-SRTP.
+    pub setup: Option<Setup>,
 }
 
 /// Parse an SDP offer/answer, picking the first payload type in the `m=`
@@ -59,6 +65,8 @@ pub fn parse_sdp_forcing(sdp: &str, allowed: &[AudioCodec], force: Option<AudioC
     let mut ice_ufrag: Option<String> = None;
     let mut ice_pwd: Option<String> = None;
     let mut ice_candidates: Vec<String> = Vec::new();
+    let mut fingerprint: Option<DtlsFingerprint> = None;
+    let mut setup: Option<Setup> = None;
 
     for line in sdp.lines() {
         let line = line.trim();
@@ -99,6 +107,12 @@ pub fn parse_sdp_forcing(sdp: &str, allowed: &[AudioCodec], force: Option<AudioC
             is_sendonly = true;
         } else if line.starts_with("a=crypto:") && srtp.is_none() {
             srtp = SrtpParams::parse_crypto_line(line);
+        } else if line.starts_with("a=fingerprint:") && fingerprint.is_none() {
+            fingerprint = DtlsFingerprint::parse_line(line);
+        } else if let Some(val) = line.strip_prefix("a=setup:")
+            && setup.is_none()
+        {
+            setup = Setup::parse(val);
         }
     }
 
@@ -125,6 +139,8 @@ pub fn parse_sdp_forcing(sdp: &str, allowed: &[AudioCodec], force: Option<AudioC
                 Some(AudioCodec::Ilbc)
             } else if name.starts_with("g729") {
                 Some(AudioCodec::G729)
+            } else if name.starts_with("l16") {
+                Some(AudioCodec::L16)
             } else {
                 None
             }
@@ -160,5 +176,7 @@ pub fn parse_sdp_forcing(sdp: &str, allowed: &[AudioCodec], force: Option<AudioC
         ice_ufrag,
         ice_pwd,
         ice_candidates,
+        fingerprint,
+        setup,
     })
 }

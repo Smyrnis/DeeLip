@@ -6,15 +6,40 @@ name: Package
 #   - .rpm      (Fedora / RHEL / openSUSE and derivatives)
 #   - .AppImage (portable, runs on most distros without installing anything)
 #   - .tar.gz   (plain binary + desktop file + icon, for anything else)
-#   - .msi      (Windows installer, via cargo-wix)
+#   - .msi      (Windows installer, via cargo-wix -- Authenticode-signed via
+#     SignPath.io's free-for-OSS signing service if the SIGNPATH_API_TOKEN
+#     repo secret is set, otherwise ships unsigned and SmartScreen will warn
+#     on first run. Requires a SignPath.io account with this repo linked as
+#     a project (see signpath.io), plus these repo secrets:
+#       SIGNPATH_API_TOKEN, SIGNPATH_ORGANIZATION_ID, SIGNPATH_PROJECT_SLUG,
+#       SIGNPATH_SIGNING_POLICY_SLUG, SIGNPATH_ARTIFACT_CONFIGURATION_SLUG
+#     The org/project/policy/artifact-config slugs come from SignPath's own
+#     portal once the project exists there -- the artifact configuration in
+#     particular must be set up there to point at the .msi inside the
+#     uploaded zip. See the "Sign MSI via SignPath" step in package-windows.)
 #   - .dmg      (macOS disk image containing DeeLip.app, via cargo-bundle --
 #     not code-signed/notarized yet, so Gatekeeper blocks the first launch)
 #
 # The Windows and macOS jobs are newer than the Linux one and haven't had a
 # real Windows/macOS machine available to verify against -- see each job's
-# own comments for specific, disclosed risk areas (audiopus_sys/Opus needing
-# autotools that isn't part of a default runner image; the tray icon's
-# lazy-first-frame construction in crates/ui/src/platform/tray.rs).
+# own comments for specific, disclosed risk areas (the tray icon's
+# lazy-first-frame construction in crates/ui/src/platform/tray.rs, unverified
+# per its own doc comment -- crates/ui/src/frame.rs's init_lazy_tray wraps it
+# in catch_unwind so a panic there can't take the whole app down silently).
+#
+# audiopus_sys (Opus) does NOT need autotools on windows-latest: the pinned
+# audiopus_sys 0.1.8's Windows build path (gated `cfg(all(windows,
+# target_env = "msvc"))`) links pre-built static libs already checked into
+# the crate and never invokes a compiler at all -- the autotools/autogen.sh
+# path only compiles for unix/gnu-target builds. An earlier version of this
+# workflow installed a MinGW toolchain "just in case" for this dependency;
+# that was based on a stale/incorrect assumption (confirmed by reading the
+# actual vendored build.rs) and has been removed -- it was dead weight that
+# put a MinGW gcc.exe on PATH ahead of MSVC's cl.exe for the *entire* job,
+# an unnecessary risk of some other native dependency picking up the wrong
+# toolchain. The "Verify MSVC toolchain" and "Check for MinGW runtime DLL
+# dependencies" steps below exist specifically to keep proving this rather
+# than assuming it stays true forever.
 on:
   push:
     tags:
@@ -159,34 +184,54 @@ jobs:
 
   package-windows:
     runs-on: windows-latest
+    env:
+      # Job-level env mirror of the secret so step `if:` conditions below can
+      # check `env.SIGNPATH_API_TOKEN != ''` -- secrets themselves aren't
+      # readable from `if:` expressions, only from `env`/`with`. Signing is
+      # entirely skipped (dist/ keeps the plain unsigned .msi) whenever this
+      # secret isn't set, so this workflow works unmodified before SignPath
+      # is provisioned.
+      SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 
-      # audiopus_sys (Opus) builds itself from source via autotools
-      # (autoreconf/autogen.sh) rather than cmake in the version this
-      # workspace is pinned to -- not part of a default windows-latest
-      # image, MSYS2 provides it. `path-type: inherit` puts its tools on
-      # PATH for every later step, not just ones run through an msys2 shell.
-      # UNVERIFIED end-to-end -- no Windows runner was available to confirm
-      # the full workspace actually builds cleanly here; this is a targeted
-      # mitigation for the one build-from-source dependency found to need
-      # tooling a default runner doesn't have, not a guarantee nothing else
-      # in the dependency graph needs something similar.
-      - name: Install MSYS2 (autotools for audiopus_sys/Opus)
-        uses: msys2/setup-msys2@v2
-        with:
-          msystem: MINGW64
-          update: true
-          install: >-
-            autoconf
-            automake
-            libtool
-            make
-            mingw-w64-x86_64-toolchain
-          path-type: inherit
-
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          # Explicit, not just relying on the runner's default -- this is
+          # what makes audiopus_sys skip its autotools path entirely (see
+          # the top-of-file comment) and link its pre-built MSVC static libs
+          # instead.
+          target: x86_64-pc-windows-msvc
+
+      # Puts cl.exe/dumpbin.exe (the real MSVC toolchain) on PATH for every
+      # later step in this job, including the two diagnostic steps below --
+      # not required for `cargo build` itself (the `cc` crate already
+      # locates MSVC via vswhere on its own), but needed for `dumpbin` and
+      # gives the diagnostics a definitive "what's actually on PATH" answer.
+      - name: Set up MSVC dev environment
+        uses: ilammy/msvc-dev-cmd@v1
+
+      # Confirms the "no gcc.exe on PATH" assumption this job now depends on
+      # (see the top-of-file comment) instead of silently trusting it --
+      # fails loudly if a stray gcc ever ends up ahead of cl.exe on PATH,
+      # which is exactly the condition that could make a native dependency's
+      # build script pick the wrong toolchain.
+      - name: Verify MSVC toolchain resolves correctly
+        shell: pwsh
+        run: |
+          $cl = Get-Command cl -ErrorAction SilentlyContinue
+          $gcc = Get-Command gcc -ErrorAction SilentlyContinue
+          Write-Host "cl.exe:  $($cl.Source)"
+          Write-Host "gcc.exe: $($gcc.Source)"
+          if (-not $cl) {
+            Write-Error "cl.exe not found on PATH -- MSVC toolchain setup did not work as expected."
+            exit 1
+          }
+          if ($gcc) {
+            Write-Error "gcc.exe found on PATH ($($gcc.Source)) -- a native dependency's build script could pick this up instead of cl.exe. Investigate before proceeding."
+            exit 1
+          }
 
       - uses: Swatinem/rust-cache@v2
 
@@ -216,6 +261,24 @@ jobs:
       - name: Build release binary
         run: cargo build --release --locked -p deelip
 
+      # If anything in the dependency graph ever does pick up a MinGW
+      # toolchain by mistake, this is what that mistake actually looks like
+      # to an end user: deelip.exe silently failing to start on a stock
+      # Windows machine because a MinGW runtime DLL it depends on isn't
+      # present. Catch it here, at build time, not via a user's bug report.
+      - name: Check for MinGW runtime DLL dependencies
+        shell: pwsh
+        run: |
+          $deps = dumpbin /dependents target\release\deelip.exe | Out-String
+          Write-Host $deps
+          $mingwDlls = @('libgcc_s_seh', 'libwinpthread', 'libstdc++')
+          $found = $mingwDlls | Where-Object { $deps -match $_ }
+          if ($found) {
+            Write-Error "deelip.exe depends on MinGW runtime DLL(s): $($found -join ', '). These are not present on a normal Windows machine and the app will fail to launch. See this workflow's top-of-file comment."
+            exit 1
+          }
+          Write-Host "No MinGW runtime DLL dependencies found."
+
       - name: Build MSI installer
         shell: bash
         run: cargo wix -p deelip --nocapture --no-build --target-bin-dir target/release
@@ -225,6 +288,43 @@ jobs:
         run: |
           mkdir -p dist
           cp target/wix/*.msi "dist/deelip-${{ steps.version.outputs.version }}-x86_64.msi"
+
+      # The three steps below Authenticode-sign the .msi via SignPath.io's
+      # free-for-open-source cloud signing service, and are entirely skipped
+      # (see the job-level env comment above) until SIGNPATH_API_TOKEN and
+      # its sibling secrets are provisioned -- see this file's top-of-file
+      # comment for the full secret list and setup steps.
+      - name: Upload unsigned MSI for SignPath
+        if: ${{ env.SIGNPATH_API_TOKEN != '' }}
+        id: upload-unsigned-msi
+        uses: actions/upload-artifact@v4
+        with:
+          name: deelip-unsigned-msi
+          path: dist/*.msi
+          # Short-lived: this is only an intermediate hand-off to SignPath,
+          # not a real release artifact -- the final signed .msi is what
+          # actually gets published further down in this job.
+          retention-days: 1
+
+      - name: Sign MSI via SignPath
+        if: ${{ env.SIGNPATH_API_TOKEN != '' }}
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: '${{ secrets.SIGNPATH_API_TOKEN }}'
+          organization-id: '${{ secrets.SIGNPATH_ORGANIZATION_ID }}'
+          project-slug: '${{ secrets.SIGNPATH_PROJECT_SLUG }}'
+          signing-policy-slug: '${{ secrets.SIGNPATH_SIGNING_POLICY_SLUG }}'
+          artifact-configuration-slug: '${{ secrets.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}'
+          github-artifact-id: '${{ steps.upload-unsigned-msi.outputs.artifact-id }}'
+          wait-for-completion: true
+          output-artifact-directory: dist-signed
+
+      - name: Replace unsigned MSI with SignPath-signed copy
+        if: ${{ env.SIGNPATH_API_TOKEN != '' }}
+        shell: bash
+        run: |
+          rm dist/*.msi
+          cp dist-signed/*.msi dist/
 
       - name: Checksum artifacts
         shell: bash

@@ -44,17 +44,17 @@ impl ContactBook {
     }
 
     pub fn save(&self, db: &Db) -> anyhow::Result<()> {
-        db.conn.execute("DELETE FROM contacts", []).context("Clearing contacts table")?;
-        for c in &self.contacts {
-            db.conn
-                .execute(
+        db.replace_all_in_transaction("contacts", |tx| {
+            for c in &self.contacts {
+                tx.execute(
                     "INSERT INTO contacts (name, sip_uri, watch_presence, presence_account) \
                  VALUES (?1, ?2, ?3, ?4)",
                     rusqlite::params![c.name, c.sip_uri, bool_to_sql(c.watch_presence), c.presence_account],
                 )
                 .with_context(|| format!("Inserting contact {}", c.name))?;
-        }
-        Ok(())
+            }
+            Ok(())
+        })
     }
 
     /// The saved contact whose `sip_uri` matches `uri`, if any -- used to
@@ -95,40 +95,5 @@ fn normalize_uri_for_match(uri: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn contact(name: &str, sip_uri: &str) -> Contact {
-        Contact { name: name.to_string(), sip_uri: sip_uri.to_string(), watch_presence: false, presence_account: None }
-    }
-
-    #[test]
-    fn find_by_uri_exact_match() {
-        let book = ContactBook { contacts: vec![contact("Bob", "sip:600@127.0.0.1")] };
-        assert_eq!(book.find_by_uri("sip:600@127.0.0.1").unwrap().name, "Bob");
-    }
-
-    #[test]
-    fn find_by_uri_ignores_case() {
-        let book = ContactBook { contacts: vec![contact("Bob", "sip:Bob@Example.com")] };
-        assert_eq!(book.find_by_uri("SIP:bob@example.com").unwrap().name, "Bob");
-    }
-
-    #[test]
-    fn find_by_uri_ignores_trailing_params() {
-        let book = ContactBook { contacts: vec![contact("Bob", "sip:600@127.0.0.1")] };
-        assert_eq!(book.find_by_uri("sip:600@127.0.0.1;user=phone").unwrap().name, "Bob");
-    }
-
-    #[test]
-    fn find_by_uri_ignores_explicit_default_port() {
-        let book = ContactBook { contacts: vec![contact("Bob", "sip:600@127.0.0.1")] };
-        assert_eq!(book.find_by_uri("sip:600@127.0.0.1:5060").unwrap().name, "Bob");
-    }
-
-    #[test]
-    fn find_by_uri_no_match_returns_none() {
-        let book = ContactBook { contacts: vec![contact("Bob", "sip:600@127.0.0.1")] };
-        assert!(book.find_by_uri("sip:700@127.0.0.1").is_none());
-    }
-}
+#[path = "../tests/unit/contacts.rs"]
+mod tests;

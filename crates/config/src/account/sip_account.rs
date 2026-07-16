@@ -9,7 +9,7 @@ use crate::dialplan::DialPlanRule;
 
 // ── SIP account ───────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SipAccount {
     pub username: String,
     pub password: String,
@@ -313,6 +313,8 @@ impl SipAccount {
             MediaEncryption::Enabled => true,
             // ZRTP negotiates its own SRTP keys in-band -- never via SDES.
             MediaEncryption::Zrtp => false,
+            // DTLS-SRTP derives keys from the DTLS handshake, not `a=crypto`.
+            MediaEncryption::DtlsSrtp => false,
         }
     }
 
@@ -320,6 +322,12 @@ impl SipAccount {
     /// calls -- see `MediaEncryption::Zrtp`.
     pub fn wants_zrtp(&self) -> bool {
         self.media_encryption == MediaEncryption::Zrtp
+    }
+
+    /// Whether to attempt RFC 5763/5764 DTLS-SRTP key agreement on this
+    /// account's calls -- see `MediaEncryption::DtlsSrtp`.
+    pub fn wants_dtls_srtp(&self) -> bool {
+        self.media_encryption == MediaEncryption::DtlsSrtp
     }
 
     /// Whether to attempt ICE for this account -- `ice_enabled` override if
